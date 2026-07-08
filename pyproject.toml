@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lerobot-coreai"
+version = "0.1.0"
+description = "Apple CoreAI runtime backend for LeRobot policies."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Kevin Saltarelli" },
+]
+keywords = ["lerobot", "coreai", "robotics", "apple", "aimodel", "vla"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "requests>=2.28",
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+lerobot = [
+    # LeRobotDataset replay, LeRobot-compatible feature handling, rollout helpers.
+    # Pinned to the v0.6.x public API surface (spec §26).
+    "lerobot>=0.6.0,<0.7.0",
+    "torch>=2.0",
+]
+fabric = [
+    # Export orchestration wrapper around coreai-fabric.
+    "coreai-fabric>=0.1.0",
+]
+all = [
+    "lerobot-coreai[lerobot,fabric]",
+]
+test = [
+    "pytest>=7",
+    "pytest-cov>=4",
+]
+
+[project.scripts]
+lerobot-coreai = "lerobot_coreai.cli:main"
+# Optional alias for CoreAI users (spec §5.4).
+coreai-robot = "lerobot_coreai.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kevinqz/lerobot-coreai"
+Repository = "https://github.com/kevinqz/lerobot-coreai"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lerobot_coreai"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

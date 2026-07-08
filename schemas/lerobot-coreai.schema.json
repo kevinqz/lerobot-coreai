@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/schemas/lerobot-coreai.schema.json",
+  "title": "lerobot-coreai manifest",
+  "description": "Compatibility manifest for a LeRobot-derived CoreAI artifact. Written by coreai-fabric during publish and read by lerobot-coreai during inspect/eval/rollout. Every HF artifact produced for a LeRobot policy must include this file as 'lerobot-coreai.json'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "runtime",
+    "framework",
+    "policy",
+    "robot",
+    "features",
+    "normalization",
+    "coreai",
+    "evaluation",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Manifest schema version. Current: 'lerobot-coreai.v0'.",
+      "pattern": "^lerobot-coreai\\.v\\d+$"
+    },
+    "runtime": {
+      "type": "string",
+      "const": "coreai",
+      "description": "Runtime identifier. Always 'coreai' for this manifest type."
+    },
+    "framework": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "lerobot",
+          "description": "Source framework. Always 'lerobot'."
+        },
+        "version": {
+          "type": "string",
+          "description": "LeRobot version the source policy was trained/exported with (e.g. '0.6.0')."
+        },
+        "commit": {
+          "type": ["string", "null"],
+          "description": "Optional LeRobot git commit SHA."
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "source_repo_id", "type"],
+      "properties": {
+        "repo_id": {
+          "type": "string",
+          "description": "HF repo id of this CoreAI artifact (e.g. 'kevinqz/EVO1-SO100-CoreAI')."
+        },
+        "source_repo_id": {
+          "type": "string",
+          "description": "HF repo id of the original LeRobot policy checkpoint (e.g. 'lerobot/evo1_so100')."
+        },
+        "type": {
+          "type": "string",
+          "description": "Policy architecture type (e.g. 'act', 'diffusion', 'pi0', 'pi05', 'smolvla', 'vqbet', 'evo1')."
+        },
+        "class": {
+          "type": ["string", "null"],
+          "description": "Optional LeRobot policy class name."
+        },
+        "config_class": {
+          "type": ["string", "null"],
+          "description": "Optional LeRobot config class name."
+        }
+      }
+    },
+    "robot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Robot type (e.g. 'so100', 'so101', 'aloha', 'libero')."
+        },
+        "action_representation": {
+          "type": "string",
+          "description": "Action representation (e.g. 'joint_position_delta', 'absolute_joint_position')."
+        },
+        "fps": {
+          "type": "integer",
+          "description": "Control frequency in Hz."
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation", "action"],
+      "properties": {
+        "observation": {
+          "type": "object",
+          "description": "Observation feature specs keyed by LeRobot feature name.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dtype"],
+            "properties": {
+              "dtype": {
+                "type": "string",
+                "description": "Data type ('image', 'float32', 'string', etc.)."
+              },
+              "shape": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "description": "Tensor shape (e.g. [3, 224, 224] for images, [7] for state)."
+              },
+              "required": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this feature is required for inference."
+              }
+            }
+          }
+        },
+        "action": {
+          "type": "object",
+          "description": "Action feature specs keyed by LeRobot feature name.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dtype"],
+            "properties": {
+              "dtype": {
+                "type": "string",
+                "description": "Data type (typically 'float32')."
+              },
+              "shape": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "description": "Action chunk shape (e.g. [16, 7] = 16-step chunk, 7-dim action)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "path"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "Normalization format (e.g. 'lerobot')."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to norm_stats.json within the artifact (relative)."
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "description": "Optional SHA256 of norm_stats.json for integrity verification."
+        }
+      }
+    },
+    "coreai": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_format", "runner"],
+      "properties": {
+        "artifact_format": {
+          "type": "string",
+          "const": "aimodel",
+          "description": "Artifact format. Always 'aimodel' for CoreAI."
+        },
+        "runner": {
+          "type": "string",
+          "const": "coreai-runner",
+          "description": "Runner that executes this artifact."
+        },
+        "graphs": {
+          "type": "array",
+          "description": "Runtime graphs in the artifact with their roles.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "role"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Graph entrypoint name (e.g. 'encode', 'denoise_step', 'action_denoise_step')."
+              },
+              "role": {
+                "type": "string",
+                "description": "Functional role (e.g. 'context_encoder', 'denoise_step')."
+              }
+            }
+          }
+        },
+        "host_loop_required": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the host must drive an iterative loop (e.g. flow-matching denoising)."
+        },
+        "host_loop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Loop type (e.g. 'flow_matching', 'diffusion')."
+            },
+            "solver": {
+              "type": "string",
+              "description": "Solver (e.g. 'euler')."
+            },
+            "num_steps": {
+              "type": "integer",
+              "description": "Number of denoising/sampling steps."
+            }
+          }
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "description": "Parity metric (e.g. 'action_parity')."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "not_run"],
+          "description": "Parity verification status."
+        },
+        "n_obs": {
+          "type": "integer",
+          "description": "Number of observations compared."
+        },
+        "min_chunk_cosine": {
+          "type": ["number", "null"],
+          "description": "Minimum chunk cosine similarity across all compared chunks (1.0 = perfect)."
+        },
+        "max_action_mae": {
+          "type": ["number", "null"],
+          "description": "Maximum mean absolute error per action dimension."
+        },
+        "max_relative_action_mae": {
+          "type": ["number", "null"],
+          "description": "Scale-invariant maximum relative MAE."
+        },
+        "proves_numeric_fidelity": {
+          "type": "boolean",
+          "description": "Whether parity proves numeric fidelity to the source policy."
+        },
+        "proves_task_success": {
+          "type": "boolean",
+          "description": "Whether parity proves task success (always false — parity is numeric, not behavioral)."
+        },
+        "proves_robot_safety": {
+          "type": "boolean",
+          "description": "Whether parity proves robot safety (always false)."
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_mode"],
+      "properties": {
+        "default_mode": {
+          "type": "string",
+          "enum": ["dry_run", "shadow", "sim", "real"],
+          "description": "Default rollout mode. Should be 'dry_run' for all artifacts."
+        },
+        "real_actuation_requires_confirmation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether real mode requires --confirm-real-robot-actuation."
+        }
+      }
+    }
+  }
+}

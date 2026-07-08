@@ -1,0 +1,215 @@
+# cli.py — command-line interface for lerobot-coreai (spec §12).
+#
+# The CLI is shaped like LeRobot workflows. The only new word is 'coreai'.
+#
+# MVP v0.1 implements: inspect, doctor.
+# Future versions add: export, eval, rollout, serve, compare.
+
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import Any
+
+from . import __version__
+from .compatibility.versions import check_lerobot_compatibility, get_installed_lerobot_version
+from .errors import CoreAIPolicyError, DownloadError, ManifestError
+from .manifest import load_manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not hasattr(args, "func"):
+        parser.print_help()
+        return 1
+
+    try:
+        return args.func(args)
+    except ManifestError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    except DownloadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 3
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 4
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="lerobot-coreai",
+        description="Apple CoreAI runtime backend for LeRobot policies.",
+    )
+    parser.add_argument("--version", action="version", version=f"lerobot-coreai {__version__}")
+
+    sub = parser.add_subparsers(dest="command")
+
+    # --- inspect (spec §12.2) ---
+    p_inspect = sub.add_parser("inspect", help="Inspect a CoreAI-backed LeRobot policy")
+    p_inspect.add_argument("--policy.path", dest="policy_path", required=True,
+                           help="HF repo id of the CoreAI artifact")
+    p_inspect.add_argument("--json", action="store_true", help="Output as JSON")
+    p_inspect.set_defaults(func=cmd_inspect)
+
+    # --- doctor (spec §12.6) ---
+    p_doctor = sub.add_parser("doctor", help="Diagnose policy/robot/runtime compatibility")
+    p_doctor.add_argument("--policy.path", dest="policy_path",
+                          help="HF repo id of the CoreAI artifact")
+    p_doctor.add_argument("--robot.type", dest="robot_type",
+                          help="Robot type to check against policy metadata")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # --- export (spec §12.3) — v0.4 ---
+    p_export = sub.add_parser("export", help="Export a LeRobot policy to CoreAI (v0.4)")
+    p_export.add_argument("--policy.path", dest="policy_path", required=True)
+    p_export.add_argument("--output.repo_id", dest="output_repo_id", required=True)
+    p_export.set_defaults(func=cmd_not_implemented)
+
+    # --- eval (spec §12.4) — v0.3 ---
+    p_eval = sub.add_parser("eval", help="Evaluate a CoreAI policy on a LeRobotDataset (v0.3)")
+    p_eval.add_argument("--policy.path", dest="policy_path", required=True)
+    p_eval.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_eval.set_defaults(func=cmd_not_implemented)
+
+    # --- rollout (spec §12.5) — v0.2+ ---
+    p_rollout = sub.add_parser("rollout", help="Run policy rollout with runtime=coreai (v0.2)")
+    p_rollout.add_argument("--policy.path", dest="policy_path", required=True)
+    p_rollout.add_argument("--robot.type", dest="robot_type")
+    p_rollout.add_argument("--mode", choices=["dry_run", "shadow", "sim", "real"], default="dry_run")
+    p_rollout.add_argument("--confirm-real-robot-actuation", action="store_true")
+    p_rollout.set_defaults(func=cmd_not_implemented)
+
+    # --- compare (spec §12.7) — v0.3 ---
+    p_compare = sub.add_parser("compare", help="Compare PyTorch policy vs CoreAI artifact (v0.3)")
+    p_compare.add_argument("--torch.policy.path", dest="torch_policy_path")
+    p_compare.add_argument("--coreai.policy.path", dest="coreai_policy_path")
+    p_compare.add_argument("--dataset.repo_id", dest="dataset_repo_id")
+    p_compare.set_defaults(func=cmd_not_implemented)
+
+    # --- serve (spec §12, serve) — v0.2 ---
+    p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (v0.2)")
+    p_serve.set_defaults(func=cmd_not_implemented)
+
+    return parser
+
+
+def cmd_not_implemented(args: argparse.Namespace) -> int:
+    print(
+        f"'{args.command}' is not implemented in v0.1 (metadata-only). "
+        f"Available commands: inspect, doctor.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# MARK: - inspect (spec §12.2)
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Inspect a CoreAI-backed LeRobot policy."""
+    manifest = load_manifest(args.policy_path)
+
+    if args.json:
+        import json
+        print(json.dumps(manifest.raw, indent=2))
+        return 0
+
+    # Pretty-print (spec §12.2 output format).
+    print(f"Policy: {manifest.policy_type.upper()}")
+    print(f"Runtime: CoreAI")
+    print(f"Artifact: {manifest.policy_repo_id}")
+    print(f"Source: {manifest.policy_source_repo_id}")
+    print(f"Robot type: {manifest.robot_type}")
+    if manifest.robot_fps:
+        print(f"Control rate: {manifest.robot_fps} fps")
+    print(f"LeRobot version: {manifest.framework_version}")
+    print()
+    print("Observation features:")
+    for name, feat in manifest.observation_features.items():
+        shape_str = f"[{', '.join(str(d) for d in feat.shape)}]" if feat.shape else "?"
+        print(f"  - {name}: {shape_str}")
+    print("Action features:")
+    for name, feat in manifest.action_features.items():
+        shape_str = f"[{', '.join(str(d) for d in feat.shape)}]" if feat.shape else "?"
+        print(f"  - {name}: {shape_str}")
+    print()
+    print(f"CoreAI parity: {manifest.evaluation_status}")
+    if manifest.evaluation_min_chunk_cosine is not None:
+        print(f"  min chunk cosine: {manifest.evaluation_min_chunk_cosine}")
+    if manifest.evaluation_max_action_mae is not None:
+        print(f"  max action MAE: {manifest.evaluation_max_action_mae}")
+    if manifest.graphs:
+        print(f"Graphs: {', '.join(g.name for g in manifest.graphs)}")
+    if manifest.host_loop_required:
+        print(f"Host loop: {manifest.host_loop_type} ({manifest.host_loop_solver}, {manifest.host_loop_num_steps} steps)")
+    print()
+    print(f"Default mode: {manifest.default_mode}")
+    print(f"Recommended next step: rollout --mode dry_run")
+
+    return 0
+
+
+# MARK: - doctor (spec §12.6)
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Diagnose policy/robot/runtime compatibility."""
+    checks: list[tuple[bool, str]] = []
+
+    # Check 1: lerobot-coreai version
+    checks.append((True, f"lerobot-coreai {__version__} installed"))
+
+    # Check 2: LeRobot version
+    lerobot_ver = get_installed_lerobot_version()
+    if lerobot_ver:
+        status, msg = check_lerobot_compatibility(allow_unsupported=True)
+        checks.append((status == "supported", f"LeRobot {lerobot_ver} — {msg}"))
+    else:
+        checks.append((True, "LeRobot not installed (metadata-only mode)"))
+
+    # Check 3-8: manifest checks (only if policy.path given)
+    manifest = None
+    if args.policy_path:
+        try:
+            manifest = load_manifest(args.policy_path)
+            checks.append((True, f"CoreAI artifact found: {args.policy_path}"))
+            checks.append((True, f"lerobot-coreai.json found and valid"))
+        except ManifestError as e:
+            checks.append((False, f"Manifest error: {e}"))
+        except DownloadError as e:
+            checks.append((False, f"Download error: {e}"))
+
+    if manifest:
+        # Robot type match
+        if args.robot_type:
+            if args.robot_type == manifest.robot_type:
+                checks.append((True, f"Robot type matches: {args.robot_type}"))
+            else:
+                checks.append((False,
+                    f"Robot type mismatch: policy expects {manifest.robot_type}, got {args.robot_type}"))
+
+        # Parity
+        if manifest.parity_passed:
+            checks.append((True, f"Action parity passed"))
+        else:
+            checks.append((False, f"Action parity: {manifest.evaluation_status}"))
+
+        # Default mode
+        checks.append((True, f"Default mode: {manifest.default_mode}"))
+
+    # Print results
+    print("lerobot-coreai doctor")
+    print("=" * 50)
+    for ok, msg in checks:
+        symbol = "✓" if ok else "✗"
+        print(f"{symbol} {msg}")
+    print("=" * 50)
+
+    all_ok = all(ok for ok, _ in checks)
+    if all_ok:
+        print("All checks passed.")
+    else:
+        print("Some checks failed.")
+
+    return 0 if all_ok else 1
