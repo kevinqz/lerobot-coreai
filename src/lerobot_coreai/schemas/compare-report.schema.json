@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/compare-report.schema.json",
+  "title": "lerobot-coreai compare report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "lerobot_coreai_version", "ok", "mode", "policy", "dataset", "runner", "metrics", "claims", "safety", "errors"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.compare_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "const": "dataset_compare"},
+    "policy": {"type": "object"},
+    "dataset": {"type": "object"},
+    "runner": {"type": "object"},
+    "tolerances": {"type": "object"},
+    "metrics": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_numeric_action_fidelity", "proves_task_success", "proves_robot_safety"],
+      "properties": {
+        "proves_numeric_action_fidelity": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_robot_safety": {"type": "boolean", "const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": ["physical_actuation_possible", "motor_commands_available", "robot_connected", "actions_sent"],
+      "properties": {
+        "physical_actuation_possible": {"type": "boolean", "const": false},
+        "motor_commands_available": {"type": "boolean", "const": false},
+        "robot_connected": {"type": "boolean", "const": false},
+        "actions_sent": {"type": "integer", "const": 0}
+      }
+    },
+    "errors": {"type": "array"}
+  }
+}

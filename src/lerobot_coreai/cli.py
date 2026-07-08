@@ -19,6 +19,7 @@ from .errors import CoreAIPolicyError, DownloadError, ManifestError
 from .manifest import load_manifest
 from .rollout import DryRunRolloutConfig, run_dry_run_rollout
 from .eval import EvalConfig, run_lerobot_dataset_eval
+from .compare import CompareConfig, run_lerobot_policy_compare
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -142,11 +143,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_rollout.set_defaults(func=cmd_rollout)
 
     # --- compare (spec §12.7) — v0.3 ---
-    p_compare = sub.add_parser("compare", help="Compare PyTorch policy vs CoreAI artifact (v0.5 planned)")
-    p_compare.add_argument("--torch.policy.path", dest="torch_policy_path")
-    p_compare.add_argument("--coreai.policy.path", dest="coreai_policy_path")
-    p_compare.add_argument("--dataset.repo_id", dest="dataset_repo_id")
-    p_compare.set_defaults(func=cmd_not_implemented)
+    p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
+    p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
+    p_compare.add_argument("--torch.policy.type", dest="torch_policy_type")
+    p_compare.add_argument("--coreai.policy.path", dest="coreai_policy_path", required=True)
+    p_compare.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_compare.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock")
+    p_compare.add_argument("--robot.type", dest="robot_type")
+    p_compare.add_argument("--max-frames", dest="max_frames", type=int, default=32)
+    p_compare.add_argument("--start-index", dest="start_index", type=int, default=0)
+    p_compare.add_argument("--stride", dest="stride", type=int, default=1)
+    p_compare.add_argument("--episodes", dest="episodes")
+    p_compare.add_argument("--dataset.root", dest="dataset_root")
+    p_compare.add_argument("--dataset.revision", dest="dataset_revision")
+    p_compare.add_argument("--no-download-videos", dest="download_videos", action="store_false", default=True)
+    p_compare.add_argument("--video-backend", dest="video_backend")
+    p_compare.add_argument("--output-dir", dest="output_dir")
+    p_compare.add_argument("--overwrite", action="store_true")
+    p_compare.add_argument("--strict", action="store_true")
+    p_compare.add_argument("--fail-fast", action="store_true")
+    p_compare.add_argument("--tolerance.cosine", dest="tolerance_cosine", type=float, default=0.999)
+    p_compare.add_argument("--tolerance.max-mae", dest="tolerance_max_mae", type=float, default=1e-4)
+    p_compare.add_argument("--tolerance.mean-mae", dest="tolerance_mean_mae", type=float, default=1e-5)
+    p_compare.add_argument("--save-actions", action="store_true")
+    p_compare.add_argument("--reset-each-frame", action="store_true")
+    p_compare.add_argument("--json", action="store_true")
+    p_compare.set_defaults(func=cmd_compare)
 
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
@@ -545,5 +567,95 @@ def cmd_eval(args: argparse.Namespace) -> int:
     print(f"  trace:   {result.trace_path}")
     print(f"  report:  {result.report_path}")
     print("=" * 50)
+
+    return 0 if result.ok else 1
+
+
+# MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Compare PyTorch vs CoreAI action parity on LeRobotDataset."""
+    from .errors import CoreAIPolicyError
+
+    episodes = None
+    if args.episodes:
+        episodes = [int(e.strip()) for e in args.episodes.split(",")]
+
+    output_dir = args.output_dir or f"runs/{args.coreai_policy_path.split('/')[-1]}-compare"
+
+    config = CompareConfig(
+        torch_policy_path=args.torch_policy_path,
+        coreai_policy_path=args.coreai_policy_path,
+        dataset_repo_id=args.dataset_repo_id,
+        runner_url=args.runner_url,
+        output_dir=Path(output_dir),
+        robot_type=args.robot_type,
+        torch_policy_type=args.torch_policy_type,
+        max_frames=args.max_frames,
+        start_index=args.start_index,
+        stride=args.stride,
+        episodes=episodes,
+        dataset_root=Path(args.dataset_root) if args.dataset_root else None,
+        dataset_revision=args.dataset_revision,
+        download_videos=args.download_videos,
+        video_backend=args.video_backend,
+        strict_observation_keys=args.strict,
+        fail_fast=args.fail_fast,
+        overwrite=args.overwrite,
+        tolerance_cosine=args.tolerance_cosine,
+        tolerance_max_mae=args.tolerance_max_mae,
+        tolerance_mean_mae=args.tolerance_mean_mae,
+        save_actions=args.save_actions,
+        reset_each_frame=args.reset_each_frame,
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai compare")
+        print("=" * 50)
+        print(f"PyTorch:  {args.torch_policy_path}")
+        print(f"CoreAI:   {args.coreai_policy_path}")
+        print(f"Dataset:  {args.dataset_repo_id}")
+        print(f"Runner:   {args.runner_url}")
+        print(f"Max frames: {args.max_frames}")
+
+    try:
+        result = run_lerobot_policy_compare(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Compare failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0 if result.ok else 1
+
+    m = result.report.get("metrics", {})
+    c = result.report.get("claims", {})
+    print()
+    print(f"✓ Compare completed")
+    print(f"  frames compared: {m.get('frames_compared', 0)}")
+    print(f"  frames passed:   {m.get('frames_passed', 0)}")
+    print(f"  frames failed:   {m.get('frames_failed', 0)}")
+    if m.get("min_cosine_similarity") is not None:
+        print(f"  min cosine:      {m['min_cosine_similarity']:.10f}")
+        print(f"  mean cosine:     {m['mean_cosine_similarity']:.10f}")
+        print(f"  max MAE:         {m['max_absolute_error']:.10f}")
+    print(f"  numeric fidelity: {'YES' if c.get('proves_numeric_action_fidelity') else 'NO'}")
+    print(f"  No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  actions: {result.actions_path}")
+    print(f"  trace:   {result.trace_path}")
+    print(f"  report:  {result.report_path}")
+    print("=" * 50)
+    if c.get("proves_numeric_action_fidelity"):
+        print("Numeric action parity PROVEN on {} frames.".format(m.get('frames_compared', 0)))
+    else:
+        print("Numeric action parity NOT proven.")
 
     return 0 if result.ok else 1

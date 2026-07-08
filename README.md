@@ -108,7 +108,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `predict` | v0.2 ✅ | Predict action from single observation |
 | `rollout --mode dry_run` | v0.3 ✅ | Fixture-based dry-run; no robot actuation |
 | `eval` | v0.4 ✅ | LeRobotDataset replay/eval; no robot actuation |
-| `compare` | v0.5 planned | PyTorch vs CoreAI action parity |
+| `compare | v0.5 ✅ | PyTorch vs CoreAI action parity
 | `export` | v0.5 planned | Fabric wrapper |
 
 ## Safety model

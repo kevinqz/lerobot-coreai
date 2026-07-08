@@ -77,3 +77,7 @@ class ActionValidationError(CoreAIPolicyError):
 
 class FixtureError(CoreAIPolicyError):
     """Observation fixture is missing, invalid, or unsupported."""
+
+
+class ActionParityError(CoreAIPolicyError):
+    """Action parity check failed (shape mismatch, tolerance exceeded, or NaN/Inf)."""
