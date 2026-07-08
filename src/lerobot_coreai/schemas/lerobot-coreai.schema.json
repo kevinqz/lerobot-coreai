@@ -89,8 +89,8 @@
           "description": "Action representation (e.g. 'joint_position_delta', 'absolute_joint_position')."
         },
         "fps": {
-          "type": "integer",
-          "description": "Control frequency in Hz."
+          "type": ["integer", "null"],
+          "description": "Control frequency in Hz. Null when unknown (not all policies declare fps)."
         }
       }
     },
@@ -112,9 +112,9 @@
                 "description": "Data type ('image', 'float32', 'string', etc.)."
               },
               "shape": {
-                "type": "array",
+                "type": ["array", "null"],
                 "items": { "type": "integer" },
-                "description": "Tensor shape (e.g. [3, 224, 224] for images, [7] for state)."
+                "description": "Tensor shape (e.g. [3, 224, 224] for images, [7] for state). Null for scalar/string features."
               },
               "required": {
                 "type": "boolean",
@@ -140,6 +140,11 @@
                 "type": "array",
                 "items": { "type": "integer" },
                 "description": "Action chunk shape (e.g. [16, 7] = 16-step chunk, 7-dim action)."
+              },
+              "required": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this feature is required for inference."
               }
             }
           }
