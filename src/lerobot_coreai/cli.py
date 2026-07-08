@@ -255,8 +255,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         default_url = "unix:///tmp/coreai-runner.sock"
         try:
             rc = RunnerClient(default_url)
-            rc.health()
-            checks.append((True, f"coreai-runner reachable at {default_url} (default)"))
+            health = rc.health()
+            checks.append((True, f"coreai-runner reachable at {default_url} (default, status: {health.status})"))
+            caps = rc.capabilities()
+            if caps.supports_action:
+                checks.append((True, "coreai-runner supports runtime_kind=action"))
+            else:
+                checks.append((False, "coreai-runner does NOT support runtime_kind=action"))
             rc.close()
         except RunnerError as e:
             checks.append((False, f"coreai-runner not reachable at {default_url}: {e}"))
