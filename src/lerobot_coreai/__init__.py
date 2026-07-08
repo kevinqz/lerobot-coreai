@@ -2,7 +2,7 @@
 #
 # Canonical sentence: Same LeRobot workflow. CoreAI runtime.
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .policy import CoreAIPolicy
 from .config import CoreAIRuntimeConfig, CoreAIPolicyConfig
@@ -22,6 +22,7 @@ from .errors import (
     RunnerTimeoutError,
     ObservationValidationError,
     ActionValidationError,
+    FixtureError,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "RunnerTimeoutError",
     "ObservationValidationError",
     "ActionValidationError",
+    "FixtureError",
 ]

@@ -1,4 +1,4 @@
-# test_policy_select_action.py — tests for CoreAIPolicy.select_action with mocked runner.
+# test_policy_select_action.py — tests for CoreAIPolicy.select_action and predict_action.
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -21,7 +21,8 @@ class TestSelectActionWithMockedRunner:
         policy = CoreAIPolicy(manifest, runner_client=mock_runner)
         return policy, mock_runner
 
-    def test_select_action_calls_runner(self, valid_manifest_dict):
+    def test_select_action_returns_raw_action(self, valid_manifest_dict):
+        """v0.3: select_action returns the raw action, not a dict."""
         p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
         action = [[0.01] * 7 for _ in range(16)]
         mock_runner.predict_action.return_value = ActionPredictResponse(action=action)
@@ -33,11 +34,28 @@ class TestSelectActionWithMockedRunner:
         }
         result = p.select_action(batch)
 
-        assert "action" in result
-        assert result["action"] == action
+        assert result == action
+        assert not isinstance(result, dict)
         mock_runner.predict_action.assert_called_once()
 
-    def test_select_action_return_metadata(self, valid_manifest_dict):
+    def test_predict_action_returns_dict(self, valid_manifest_dict):
+        """predict_action returns {"action": ...}."""
+        p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
+        action = [[0.01] * 7 for _ in range(16)]
+        mock_runner.predict_action.return_value = ActionPredictResponse(action=action)
+
+        batch = {
+            "observation.images.wrist": "/tmp/wrist.png",
+            "observation.state": [0.0] * 7,
+        }
+        result = p.predict_action(batch)
+
+        assert isinstance(result, dict)
+        assert "action" in result
+        assert result["action"] == action
+
+    def test_predict_action_return_metadata(self, valid_manifest_dict):
+        """predict_action with return_metadata=True includes metadata."""
         p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
         action = [[0.01] * 7 for _ in range(16)]
         mock_runner.predict_action.return_value = ActionPredictResponse(
@@ -48,7 +66,7 @@ class TestSelectActionWithMockedRunner:
             "observation.images.wrist": "/tmp/wrist.png",
             "observation.state": [0.0] * 7,
         }
-        result = p.select_action(batch, return_metadata=True)
+        result = p.predict_action(batch, return_metadata=True)
 
         assert "action" in result
         assert "metadata" in result
@@ -56,16 +74,16 @@ class TestSelectActionWithMockedRunner:
         assert result["metadata"]["robot_type"] == "so100"
         assert result["metadata"]["timing"]["inference_ms"] == 12.5
 
-    def test_select_action_validation_before_runner(self, valid_manifest_dict):
+    def test_validation_failure_before_runner(self, valid_manifest_dict):
         """Observation validation should fail before calling the runner."""
         p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
         batch = {"task": "test"}  # missing required keys
 
         with pytest.raises(ObservationValidationError):
-            p.select_action(batch)
+            p.predict_action(batch)
         mock_runner.predict_action.assert_not_called()
 
-    def test_select_action_runner_error_bubbles(self, valid_manifest_dict):
+    def test_runner_error_bubbles(self, valid_manifest_dict):
         """Runner errors should propagate as CoreAIPolicyError subclasses."""
         p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
         mock_runner.predict_action.side_effect = RunnerNotReachableError("down")
@@ -75,9 +93,9 @@ class TestSelectActionWithMockedRunner:
             "observation.state": [0.0] * 7,
         }
         with pytest.raises(CoreAIPolicyError):
-            p.select_action(batch)
+            p.predict_action(batch)
 
-    def test_select_action_action_validation(self, valid_manifest_dict):
+    def test_action_validation(self, valid_manifest_dict):
         """Bad action shape from runner should raise ActionValidationError."""
         p, mock_runner = self._make_policy_with_mock_runner(valid_manifest_dict)
         bad_action = [[0.0] * 7]  # [1, 7] instead of [16, 7]
@@ -88,7 +106,7 @@ class TestSelectActionWithMockedRunner:
             "observation.state": [0.0] * 7,
         }
         with pytest.raises(ActionValidationError):
-            p.select_action(batch)
+            p.predict_action(batch)
 
     def test_select_action_no_runner_raises(self, valid_manifest_dict):
         """select_action without a runner should raise RunnerNotReachableError."""
@@ -107,17 +125,15 @@ class TestSelectActionWithMockedRunner:
             "observation.images.wrist": "/tmp/wrist.png",
             "observation.state": [0.0] * 7,
         }
-        p.select_action(batch)
+        p.predict_action(batch)
 
         call_args = mock_runner.predict_action.call_args[0][0]
-        # model_id should be derived from repo_id: kevinqz/EVO1-SO100-CoreAI -> evo1-so100
         assert call_args.model_id == "evo1-so100"
 
 
 class TestValidateRunner:
     def test_validate_runner_calls_health_and_capabilities(self, monkeypatch, valid_manifest_dict):
         """from_pretrained(validate_runner=True) should call health() and supports_action()."""
-        from lerobot_coreai.manifest import LeRobotCoreAIManifest
         from lerobot_coreai.types import RunnerHealth, RunnerCapabilities
 
         manifest = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
@@ -138,7 +154,6 @@ class TestValidateRunner:
 
     def test_validate_runner_uses_default_url(self, monkeypatch, valid_manifest_dict):
         """validate_runner=True without explicit URL should use the default runtime URL."""
-        from lerobot_coreai.manifest import LeRobotCoreAIManifest
         from lerobot_coreai.types import RunnerHealth, RunnerCapabilities
 
         manifest = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
@@ -152,5 +167,4 @@ class TestValidateRunner:
                 "kevinqz/EVO1-SO100-CoreAI",
                 validate_runner=True,
             )
-        # RunnerClient should have been created with the default URL
         mock_rc.assert_called_once()

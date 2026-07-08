@@ -104,12 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.set_defaults(func=cmd_not_implemented)
 
     # --- rollout (spec §12.5) — v0.2+ ---
-    p_rollout = sub.add_parser("rollout", help="Run policy rollout with runtime=coreai (v0.3 planned)")
+    p_rollout = sub.add_parser("rollout", help="Run fixture-based dry-run rollout (v0.3)")
     p_rollout.add_argument("--policy.path", dest="policy_path", required=True)
     p_rollout.add_argument("--robot.type", dest="robot_type")
     p_rollout.add_argument("--mode", choices=["dry_run", "shadow", "sim", "real"], default="dry_run")
-    p_rollout.add_argument("--confirm-real-robot-actuation", action="store_true")
-    p_rollout.set_defaults(func=cmd_not_implemented)
+    p_rollout.add_argument("--fixture", dest="fixture",
+                           help="Path to observation fixture JSON (required for dry_run)")
+    p_rollout.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock")
+    p_rollout.add_argument("--output-dir", dest="output_dir", default=None,
+                           help="Output directory (default: runs/<policy>-dry-run)")
+    p_rollout.add_argument("--strict", dest="strict", action="store_true")
+    p_rollout.add_argument("--keep-temp-files", dest="keep_temp_files", action="store_true")
+    p_rollout.add_argument("--overwrite", dest="overwrite", action="store_true")
+    p_rollout.add_argument("--confirm-real-robot-actuation", dest="confirm_real", action="store_true")
+    p_rollout.add_argument("--json", action="store_true")
+    p_rollout.set_defaults(func=cmd_rollout)
 
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch policy vs CoreAI artifact (v0.3)")
@@ -348,7 +357,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
             args.policy_path,
             runner_url=args.runner_url,
         )
-        result = policy.select_action(observation)
+        result = policy.predict_action(observation, return_metadata=False)
     except CoreAIPolicyError as e:
         print(f"Error: {e}", file=sys.stderr)
         print("No robot commands were sent.", file=sys.stderr)
@@ -364,5 +373,86 @@ def cmd_predict(args: argparse.Namespace) -> int:
         action = result["action"]
         print(f"Action shape: [{len(action)}{''.join(f', {len(action[0])}' if action and isinstance(action[0], list) else '')}]")
         print(f"Action: {json.dumps(action)}")
+
+    return 0
+
+
+# MARK: - rollout (v0.3 — fixture-based dry_run)
+
+def cmd_rollout(args: argparse.Namespace) -> int:
+    """Run a fixture-based dry-run rollout."""
+    from .safety import ensure_mode_supported_for_v03
+    from .errors import CoreAIPolicyError, SafetyError
+
+    mode = args.mode
+
+    # Block non-dry_run modes.
+    try:
+        ensure_mode_supported_for_v03(mode, confirm_real_robot_actuation=args.confirm_real)
+    except SafetyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if mode == "dry_run" and not args.fixture:
+        print("Error: --fixture is required for dry_run mode.", file=sys.stderr)
+        return 1
+
+    from .rollout import DryRunRolloutConfig, run_dry_run_rollout
+
+    output_dir = args.output_dir or f"runs/{args.policy_path.split('/')[-1]}-dry-run"
+
+    config = DryRunRolloutConfig(
+        policy_path=args.policy_path,
+        robot_type=args.robot_type,
+        fixture_path=Path(args.fixture),
+        runner_url=args.runner_url,
+        output_dir=Path(output_dir),
+        strict_observation_keys=args.strict,
+        keep_temp_files=args.keep_temp_files,
+        overwrite=args.overwrite,
+        confirm_real_robot_actuation=args.confirm_real,
+    )
+
+    print(f"lerobot-coreai rollout")
+    print("=" * 50)
+    print(f"Policy: {args.policy_path}")
+    print(f"Mode: {mode}")
+    print(f"Robot type: {args.robot_type or '(from manifest)'}")
+    print(f"Runner: {args.runner_url}")
+
+    try:
+        result = run_dry_run_rollout(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Rollout failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        report_path = Path(output_dir) / "rollout_report.json"
+        if report_path.exists():
+            print(f"Failure report: {report_path}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0
+
+    print()
+    print(f"✓ Manifest valid")
+    print(f"✓ Runner reachable")
+    print(f"✓ Runner supports runtime_kind=action")
+    print(f"✓ Observation fixture loaded")
+    print(f"✓ Action generated")
+    print(f"✓ No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  action:      {result.action_path}")
+    print(f"  observation: {result.observation_path}")
+    print(f"  trace:       {result.trace_path}")
+    print(f"  report:      {result.report_path}")
+    print("=" * 50)
+    print("Dry-run completed successfully.")
 
     return 0

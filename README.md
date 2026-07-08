@@ -10,8 +10,8 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **v0.2:** `select_action()` and `predict` command work with a running coreai-runner.
-> `inspect`, `doctor`, `list`, and metadata API also work without a runner.
+> **v0.3:** `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata. Fixture-based `rollout --mode dry_run` with reports.
+> `inspect`, `doctor`, `list` work without a runner.
 
 ---
 
@@ -71,7 +71,6 @@ Recommended next step: rollout --mode dry_run
 ```python
 from lerobot_coreai import CoreAIPolicy
 
-# v0.2: metadata + action inference (requires running coreai-runner)
 policy = CoreAIPolicy.from_pretrained(
     "kevinqz/EVO1-SO100-CoreAI",
     runner_url="http://127.0.0.1:8710",
@@ -79,17 +78,19 @@ policy = CoreAIPolicy.from_pretrained(
 
 batch = {
     "observation.images.wrist": "/tmp/wrist.png",
-    "observation.state": [0.0, 0.1, 0.2, 0.0, 0.0, 0.0, 0.0],
+    "observation.state": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     "task": "pick up the cube",
 }
 
-result = policy.select_action(batch)
-action = result["action"]
+# LeRobot 0.6.0 semantics: returns raw action
+action = policy.select_action(batch)
+
+# Debug/CLI-style: returns dict with action + metadata
+result = policy.predict_action(batch, return_metadata=True)
 ```
 
 > **Without a runner:** `from_pretrained(repo_id)` without `runner_url` loads metadata only.
-> `select_action()` will raise `RunnerNotReachableError`. Metadata access (policy_type,
-> robot_type, config, parity_passed) always works.
+> `select_action()` / `predict_action()` will raise `RunnerNotReachableError`.
 
 ### Doctor — check compatibility
 
@@ -105,17 +106,15 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `doctor` | v0.1 ✅ | Metadata + runner compatibility checks |
 | `list` | v0.1 ✅ | List LeRobot policies from the catalog |
 | `predict` | v0.2 ✅ | Predict action from single observation |
-| `rollout` | v0.3 planned | Dry-run rollout with fixture |
-| `eval` | v0.3 planned | LeRobotDataset replay |
-| `compare` | v0.3 planned | PyTorch vs CoreAI |
-| `export` | v0.4 planned | Fabric wrapper |
+| `rollout --mode dry_run` | v0.3 ✅ | Fixture-based dry-run; no robot actuation |
+| `eval` | v0.4 planned | LeRobotDataset replay |
+| `compare` | v0.4 planned | PyTorch vs CoreAI |
+| `export` | v0.5 planned | Fabric wrapper |
 
 ## Safety model
 
-v0.2 does not implement physical robot actuation. `select_action()` generates
-actions but never sends motor commands.
-
-Rollout modes are documented as future safety modes:
+v0.3 implements fixture-based dry_run only.
+`select_action()` and `predict_action()` generate actions but never send motor commands.
 
 | Mode | Status | Behavior |
 |------|--------|----------|
@@ -130,7 +129,13 @@ Rollout modes are documented as future safety modes:
 
 ## Version policy
 
-`lerobot-coreai` 0.2.x supports LeRobot 0.6.x public APIs. If the LeRobot version is unsupported, `lerobot-coreai` warns clearly, allows metadata-only commands, and blocks rollout/eval unless `--allow-unsupported-lerobot` is passed.
+`lerobot-coreai` 0.3.x supports LeRobot 0.6.x public APIs.
+
+**Compatibility:**
+- Core package: Python 3.10+ (metadata, inspect, predict, dry_run)
+- LeRobot integration (`[lerobot]` extra): Python 3.12+ (LeRobot 0.6.0 requires it)
+- v0.3 aligns `select_action(batch)` with LeRobot semantics — returns raw action
+- `predict_action(batch)` is the richer dict-returning helper
 
 ## Ecosystem
 

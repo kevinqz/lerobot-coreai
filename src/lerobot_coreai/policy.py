@@ -140,23 +140,15 @@ class CoreAIPolicy:
 
     # MARK: - Inference
 
-    def select_action(
+    def predict_action(
         self,
         batch: dict[str, Any],
         *,
         return_metadata: bool | None = None,
     ) -> dict[str, Any]:
-        """Run the policy on a LeRobot-shaped batch and return an action.
+        """Run the policy on a LeRobot-shaped batch and return a dict with the action.
 
-        Input (spec §11.1)::
-
-            batch = {
-                "observation.images.wrist": wrist_image_path,
-                "observation.state": [0.0, 0.1, 0.2, 0.0, 0.0, 0.0, 0.0],
-                "task": "pick up the cube",
-            }
-
-        Output (spec §11.2)::
+        This is the richer API — always returns a dict::
 
             {"action": action_chunk}
 
@@ -166,7 +158,7 @@ class CoreAIPolicy:
 
         Guarantees:
         - Returns a dict with "action" key on success.
-        - No physical robot actuation happens inside select_action().
+        - No physical robot actuation happens.
 
         Raises:
             RunnerNotReachableError: If no runner client is configured or runner is down.
@@ -209,6 +201,23 @@ class CoreAIPolicy:
                 },
             }
         return {"action": response.action}
+
+    def select_action(
+        self,
+        batch: dict[str, Any],
+        **kwargs: Any,
+    ) -> Any:
+        """Run the policy and return the raw action (LeRobot 0.6.0 semantics).
+
+        In LeRobot, ``select_action(batch)`` returns the action directly, not a dict.
+        This method follows that contract::
+
+            action = policy.select_action(batch)
+
+        If you need metadata or a dict response, use :meth:`predict_action`.
+        """
+        result = self.predict_action(batch, return_metadata=False)
+        return result["action"]
 
     # MARK: - Lifecycle
 

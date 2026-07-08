@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/rollout-report.schema.json",
+  "title": "lerobot-coreai rollout report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "lerobot_coreai_version", "ok", "mode", "policy", "robot", "safety", "errors"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.rollout_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "enum": ["dry_run", "shadow", "sim", "real"]},
+    "policy": {"type": "object"},
+    "robot": {
+      "type": "object",
+      "required": ["connected", "actions_sent"],
+      "properties": {
+        "connected": {"type": "boolean"},
+        "actions_sent": {"type": "integer", "const": 0}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": ["physical_actuation_possible"],
+      "properties": {
+        "physical_actuation_possible": {"type": "boolean", "const": false},
+        "motor_commands_available": {"type": "boolean", "const": false}
+      }
+    },
+    "errors": {"type": "array"}
+  }
+}

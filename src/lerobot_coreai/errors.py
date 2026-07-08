@@ -73,3 +73,7 @@ class ObservationValidationError(CoreAIPolicyError):
 
 class ActionValidationError(CoreAIPolicyError):
     """The action output from the runner does not match the manifest's feature contract."""
+
+
+class FixtureError(CoreAIPolicyError):
+    """Observation fixture is missing, invalid, or unsupported."""

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-coreai"
-version = "0.2.0"
+version = "0.3.0"
 description = "Apple CoreAI runtime backend for LeRobot policies."
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,10 +32,9 @@ dependencies = [
 
 [project.optional-dependencies]
 lerobot = [
-    # LeRobotDataset replay, LeRobot-compatible feature handling, rollout helpers.
-    # Pinned to the v0.6.x public API surface (spec §26).
-    "lerobot>=0.6.0,<0.7.0",
-    "torch>=2.0",
+    # LeRobot 0.6.x requires Python 3.12+ and controls its own torch/numpy deps.
+    # We do NOT declare torch directly — LeRobot 0.6.0 pins torch>=2.7,<2.12.0.
+    "lerobot>=0.6.0,<0.7.0; python_version >= '3.12'",
 ]
 fabric = [
     # Export orchestration wrapper around coreai-fabric.

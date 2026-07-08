@@ -29,7 +29,7 @@ class TestCLIPredict:
         }))
 
         mock_policy = MagicMock()
-        mock_policy.select_action.return_value = {"action": [[0.01] * 7]}
+        mock_policy.predict_action.return_value = {"action": [[0.01] * 7]}
 
         with patch("lerobot_coreai.policy.CoreAIPolicy.from_pretrained", return_value=mock_policy):
             rc = cli.main([
@@ -51,7 +51,7 @@ class TestCLIPredict:
 
         output_file = tmp_path / "action.json"
         mock_policy = MagicMock()
-        mock_policy.select_action.return_value = {"action": [[0.0] * 7]}
+        mock_policy.predict_action.return_value = {"action": [[0.0] * 7]}
 
         with patch("lerobot_coreai.policy.CoreAIPolicy.from_pretrained", return_value=mock_policy):
             rc = cli.main([
@@ -74,7 +74,7 @@ class TestCLIPredict:
         fixture.write_text(json.dumps({"observation.state": [0.0] * 7}))
 
         mock_policy = MagicMock()
-        mock_policy.select_action.side_effect = RunnerNotReachableError("down")
+        mock_policy.predict_action.side_effect = RunnerNotReachableError("down")
 
         with patch("lerobot_coreai.policy.CoreAIPolicy.from_pretrained", return_value=mock_policy):
             rc = cli.main([
