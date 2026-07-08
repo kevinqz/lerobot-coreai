@@ -198,6 +198,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # Default mode
         checks.append((True, f"Default mode: {manifest.default_mode}"))
 
+    # Runner check: not available in v0.1 (metadata-only)
+    checks.append((True, "coreai-runner check: skipped in v0.1 (metadata-only mode)"))
+
     # Print results
     print("lerobot-coreai doctor")
     print("=" * 50)

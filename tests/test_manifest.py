@@ -119,6 +119,18 @@ class TestManifestValidation:
         with pytest.raises(ManifestError, match="schema validation"):
             LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
 
+    def test_real_default_mode_rejected(self, valid_manifest_dict):
+        """A published artifact must NEVER default to 'real' — only 'dry_run'."""
+        valid_manifest_dict["safety"]["default_mode"] = "real"
+        with pytest.raises(ManifestError, match="schema validation"):
+            LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+
+    def test_passed_without_proves_raises(self, valid_manifest_dict):
+        """status=passed requires metric + n_obs + proves_* (if/then)."""
+        del valid_manifest_dict["evaluation"]["proves_numeric_fidelity"]
+        with pytest.raises(ManifestError, match="schema validation"):
+            LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+
 
 class TestManifestOptional:
     def test_no_host_loop(self, valid_manifest_dict):
@@ -140,3 +152,15 @@ class TestManifestOptional:
         valid_manifest_dict["evaluation"]["status"] = "not_run"
         m = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
         assert m.parity_passed is False
+
+    def test_passed_wrong_metric_not_parity(self, valid_manifest_dict):
+        """parity_passed must be False if metric is not action_parity, even if status=passed."""
+        valid_manifest_dict["evaluation"]["metric"] = "graph_output_cosine"
+        m = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+        assert m.parity_passed is False
+
+    def test_allowed_modes_parsed(self, valid_manifest_dict):
+        """allowed_modes should be parsed from the safety block."""
+        valid_manifest_dict["safety"]["allowed_modes"] = ["dry_run", "shadow"]
+        m = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+        assert m.allowed_modes == ["dry_run", "shadow"]

@@ -46,14 +46,19 @@ def list_lerobot_policies() -> list[dict[str, Any]]:
             data = resp.json()
             models = data.get("models", [])
             # Filter to LeRobot fabric action entries.
+            # NOTE: the search-index fallback does not carry HF repo_ids (the index
+            # uses catalog model IDs like "evo1-so100", not HF repo IDs like
+            # "kevinqz/EVO1-SO100-CoreAI"). We set repo_id=None so callers don't
+            # mistake the catalog ID for a loadable HF repo — use the lerobot-coreai.json
+            # dist file (which carries real repo_ids) for that.
             return [
                 {
-                    "repo_id": m.get("id", ""),
+                    "repo_id": None,
                     "catalog_model_id": m.get("id", ""),
                     "policy_type": _infer_policy_type(m.get("id", "")),
                     "robot_type": _infer_robot_type(m.get("id", "")),
                     "runtime": "coreai",
-                    "status": "indexed",
+                    "status": "indexed_no_hf_repo_in_fallback",
                     "default_mode": "dry_run",
                 }
                 for m in models

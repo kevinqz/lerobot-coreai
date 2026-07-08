@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
 import jsonschema
@@ -21,14 +21,17 @@ SCHEMA_VERSION = "lerobot-coreai.v0"
 MANIFEST_FILENAME = "lerobot-coreai.json"
 HF_RAW_BASE = "https://huggingface.co/{repo}/resolve/main/{filename}"
 
-# The schema is bundled in the package for offline validation.
-_SCHEMA_PATH = Path(__file__).parent.parent.parent / "schemas" / "lerobot-coreai.schema.json"
-
 
 def _load_schema() -> dict[str, Any]:
-    """Load the bundled JSON Schema for lerobot-coreai.json."""
-    with open(_SCHEMA_PATH) as f:
-        return json.load(f)
+    """Load the bundled JSON Schema for lerobot-coreai.json via importlib.resources.
+
+    The schema lives at src/lerobot_coreai/schemas/lerobot-coreai.schema.json so it
+    is packaged inside the wheel (not left outside the package).
+    """
+    schema_text = files("lerobot_coreai.schemas").joinpath(
+        "lerobot-coreai.schema.json"
+    ).read_text()
+    return json.loads(schema_text)
 
 
 @dataclass
@@ -95,6 +98,7 @@ class LeRobotCoreAIManifest:
     proves_robot_safety: bool
     # Safety
     default_mode: str
+    allowed_modes: list[str]
     real_actuation_requires_confirmation: bool
     # Raw
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -108,8 +112,6 @@ class LeRobotCoreAIManifest:
             raise ManifestError(
                 f"lerobot-coreai.json failed schema validation: {e.message}",
             ) from e
-        except FileNotFoundError as e:
-            raise ManifestError(f"Schema file not found: {_SCHEMA_PATH}") from e
 
         fw = data["framework"]
         pol = data["policy"]
@@ -176,14 +178,26 @@ class LeRobotCoreAIManifest:
             proves_task_success=eval_block.get("proves_task_success", False),
             proves_robot_safety=eval_block.get("proves_robot_safety", False),
             default_mode=safety["default_mode"],
+            allowed_modes=safety.get("allowed_modes", ["dry_run", "shadow", "sim", "real"]),
             real_actuation_requires_confirmation=safety.get("real_actuation_requires_confirmation", True),
             raw=data,
         )
 
     @property
     def parity_passed(self) -> bool:
-        """True if action parity was verified and passed."""
-        return self.evaluation_status == "passed"
+        """True if action parity was verified and passed.
+
+        Checks not just status but also the metric type and the proves flags, so a
+        manifest with status=passed but proves_numeric_fidelity=false (or a non-action
+        metric) does not claim action parity.
+        """
+        return (
+            self.evaluation_status == "passed"
+            and self.evaluation_metric == "action_parity"
+            and self.proves_numeric_fidelity is True
+            and self.proves_task_success is False
+            and self.proves_robot_safety is False
+        )
 
     @property
     def lerobot_version_supported(self) -> str:

@@ -70,15 +70,16 @@ from lerobot_coreai import CoreAIPolicy
 
 policy = CoreAIPolicy.from_pretrained("kevinqz/EVO1-SO100-CoreAI")
 
-batch = {
-    "observation.images.wrist": wrist_image,
-    "observation.state": state,
-    "task": "pick up the cube",
-}
-
-out = policy.select_action(batch)
-action = out["action"]
+# v0.1: metadata-only — inspect the manifest without a runner
+print(policy.policy_type)       # "evo1"
+print(policy.robot_type)        # "so100"
+print(policy.config.observation_features)
+print(policy.config.action_features)
+print(policy.parity_passed)     # True if action parity verified
 ```
+
+> **Note:** `select_action(batch)` is planned for v0.2, after coreai-runner action inference
+> is wired. In v0.1 it raises `NotImplementedError`. The metadata API above works now.
 
 ### Doctor — check compatibility
 
@@ -88,15 +89,15 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 
 ## CLI commands
 
-| Command | Purpose |
-|---------|---------|
-| `inspect` | Inspect a CoreAI-backed LeRobot policy |
-| `export` | Export a LeRobot policy to CoreAI (wrapper around Fabric) |
-| `eval` | Evaluate a CoreAI policy on a LeRobotDataset |
-| `rollout` | Run policy rollout with `runtime=coreai` |
-| `doctor` | Diagnose policy/robot/runtime compatibility |
-| `serve` | Start or connect to coreai-runner |
-| `compare` | Compare PyTorch policy vs CoreAI artifact |
+| Command | Status | Purpose |
+|---------|--------|---------|
+| `inspect` | v0.1 ✅ | Inspect a CoreAI-backed LeRobot policy |
+| `doctor` | v0.1 ✅ | Metadata compatibility checks |
+| `rollout` | v0.2 planned | CoreAI runner rollout |
+| `serve` | v0.2 planned | Runner lifecycle |
+| `eval` | v0.3 planned | LeRobotDataset replay |
+| `compare` | v0.3 planned | PyTorch vs CoreAI |
+| `export` | v0.4 planned | Fabric wrapper |
 
 ## Safety model
 
