@@ -12,6 +12,7 @@ import sys
 from typing import Any
 
 from . import __version__
+from .catalog import list_lerobot_policies
 from .compatibility.versions import check_lerobot_compatibility, get_installed_lerobot_version
 from .errors import CoreAIPolicyError, DownloadError, ManifestError
 from .manifest import load_manifest
@@ -61,6 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--robot.type", dest="robot_type",
                           help="Robot type to check against policy metadata")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    # --- list (spec §P3) — query the catalog for LeRobot policies ---
+    p_list = sub.add_parser("list", help="List CoreAI-backed LeRobot policies from the catalog")
+    p_list.add_argument("--robot.type", dest="robot_type",
+                        help="Filter by robot type (e.g. so100, so101, aloha)")
+    p_list.add_argument("--policy.type", dest="policy_type",
+                        help="Filter by policy type (e.g. act, pi0, diffusion, evo1)")
+    p_list.add_argument("--status", dest="status",
+                        help="Filter by parity status (e.g. action_parity_passed)")
+    p_list.add_argument("--json", action="store_true", help="Output as JSON")
+    p_list.set_defaults(func=cmd_list)
 
     # --- export (spec §12.3) — v0.4 ---
     p_export = sub.add_parser("export", help="Export a LeRobot policy to CoreAI (v0.4)")
@@ -216,3 +228,40 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("Some checks failed.")
 
     return 0 if all_ok else 1
+
+
+# MARK: - list (query catalog for LeRobot policies)
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List CoreAI-backed LeRobot policies from the catalog."""
+    policies = list_lerobot_policies()
+
+    # Apply filters
+    if args.robot_type:
+        policies = [p for p in policies if p.get("robot_type") == args.robot_type]
+    if args.policy_type:
+        policies = [p for p in policies if p.get("policy_type") == args.policy_type]
+    if args.status:
+        policies = [p for p in policies if args.status in (p.get("status") or "")]
+
+    if args.json:
+        import json
+        print(json.dumps({"policies": policies}, indent=2))
+        return 0
+
+    if not policies:
+        print("No LeRobot CoreAI policies found matching the criteria.")
+        return 0
+
+    print(f"LeRobot CoreAI policies ({len(policies)}):")
+    print()
+    print(f"{'REPO_ID':<45s} {'TYPE':<12s} {'ROBOT':<10s} {'STATUS'}")
+    print("-" * 85)
+    for p in policies:
+        repo = p.get("repo_id") or p.get("catalog_model_id") or "?"
+        ptype = p.get("policy_type", "?")
+        robot = p.get("robot_type", "?")
+        status = p.get("status", "?")
+        print(f"{repo:<45s} {ptype:<12s} {robot:<10s} {status}")
+
+    return 0
