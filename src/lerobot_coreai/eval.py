@@ -144,6 +144,11 @@ def run_lerobot_dataset_eval(config: EvalConfig) -> EvalResult:
             try:
                 item = dataset[ds_idx]
                 batch = dataset_item_to_observation_batch(item, policy.manifest)
+                # Convert tensors/arrays/images to JSON-safe values before sending to runner.
+                from .serialization import make_json_safe_observation
+                batch = make_json_safe_observation(
+                    batch, output_dir=output_dir, frame_index=frame_idx,
+                )
                 result = policy.predict_action(batch, return_metadata=True)
                 action = result["action"]
                 metadata = result.get("metadata", {})

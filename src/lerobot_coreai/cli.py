@@ -157,8 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.3. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run.",
+        f"'{args.command}' is not implemented in v0.4. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval.",
         file=sys.stderr,
     )
     return 1

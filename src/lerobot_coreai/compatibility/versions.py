@@ -56,9 +56,9 @@ def check_lerobot_compatibility(
     if installed is None:
         return (
             "missing",
-            f"LeRobot is not installed. Metadata-only commands (inspect, doctor) work, "
-            f"but eval/rollout require 'pip install lerobot-coreai[lerobot]'. "
-            f"Recommended: LeRobot {RECOMMENDED_LEROBOT_VERSION}.",
+            f"LeRobot is not installed. Metadata-only commands work without LeRobot. "
+            f"LeRobotDataset eval requires Python 3.12+ and "
+            f"`pip install \"lerobot-coreai[lerobot]\"`.",
         )
 
     # Extract major.minor from the installed version.

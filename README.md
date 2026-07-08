@@ -113,8 +113,8 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 
 ## Safety model
 
-v0.3 implements fixture-based dry_run only.
-`select_action()` and `predict_action()` generate actions but never send motor commands.
+v0.4 implements fixture-based dry_run and LeRobotDataset eval.
+Both generate actions but never connect to a robot or send motor commands.
 
 | Mode | Status | Behavior |
 |------|--------|----------|
@@ -123,13 +123,14 @@ v0.3 implements fixture-based dry_run only.
 | `sim` | v0.6 planned | Simulation receives actions. |
 | `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-> v0.3 implements fixture-based dry_run only.
+> v0.4 implements fixture-based dry_run and LeRobotDataset eval.
 > shadow, sim, and real are future safety modes and are not executable yet.
-> No robot commands are sent by v0.3.
+> No robot commands are sent by v0.4.
 
 ## Version policy
 
-`lerobot-coreai` 0.3.x supports LeRobot 0.6.x public APIs.
+`lerobot-coreai` 0.4.x supports LeRobot `>=0.6.0,<0.7.0`.
+Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
 - Core package: Python 3.10+ (metadata, inspect, predict, dry_run)
