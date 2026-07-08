@@ -52,27 +52,26 @@ class FabricExportResult:
 def run_fabric_export(config: FabricExportConfig) -> FabricExportResult:
     """Run coreai-fabric export to produce a .aimodel artifact.
 
-    Tries the Python API first, then falls back to the CLI.
+    Strategy: CLI first (most stable), then Python API, then error.
     """
-    require_coreai_fabric()
-
-    # Strategy 1: Try coreai-fabric CLI (safest, most stable interface).
+    # Strategy 1: Try coreai-fabric CLI first.
     fabric_bin = shutil.which("coreai-fabric")
     if fabric_bin:
         return _run_fabric_cli(config, fabric_bin)
 
     # Strategy 2: Try Python API.
     try:
+        import coreai_fabric  # type: ignore[import-not-found]  # noqa: F401
         from coreai_fabric.recipes import find_recipe, load_recipe  # type: ignore[import-not-found]
         # If fabric has a programmatic export API, use it here.
-        # For now, this is a placeholder — the CLI is the primary path.
         pass
     except ImportError:
         pass
 
     raise CoreAIPolicyError(
-        "coreai-fabric is installed but no supported export API was found. "
-        "Use --skip-fabric with --existing-artifact, or update coreai-fabric.\n"
+        "coreai-fabric is not available. Install with:\n"
+        '  pip install "lerobot-coreai[fabric]"\n'
+        "Or use --skip-fabric with --existing-artifact.\n"
         "No robot commands were sent."
     )
 

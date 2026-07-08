@@ -150,6 +150,9 @@ def run_coreai_export_pipeline(config: ExportConfig) -> ExportResult:
                 robot_type=config.robot_type or "unknown",
                 output_repo_id=config.output_repo_id,
             )
+            # Validate generated manifest against schema.
+            from .manifest import LeRobotCoreAIManifest
+            LeRobotCoreAIManifest.from_dict(manifest_data)
             manifest_path.write_text(json.dumps(manifest_data, indent=2) + "\n")
             manifest_valid = True
             trace.write("manifest.generated", {"path": str(manifest_path)})
@@ -360,25 +363,26 @@ def _build_minimal_manifest(
     *, torch_policy_path: str, model_id: str, policy_type: str,
     robot_type: str, output_repo_id: str | None,
 ) -> dict[str, Any]:
+    robot_block: dict[str, Any] = {"type": robot_type}
+    policy_block: dict[str, Any] = {
+        "repo_id": output_repo_id or torch_policy_path,
+        "source_repo_id": torch_policy_path,
+        "type": policy_type,
+    }
     return {
         "schema_version": "lerobot-coreai.v0",
         "runtime": "coreai",
-        "framework": {"name": "lerobot", "version": "0.6.0", "commit": None},
-        "policy": {
-            "repo_id": output_repo_id or torch_policy_path,
-            "source_repo_id": torch_policy_path,
-            "type": policy_type,
-            "class": None, "config_class": None,
-        },
-        "robot": {"type": robot_type, "action_representation": None, "fps": None},
+        "framework": {"name": "lerobot", "version": "0.6.0"},
+        "policy": policy_block,
+        "robot": robot_block,
         "features": {"observation": {}, "action": {}},
-        "normalization": {"format": "lerobot", "path": "norm_stats.json", "sha256": None},
+        "normalization": {"format": "lerobot", "path": "norm_stats.json"},
         "coreai": {
             "artifact_format": "aimodel", "runner": "coreai-runner",
             "model_id": model_id, "graphs": [], "host_loop_required": False,
         },
         "evaluation": {
-            "metric": None, "status": "not_run",
+            "status": "not_run",
             "proves_numeric_fidelity": False,
             "proves_task_success": False, "proves_robot_safety": False,
         },
@@ -390,17 +394,40 @@ def _build_publish_folder(
     output_dir: Path, artifact_path: Path | None,
     manifest_path: Path | None, report: dict[str, Any],
 ) -> None:
+    import shutil as _shutil
     publish_dir = output_dir / "publish"
     publish_dir.mkdir(exist_ok=True)
 
     # Copy manifest.
     if manifest_path and manifest_path.exists():
-        shutil_copy = __import__("shutil").copy2
-        shutil_copy(manifest_path, publish_dir / "lerobot-coreai.json")
+        _shutil.copy2(manifest_path, publish_dir / "lerobot-coreai.json")
 
     # Copy artifact.
     if artifact_path and artifact_path.exists():
-        __import__("shutil").copytree(artifact_path, publish_dir / artifact_path.name, dirs_exist_ok=True)
+        _shutil.copytree(artifact_path, publish_dir / artifact_path.name, dirs_exist_ok=True)
+
+    # Copy reports.
+    reports_dir = publish_dir / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    for src, dst_name in [
+        (output_dir / "export_report.json", "export_report.json"),
+        (output_dir / "dry_run" / "rollout_report.json", "rollout_report.json"),
+        (output_dir / "eval" / "eval_report.json", "eval_report.json"),
+        (output_dir / "compare" / "compare_report.json", "compare_report.json"),
+    ]:
+        if src.exists():
+            _shutil.copy2(src, reports_dir / dst_name)
+
+    # Copy traces.
+    traces_dir = publish_dir / "traces"
+    traces_dir.mkdir(exist_ok=True)
+    for src, dst_name in [
+        (output_dir / "export_trace.jsonl", "export_trace.jsonl"),
+        (output_dir / "eval" / "eval_trace.jsonl", "eval_trace.jsonl"),
+        (output_dir / "compare" / "compare_trace.jsonl", "compare_trace.jsonl"),
+    ]:
+        if src.exists():
+            _shutil.copy2(src, traces_dir / dst_name)
 
     # Write README.
     model_id = report.get("artifact", {}).get("model_id", "unknown")
