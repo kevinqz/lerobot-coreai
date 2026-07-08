@@ -11,7 +11,7 @@ from importlib.resources import files
 from typing import Any
 
 import jsonschema
-import requests
+import httpx
 
 from .errors import ManifestError
 
@@ -253,8 +253,8 @@ def load_manifest(repo_id: str, *, revision: str = "main") -> LeRobotCoreAIManif
     url = url.replace("/resolve/main/", f"/resolve/{revision}/")
 
     try:
-        resp = requests.get(url, timeout=30)
-    except requests.RequestException as e:
+        resp = httpx.get(url, timeout=30, follow_redirects=True)
+    except httpx.RequestError as e:
         raise DownloadError(f"Failed to fetch {MANIFEST_FILENAME} from {repo_id}: {e}") from e
 
     if resp.status_code == 404:

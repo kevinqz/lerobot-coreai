@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
+import httpx
 
 # The catalog publishes a LeRobot-specific dist file (spec §18.3).
 # Falls back to the full search-index.json if lerobot-coreai.json is not yet published.
@@ -32,16 +32,16 @@ def list_lerobot_policies() -> list[dict[str, Any]]:
     """
     # Try the LeRobot-specific index first.
     try:
-        resp = requests.get(_CATALOG_LEROBOT_URL, timeout=15)
+        resp = httpx.get(_CATALOG_LEROBOT_URL, timeout=15, follow_redirects=True)
         if resp.status_code == 200:
             data = resp.json()
             return data.get("policies", [])
-    except requests.RequestException:
+    except httpx.RequestError:
         pass
 
     # Fallback: filter the full search index.
     try:
-        resp = requests.get(_CATALOG_SEARCH_URL, timeout=15)
+        resp = httpx.get(_CATALOG_SEARCH_URL, timeout=15, follow_redirects=True)
         if resp.status_code == 200:
             data = resp.json()
             models = data.get("models", [])
@@ -64,7 +64,7 @@ def list_lerobot_policies() -> list[dict[str, Any]]:
                 for m in models
                 if m.get("bundle_kind") == "action" and m.get("family") == "LeRobot"
             ]
-    except requests.RequestException:
+    except httpx.RequestError:
         pass
 
     return []
