@@ -220,6 +220,13 @@ def run_lerobot_policy_compare(config: CompareConfig) -> CompareResult:
                     frames_passed += 1
                 else:
                     frames_failed += 1
+                    if config.fail_fast:
+                        raise ActionParityError(
+                            f"Frame {frame_idx}: parity check failed "
+                            f"(cosine={cos:.6f} < {config.tolerance_cosine}, "
+                            f"max_mae={max_mae:.6f} > {config.tolerance_max_mae}, "
+                            f"mean_mae={mae:.6f} > {config.tolerance_mean_mae})"
+                        )
 
                 entry: dict[str, Any] = {
                     "frame_index": frame_idx,
@@ -255,8 +262,10 @@ def run_lerobot_policy_compare(config: CompareConfig) -> CompareResult:
 
             except ActionParityError as e:
                 frames_failed += 1
-                shape_mismatches += 1
-                comparison_errors += 1
+                if "shape" in str(e).lower():
+                    shape_mismatches += 1
+                else:
+                    comparison_errors += 1
                 _record_frame_failure(actions_file, frame_idx, ds_idx, "ActionParityError", str(e), stage)
                 trace.write("frame.failed", {"frame_index": frame_idx, "error": "ActionParityError"})
                 errors_list.append({"type": "ActionParityError", "message": str(e), "stage": stage,
@@ -368,8 +377,8 @@ def run_lerobot_policy_compare(config: CompareConfig) -> CompareResult:
 
         # Write manifest evaluation patch if passed.
         if ok:
-            patch_path = output_dir / "manifest-evaluation-patch.json"
-            patch = {
+            eval_patch_path = output_dir / "manifest-evaluation-patch.json"
+            eval_patch = {
                 "evaluation": {
                     "metric": "action_parity",
                     "status": "passed",
@@ -383,7 +392,7 @@ def run_lerobot_policy_compare(config: CompareConfig) -> CompareResult:
                     "proves_robot_safety": False,
                 }
             }
-            patch_path.write_text(json.dumps(patch, indent=2) + "\n")
+            eval_patch_path.write_text(json.dumps(eval_patch, indent=2) + "\n")
 
         trace.write("compare.completed", {"ok": ok})
         trace.close()

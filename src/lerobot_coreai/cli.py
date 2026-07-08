@@ -179,8 +179,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.4. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval.",
+        f"'{args.command}' is not implemented in v0.5. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval, compare.",
         file=sys.stderr,
     )
     return 1
@@ -642,9 +642,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(f"  frames passed:   {m.get('frames_passed', 0)}")
     print(f"  frames failed:   {m.get('frames_failed', 0)}")
     if m.get("min_cosine_similarity") is not None:
-        print(f"  min cosine:      {m['min_cosine_similarity']:.10f}")
-        print(f"  mean cosine:     {m['mean_cosine_similarity']:.10f}")
-        print(f"  max MAE:         {m['max_absolute_error']:.10f}")
+        print(f"  min cosine:      {m.get('min_cosine_similarity', 0):.10f}")
+        print(f"  mean cosine:     {m.get('mean_cosine_similarity', 0):.10f}")
+        print(f"  max MAE:         {m.get('max_absolute_error', 0):.10f}")
     print(f"  numeric fidelity: {'YES' if c.get('proves_numeric_action_fidelity') else 'NO'}")
     print(f"  No robot commands sent")
     print()

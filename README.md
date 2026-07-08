@@ -108,13 +108,14 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `predict` | v0.2 ✅ | Predict action from single observation |
 | `rollout --mode dry_run` | v0.3 ✅ | Fixture-based dry-run; no robot actuation |
 | `eval` | v0.4 ✅ | LeRobotDataset replay/eval; no robot actuation |
-| `compare | v0.5 ✅ | PyTorch vs CoreAI action parity
-| `export` | v0.5 planned | Fabric wrapper |
+| `compare` | v0.5 ✅ | PyTorch vs CoreAI action parity on LeRobotDataset |
+| `export` | v0.6 planned | Fabric wrapper |
 
 ## Safety model
 
-v0.4 implements fixture-based dry_run and LeRobotDataset eval.
-Both generate actions but never connect to a robot or send motor commands.
+v0.5 implements fixture-based dry_run, LeRobotDataset eval, and PyTorch-vs-CoreAI compare.
+All generate actions only. They never connect to a robot and never send motor commands.
+Numeric parity does not prove task success or physical robot safety.
 
 | Mode | Status | Behavior |
 |------|--------|----------|
@@ -123,13 +124,13 @@ Both generate actions but never connect to a robot or send motor commands.
 | `sim` | v0.6 planned | Simulation receives actions. |
 | `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-> v0.4 implements fixture-based dry_run and LeRobotDataset eval.
+> v0.5 implements dry_run, eval, and compare only.
 > shadow, sim, and real are future safety modes and are not executable yet.
-> No robot commands are sent by v0.4.
+> No robot commands are sent by v0.5.
 
 ## Version policy
 
-`lerobot-coreai` 0.4.x supports LeRobot `>=0.6.0,<0.7.0`.
+`lerobot-coreai` 0.5.x supports LeRobot `>=0.6.0,<0.7.0`.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
