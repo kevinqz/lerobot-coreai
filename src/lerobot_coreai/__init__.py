@@ -2,12 +2,27 @@
 #
 # Canonical sentence: Same LeRobot workflow. CoreAI runtime.
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .policy import CoreAIPolicy
 from .config import CoreAIRuntimeConfig, CoreAIPolicyConfig
 from .manifest import LeRobotCoreAIManifest, load_manifest
-from .errors import CoreAIPolicyError, ManifestError, VersionMismatchError
+from .runner import RunnerClient
+from .types import ActionPredictRequest, ActionPredictResponse, RunnerHealth, RunnerCapabilities
+from .errors import (
+    CoreAIPolicyError,
+    ManifestError,
+    VersionMismatchError,
+    RunnerError,
+    RunnerNotReachableError,
+    RunnerCapabilityError,
+    RunnerProtocolError,
+    RunnerRequestError,
+    RunnerExecutionError,
+    RunnerTimeoutError,
+    ObservationValidationError,
+    ActionValidationError,
+)
 
 __all__ = [
     "__version__",
@@ -16,7 +31,21 @@ __all__ = [
     "CoreAIPolicyConfig",
     "LeRobotCoreAIManifest",
     "load_manifest",
+    "RunnerClient",
+    "ActionPredictRequest",
+    "ActionPredictResponse",
+    "RunnerHealth",
+    "RunnerCapabilities",
     "CoreAIPolicyError",
     "ManifestError",
     "VersionMismatchError",
+    "RunnerError",
+    "RunnerNotReachableError",
+    "RunnerCapabilityError",
+    "RunnerProtocolError",
+    "RunnerRequestError",
+    "RunnerExecutionError",
+    "RunnerTimeoutError",
+    "ObservationValidationError",
+    "ActionValidationError",
 ]

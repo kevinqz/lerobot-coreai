@@ -63,10 +63,11 @@ class TestCoreAIPolicyFromManifest:
         p = self._make_policy(valid_manifest_dict)
         p.reset()  # should not raise
 
-    def test_policy_select_action_not_implemented(self, valid_manifest_dict):
-        """MVP v0.1: select_action is not available (requires runner, v0.2)."""
+    def test_policy_select_action_no_runner(self, valid_manifest_dict):
+        """v0.2: select_action raises RunnerNotReachableError when no runner is configured."""
+        from lerobot_coreai.errors import RunnerNotReachableError
         p = self._make_policy(valid_manifest_dict)
-        with pytest.raises(NotImplementedError, match="v0.2"):
+        with pytest.raises(RunnerNotReachableError):
             p.select_action({})
 
     def test_policy_manifest_accessor(self, valid_manifest_dict):

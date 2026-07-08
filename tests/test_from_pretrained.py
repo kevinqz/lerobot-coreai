@@ -32,14 +32,15 @@ class TestFromPretrained:
         )
         assert policy.config.runtime.runner_url == "http://mac-studio.local:8710"
 
-    def test_from_pretrained_select_action_raises(self, monkeypatch, valid_manifest_dict):
-        """select_action should raise NotImplementedError in v0.1."""
+    def test_from_pretrained_select_action_no_runner(self, monkeypatch, valid_manifest_dict):
+        """v0.2: select_action raises RunnerNotReachableError without a runner."""
+        from lerobot_coreai.errors import RunnerNotReachableError
         monkeypatch.setattr(
             "lerobot_coreai.policy.load_manifest",
             lambda repo_id, revision="main": LeRobotCoreAIManifest.from_dict(valid_manifest_dict),
         )
         policy = CoreAIPolicy.from_pretrained("kevinqz/EVO1-SO100-CoreAI")
-        with pytest.raises(NotImplementedError, match="v0.2"):
+        with pytest.raises(RunnerNotReachableError):
             policy.select_action({})
 
     def test_from_pretrained_manifest_accessor(self, monkeypatch, valid_manifest_dict):

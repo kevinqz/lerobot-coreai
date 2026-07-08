@@ -10,8 +10,8 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **v0.1 is metadata-only:** `inspect`, `doctor`, manifest validation, and policy metadata API.
-> Runtime inference (`select_action`, rollout) starts in v0.2.
+> **v0.2:** `select_action()` and `predict` command work with a running coreai-runner.
+> `inspect`, `doctor`, `list`, and metadata API also work without a runner.
 
 ---
 
@@ -71,18 +71,25 @@ Recommended next step: rollout --mode dry_run
 ```python
 from lerobot_coreai import CoreAIPolicy
 
-policy = CoreAIPolicy.from_pretrained("kevinqz/EVO1-SO100-CoreAI")
+# v0.2: metadata + action inference (requires running coreai-runner)
+policy = CoreAIPolicy.from_pretrained(
+    "kevinqz/EVO1-SO100-CoreAI",
+    runner_url="http://127.0.0.1:8710",
+)
 
-# v0.1: metadata-only — inspect the manifest without a runner
-print(policy.policy_type)       # "evo1"
-print(policy.robot_type)        # "so100"
-print(policy.config.observation_features)
-print(policy.config.action_features)
-print(policy.parity_passed)     # True if action parity verified
+batch = {
+    "observation.images.wrist": "/tmp/wrist.png",
+    "observation.state": [0.0, 0.1, 0.2, 0.0, 0.0, 0.0, 0.0],
+    "task": "pick up the cube",
+}
+
+result = policy.select_action(batch)
+action = result["action"]
 ```
 
-> **Note:** `select_action(batch)` is planned for v0.2, after coreai-runner action inference
-> is wired. In v0.1 it raises `NotImplementedError`. The metadata API above works now.
+> **Without a runner:** `from_pretrained(repo_id)` without `runner_url` loads metadata only.
+> `select_action()` will raise `RunnerNotReachableError`. Metadata access (policy_type,
+> robot_type, config, parity_passed) always works.
 
 ### Doctor — check compatibility
 
@@ -95,9 +102,10 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | Command | Status | Purpose |
 |---------|--------|---------|
 | `inspect` | v0.1 ✅ | Inspect a CoreAI-backed LeRobot policy |
-| `doctor` | v0.1 ✅ | Metadata compatibility checks |
-| `rollout` | v0.2 planned | CoreAI runner rollout |
-| `serve` | v0.2 planned | Runner lifecycle |
+| `doctor` | v0.1 ✅ | Metadata + runner compatibility checks |
+| `list` | v0.1 ✅ | List LeRobot policies from the catalog |
+| `predict` | v0.2 ✅ | Predict action from single observation |
+| `rollout` | v0.3 planned | Dry-run rollout with fixture |
 | `eval` | v0.3 planned | LeRobotDataset replay |
 | `compare` | v0.3 planned | PyTorch vs CoreAI |
 | `export` | v0.4 planned | Fabric wrapper |

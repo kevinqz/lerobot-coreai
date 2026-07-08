@@ -82,6 +82,7 @@ class LeRobotCoreAIManifest:
     # CoreAI
     artifact_format: str
     runner: str
+    coreai_model_id: str | None
     graphs: list[GraphSpec]
     host_loop_required: bool
     host_loop_type: str | None
@@ -164,6 +165,7 @@ class LeRobotCoreAIManifest:
             normalization_sha256=norm.get("sha256"),
             artifact_format=coreai["artifact_format"],
             runner=coreai["runner"],
+            coreai_model_id=coreai.get("model_id"),
             graphs=graphs,
             host_loop_required=coreai.get("host_loop_required", False),
             host_loop_type=host_loop.get("type") if host_loop else None,
@@ -203,6 +205,31 @@ class LeRobotCoreAIManifest:
     def lerobot_version_supported(self) -> str:
         """The LeRobot version this artifact was exported against."""
         return self.framework_version
+
+    @property
+    def model_id(self) -> str:
+        """The runner model id for this artifact.
+
+        Uses the explicit ``coreai.model_id`` from the manifest if present.
+        Otherwise derives a best-effort id from the repo_id:
+            kevinqz/EVO1-SO100-CoreAI → evo1-so100
+        """
+        if self.coreai_model_id:
+            return self.coreai_model_id
+        return derive_model_id(self.policy_repo_id)
+
+
+def derive_model_id(repo_id: str) -> str:
+    """Derive a runner model_id from an HF repo_id.
+
+    Example: kevinqz/EVO1-SO100-CoreAI → evo1-so100
+    """
+    return (
+        repo_id
+        .split("/")[-1]
+        .replace("-CoreAI", "")
+        .lower()
+    )
 
 
 def load_manifest(repo_id: str, *, revision: str = "main") -> LeRobotCoreAIManifest:

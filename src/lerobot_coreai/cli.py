@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="HF repo id of the CoreAI artifact")
     p_doctor.add_argument("--robot.type", dest="robot_type",
                           help="Robot type to check against policy metadata")
+    p_doctor.add_argument("--runner.url", dest="runner_url",
+                          help="coreai-runner URL to check (e.g. http://127.0.0.1:8710)")
+    p_doctor.add_argument("--require-runner", dest="require_runner", action="store_true",
+                          help="Exit non-zero if runner is not reachable")
     p_doctor.set_defaults(func=cmd_doctor)
 
     # --- list (spec §P3) — query the catalog for LeRobot policies ---
@@ -73,6 +77,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Filter by parity status (e.g. action_parity_passed)")
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
     p_list.set_defaults(func=cmd_list)
+
+    # --- predict (v0.2) — one observation in, one action out ---
+    p_predict = sub.add_parser("predict", help="Predict an action from a single observation (v0.2)")
+    p_predict.add_argument("--policy.path", dest="policy_path", required=True,
+                           help="HF repo id of the CoreAI artifact")
+    p_predict.add_argument("--observation", dest="observation", required=True,
+                           help="Path to observation fixture JSON")
+    p_predict.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock",
+                           help="coreai-runner URL (default: unix socket)")
+    p_predict.add_argument("--output", dest="output",
+                           help="Write action JSON to file (default: stdout)")
+    p_predict.add_argument("--json", action="store_true", help="Output as JSON")
+    p_predict.set_defaults(func=cmd_predict)
 
     # --- export (spec §12.3) — v0.4 ---
     p_export = sub.add_parser("export", help="Export a LeRobot policy to CoreAI (v0.4)")
@@ -210,8 +227,31 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # Default mode
         checks.append((True, f"Default mode: {manifest.default_mode}"))
 
-    # Runner check: not available in v0.1 (metadata-only)
-    checks.append((True, "coreai-runner check: skipped in v0.1 (metadata-only mode)"))
+    # Runner check (v0.2): if --runner.url provided, check health/capabilities.
+    runner_url = getattr(args, "runner_url", None)
+    require_runner = getattr(args, "require_runner", False)
+
+    if runner_url:
+        from .runner import RunnerClient
+        from .errors import RunnerError
+        try:
+            rc = RunnerClient(runner_url)
+            health = rc.health()
+            checks.append((True, f"coreai-runner reachable at {runner_url} (status: {health.status})"))
+            caps = rc.capabilities()
+            if caps.supports_action:
+                checks.append((True, "coreai-runner supports runtime_kind=action"))
+            else:
+                checks.append((False, "coreai-runner does NOT support runtime_kind=action"))
+            if caps.supports_host_loop:
+                checks.append((True, "coreai-runner supports host_loop"))
+            rc.close()
+        except RunnerError as e:
+            checks.append((False, f"coreai-runner check failed: {e}"))
+    elif require_runner:
+        checks.append((False, "coreai-runner not reachable (--require-runner set but no --runner.url)"))
+    else:
+        checks.append((True, "coreai-runner check: skipped (pass --runner.url to check)"))
 
     # Print results
     print("lerobot-coreai doctor")
@@ -263,5 +303,51 @@ def cmd_list(args: argparse.Namespace) -> int:
         robot = p.get("robot_type", "?")
         status = p.get("status", "?")
         print(f"{repo:<45s} {ptype:<12s} {robot:<10s} {status}")
+
+    return 0
+
+
+# MARK: - predict (v0.2 — one observation in, one action out)
+
+def cmd_predict(args: argparse.Namespace) -> int:
+    """Predict an action from a single observation fixture.
+
+    Loads the observation JSON, calls select_action via the runner, and prints the action.
+    Never connects to a physical robot.
+    """
+    import json
+    from pathlib import Path
+    from .policy import CoreAIPolicy
+    from .errors import CoreAIPolicyError
+
+    # Load observation fixture.
+    obs_path = Path(args.observation)
+    if not obs_path.is_file():
+        print(f"Error: observation fixture not found: {obs_path}", file=sys.stderr)
+        return 1
+    observation = json.loads(obs_path.read_text())
+
+    # Load policy with runner.
+    try:
+        policy = CoreAIPolicy.from_pretrained(
+            args.policy_path,
+            runner_url=args.runner_url,
+        )
+        result = policy.select_action(observation)
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    # Output action.
+    if args.output:
+        Path(args.output).write_text(json.dumps(result, indent=2) + "\n")
+        print(f"Action written to {args.output}")
+    elif args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        action = result["action"]
+        print(f"Action shape: [{len(action)}{''.join(f', {len(action[0])}' if action and isinstance(action[0], list) else '')}]")
+        print(f"Action: {json.dumps(action)}")
 
     return 0

@@ -1,11 +1,7 @@
 # policy.py — the LeRobot-compatible CoreAI policy wrapper (spec §10).
 #
-# This is the primary user-facing API:
-#
-#     from lerobot_coreai import CoreAIPolicy
-#     policy = CoreAIPolicy.from_pretrained("kevinqz/EVO1-SO100-CoreAI")
-#     out = policy.select_action(batch)
-#     action = out["action"]
+# v0.1: metadata loading only.
+# v0.2: select_action() with runner-backed action inference.
 #
 # No user-facing CoreAI graph names leak into the default Python API (spec §11.3).
 # CoreAIPolicy is inference-only — train with LeRobot.
@@ -15,8 +11,16 @@ from __future__ import annotations
 from typing import Any
 
 from .config import CoreAIRuntimeConfig, CoreAIPolicyConfig
-from .errors import CoreAIPolicyError, ManifestError, RunnerNotReachableError
+from .errors import (
+    CoreAIPolicyError,
+    ManifestError,
+    ObservationValidationError,
+    RunnerNotReachableError,
+)
 from .manifest import LeRobotCoreAIManifest, load_manifest
+from .runner import RunnerClient
+from .types import ActionPredictRequest
+from .validation import validate_action_output, validate_observation_batch
 
 
 class CoreAIPolicy:
@@ -26,8 +30,8 @@ class CoreAIPolicy:
     the same select_action(batch) interface as a LeRobot policy. Inference is routed
     through coreai-runner (the Swift binary that executes .aimodel graphs).
 
-    MVP v0.1: metadata loading only. select_action requires a reachable runner
-    (added in v0.2).
+    v0.2: select_action() works with a running coreai-runner. Metadata API still works
+    without a runner.
     """
 
     def __init__(
@@ -35,9 +39,17 @@ class CoreAIPolicy:
         manifest: LeRobotCoreAIManifest,
         *,
         runtime: CoreAIRuntimeConfig | None = None,
+        runner_client: RunnerClient | None = None,
+        validate_io: bool = True,
+        strict_observation_keys: bool = False,
+        return_metadata: bool = False,
     ):
         self._manifest = manifest
         self._runtime = runtime or CoreAIRuntimeConfig()
+        self._runner_client = runner_client
+        self._validate_io = validate_io
+        self._strict_observation_keys = strict_observation_keys
+        self._return_metadata = return_metadata
         self._config = CoreAIPolicyConfig(
             path=manifest.policy_repo_id,
             policy_type=manifest.policy_type,
@@ -52,7 +64,6 @@ class CoreAIPolicy:
             },
             runtime=self._runtime,
         )
-        self._runner_client: Any = None  # lazy-initialized in v0.2
 
     # MARK: - Loading
 
@@ -62,24 +73,33 @@ class CoreAIPolicy:
         repo_id: str,
         *,
         runner_url: str | None = None,
+        endpoint: str | None = None,
         download: str = "auto",
         trust_remote_code: bool = False,
         revision: str = "main",
+        validate_runner: bool = False,
+        validate_io: bool = True,
+        strict_observation_keys: bool = False,
+        return_metadata: bool = False,
         **kwargs: Any,
     ) -> "CoreAIPolicy":
         """Load a CoreAI-backed LeRobot policy from a Hugging Face artifact.
 
-        Downloads and validates ``lerobot-coreai.json`` from the repo. The runner is
-        not contacted at load time — use :meth:`select_action` or ``rollout`` to
-        drive inference through coreai-runner.
+        Downloads and validates ``lerobot-coreai.json`` from the repo. By default
+        (validate_runner=False) no runner connection is needed — metadata commands
+        work offline. select_action() will require a runner.
 
         Args:
             repo_id: HF repo id of the CoreAI artifact (e.g. 'kevinqz/EVO1-SO100-CoreAI').
             runner_url: Runner URL or Unix socket path. Defaults to the standard socket.
-            download: Download mode ('auto', 'never', 'force'). MVP v0.1 only fetches
-                the manifest, not the full artifact.
-            trust_remote_code: Unused (CoreAI policies are inference-only; no remote code).
+            endpoint: Remote runner endpoint (e.g. 'http://mac-studio.local:8710').
+            download: Download mode ('auto', 'never', 'force').
+            trust_remote_code: Unused (CoreAI policies are inference-only).
             revision: HF revision (default 'main').
+            validate_runner: If True, check runner health/capabilities at load time.
+            validate_io: If True, validate observation/action against manifest.
+            strict_observation_keys: If True, reject unknown observation keys.
+            return_metadata: If True, include metadata in select_action response.
 
         Returns:
             A CoreAIPolicy instance with metadata loaded.
@@ -91,22 +111,45 @@ class CoreAIPolicy:
         manifest = load_manifest(repo_id, revision=revision)
 
         runtime = CoreAIRuntimeConfig(
-            runner_url=runner_url or CoreAIRuntimeConfig.runner_url,
+            runner_url=runner_url or (endpoint or CoreAIRuntimeConfig.runner_url),
             download=download,  # type: ignore[arg-type]
         )
 
-        return cls(manifest, runtime=runtime)
+        # Create runner client if a URL is provided or validate_runner is True.
+        runner_client: RunnerClient | None = None
+        url = endpoint or runner_url
+        if url:
+            runner_client = RunnerClient(url, timeout_s=runtime.timeout_s)
+
+        policy = cls(
+            manifest,
+            runtime=runtime,
+            runner_client=runner_client,
+            validate_io=validate_io,
+            strict_observation_keys=strict_observation_keys,
+            return_metadata=return_metadata,
+        )
+
+        if validate_runner:
+            policy._ensure_runner()
+
+        return policy
 
     # MARK: - Inference
 
-    def select_action(self, batch: dict[str, Any]) -> dict[str, Any]:
+    def select_action(
+        self,
+        batch: dict[str, Any],
+        *,
+        return_metadata: bool | None = None,
+    ) -> dict[str, Any]:
         """Run the policy on a LeRobot-shaped batch and return an action.
 
         Input (spec §11.1)::
 
             batch = {
-                "observation.images.wrist": wrist_image,
-                "observation.state": state,
+                "observation.images.wrist": wrist_image_path,
+                "observation.state": [0.0, 0.1, 0.2, 0.0, 0.0, 0.0, 0.0],
                 "task": "pick up the cube",
             }
 
@@ -114,19 +157,63 @@ class CoreAIPolicy:
 
             {"action": action_chunk}
 
-        MVP v0.1: this raises NotImplementedError because runner integration
-        is added in v0.2. Metadata-only commands (inspect, doctor) are available now.
+        With return_metadata=True::
+
+            {"action": action_chunk, "metadata": {...}}
+
+        Guarantees:
+        - Returns a dict with "action" key on success.
+        - No physical robot actuation happens inside select_action().
+
+        Raises:
+            RunnerNotReachableError: If no runner client is configured or runner is down.
+            ObservationValidationError: If the batch doesn't match the manifest.
+            ActionValidationError: If the runner returns an invalid action.
         """
-        raise NotImplementedError(
-            "select_action requires coreai-runner integration (v0.2). "
-            "For metadata-only access, use 'lerobot-coreai inspect'."
+        self._ensure_runner()
+
+        # Validate observation against manifest.
+        if self._validate_io:
+            validate_observation_batch(
+                batch, self._manifest,
+                strict_observation_keys=self._strict_observation_keys,
+            )
+
+        # Build runner request.
+        request = ActionPredictRequest(
+            model_id=self._manifest.model_id,
+            observation=batch,
         )
+
+        # Call runner.
+        assert self._runner_client is not None  # _ensure_runner guarantees this
+        response = self._runner_client.predict_action(request)
+
+        # Validate action output.
+        if self._validate_io:
+            validate_action_output(response.action, self._manifest)
+
+        want_metadata = return_metadata if return_metadata is not None else self._return_metadata
+        if want_metadata:
+            return {
+                "action": response.action,
+                "metadata": {
+                    "runtime": "coreai",
+                    "model_id": self._manifest.model_id,
+                    "policy_type": self._manifest.policy_type,
+                    "robot_type": self._manifest.robot_type,
+                    "timing": response.timing,
+                },
+            }
+        return {"action": response.action}
 
     # MARK: - Lifecycle
 
     def reset(self) -> None:
-        """Reset the policy's internal state (e.g. KV cache, action queue)."""
-        # MVP v0.1: no-op. v0.2 will reset the runner session.
+        """Reset the policy's internal state (e.g. KV cache, action queue).
+
+        v0.2: local no-op unless the runner exposes session reset.
+        """
         pass
 
     def eval(self) -> "CoreAIPolicy":
@@ -151,6 +238,22 @@ class CoreAIPolicy:
         if device not in {"coreai", "auto"}:
             raise ValueError("CoreAIPolicy only supports device='coreai' or 'auto'.")
         return self
+
+    # MARK: - Runner management
+
+    def _ensure_runner(self) -> None:
+        """Ensure a runner client exists and is reachable. Raises if not."""
+        if self._runner_client is None:
+            raise RunnerNotReachableError(
+                "No coreai-runner configured. Pass runner_url to from_pretrained() "
+                "or construct a RunnerClient directly.\n"
+                "No robot commands were sent."
+            )
+
+    @property
+    def runner(self) -> RunnerClient | None:
+        """The runner client, or None if not configured."""
+        return self._runner_client
 
     # MARK: - Accessors
 

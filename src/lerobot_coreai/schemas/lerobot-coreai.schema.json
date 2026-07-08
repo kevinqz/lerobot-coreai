@@ -185,6 +185,10 @@
           "const": "coreai-runner",
           "description": "Runner that executes this artifact."
         },
+        "model_id": {
+          "type": "string",
+          "description": "Local runner model id used when loading/executing this artifact (e.g. 'evo1-so100'). If absent, derived from the repo_id."
+        },
         "graphs": {
           "type": "array",
           "description": "Runtime graphs in the artifact with their roles.",

@@ -1,0 +1,5 @@
+{
+  "observation.images.wrist": "examples/assets/wrist_placeholder.png",
+  "observation.state": [0.0, 0.1, 0.2, 0.0, 0.0, 0.0, 0.0],
+  "task": "pick up the cube"
+}
