@@ -37,5 +37,5 @@ Every eval run writes `eval_report.json` to the output directory.
 |------|-------------|
 | `eval_report.json` | Structured report with metrics and safety invariants |
 | `actions.jsonl` | Per-frame action records (one JSON object per line) |
-| `eval_trace.jsonl` | Event trace (rollout.started, frame.started, etc.) |
+| `eval_trace.jsonl` | Event trace (eval.started, frame.started, etc.) |
 | `frames/` | Saved observation images (when dataset items contain tensors) |

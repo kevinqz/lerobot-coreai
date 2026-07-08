@@ -101,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("--output.repo_id", dest="output_repo_id", required=True)
     p_export.set_defaults(func=cmd_not_implemented)
 
-    # --- eval (spec §12.4) — v0.3 ---
+    # --- eval (spec §12.4) — v0.4 ---
     # --- eval (spec §12.4) — v0.4 ---
     p_eval = sub.add_parser("eval", help="Evaluate a CoreAI policy on a LeRobotDataset (v0.4)")
     p_eval.add_argument("--policy.path", dest="policy_path", required=True)
@@ -142,14 +142,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_rollout.set_defaults(func=cmd_rollout)
 
     # --- compare (spec §12.7) — v0.3 ---
-    p_compare = sub.add_parser("compare", help="Compare PyTorch policy vs CoreAI artifact (v0.3)")
+    p_compare = sub.add_parser("compare", help="Compare PyTorch policy vs CoreAI artifact (v0.5 planned)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path")
     p_compare.add_argument("--coreai.policy.path", dest="coreai_policy_path")
     p_compare.add_argument("--dataset.repo_id", dest="dataset_repo_id")
     p_compare.set_defaults(func=cmd_not_implemented)
 
     # --- serve (spec §12, serve) — v0.2 ---
-    p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (v0.3 planned)")
+    p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser

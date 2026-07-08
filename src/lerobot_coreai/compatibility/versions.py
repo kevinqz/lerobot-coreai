@@ -1,6 +1,6 @@
 # versions.py — LeRobot version compatibility checks (spec §26).
 #
-# lerobot-coreai 0.1.x supports LeRobot 0.6.x public APIs. If the installed LeRobot version
+# lerobot-coreai 0.4.x supports LeRobot 0.6.x public APIs. If the installed LeRobot version
 # is outside the supported range, we warn clearly and allow metadata-only commands, but block
 # rollout/eval unless --allow-unsupported-lerobot is passed.
 

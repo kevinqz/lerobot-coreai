@@ -159,3 +159,51 @@ class TestEvalFailures:
             )
             with pytest.raises(ObservationValidationError):
                 run_lerobot_dataset_eval(config)
+
+
+class FakeTensor:
+    """Simulates a torch.Tensor for serialization testing."""
+    def __init__(self, data):
+        self._data = data
+    def detach(self):
+        return self
+    def cpu(self):
+        return self
+    def tolist(self):
+        return self._data
+
+
+class TestEvalSerialization:
+    def test_eval_serializes_tensor_state_before_predict(self, tmp_path, valid_manifest_dict):
+        """Integration test: eval must serialize tensors to lists before calling predict_action."""
+        from lerobot_coreai.manifest import LeRobotCoreAIManifest
+
+        # Mock dataset returns FakeTensor for observation.state.
+        mock_ds = MagicMock()
+        mock_ds.__len__ = MagicMock(return_value=5)
+        mock_ds.__getitem__ = MagicMock(side_effect=lambda idx: {
+            "observation.images.wrist": f"/tmp/img_{idx}.png",
+            "observation.state": FakeTensor([float(idx)] * 7),  # tensor-like
+            "task": "pick up the cube",
+        })
+
+        mock_policy = MagicMock()
+        mock_policy.predict_action.return_value = {"action": [[0.0]*7]*16, "metadata": {}}
+        mock_policy.manifest = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+        mock_policy.policy_type = "evo1"
+        mock_policy.robot_type = "so100"
+        mock_policy.parity_passed = True
+
+        with patch("lerobot_coreai.eval.load_lerobot_dataset", return_value=mock_ds), \
+             patch("lerobot_coreai.eval.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = EvalConfig(
+                policy_path="test", dataset_repo_id="test",
+                runner_url="http://x", output_dir=tmp_path / "e",
+                max_frames=1,
+            )
+            run_lerobot_dataset_eval(config)
+
+        # Verify predict_action received a serialized list, not a FakeTensor.
+        called_batch = mock_policy.predict_action.call_args.args[0]
+        assert called_batch["observation.state"] == [0.0] * 7
+        assert not isinstance(called_batch["observation.state"], FakeTensor)
