@@ -21,7 +21,7 @@ class TestSuccessReport:
             runner_timing={}, parity_passed=True, fixture_source="f.json",
             observation_keys=[], action=[[0.0]*7]*16, files={},
         )
-        assert r["lerobot_coreai_version"] == "0.5.0"
+        assert r["lerobot_coreai_version"] == "0.6.0"
 
     def test_report_actions_sent_zero(self):
         r = build_success_report(

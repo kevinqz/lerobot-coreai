@@ -23,7 +23,8 @@ class TestCLIParser:
             cli.main(["inspect"])
 
     def test_not_implemented_command(self, capsys):
-        rc = cli.main(["export", "--policy.path", "x", "--output.repo_id", "y"])
+        # serve is still not implemented in v0.6
+        rc = cli.main(["serve"])
         assert rc == 1
         captured = capsys.readouterr()
         assert "not implemented" in captured.err

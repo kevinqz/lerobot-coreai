@@ -20,6 +20,7 @@ from .manifest import load_manifest
 from .rollout import DryRunRolloutConfig, run_dry_run_rollout
 from .eval import EvalConfig, run_lerobot_dataset_eval
 from .compare import CompareConfig, run_lerobot_policy_compare
+from .export import ExportConfig, run_coreai_export_pipeline
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,10 +98,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.set_defaults(func=cmd_predict)
 
     # --- export (spec §12.3) — v0.4 ---
-    p_export = sub.add_parser("export", help="Export a LeRobot policy to CoreAI (v0.4)")
-    p_export.add_argument("--policy.path", dest="policy_path", required=True)
-    p_export.add_argument("--output.repo_id", dest="output_repo_id", required=True)
-    p_export.set_defaults(func=cmd_not_implemented)
+    # --- export (spec §12.3) — v0.6 ---
+    p_export = sub.add_parser("export", help="Export/verify/package a LeRobot policy as CoreAI artifact (v0.6)")
+    p_export.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
+    p_export.add_argument("--policy.type", dest="policy_type")
+    p_export.add_argument("--robot.type", dest="robot_type")
+    p_export.add_argument("--dataset.repo_id", dest="dataset_repo_id")
+    p_export.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock")
+    p_export.add_argument("--output-dir", dest="output_dir", required=True)
+    p_export.add_argument("--model-id", dest="model_id")
+    p_export.add_argument("--output.repo_id", dest="output_repo_id")
+    p_export.add_argument("--artifact-name", dest="artifact_name")
+    p_export.add_argument("--fabric.config", dest="fabric_config")
+    p_export.add_argument("--fabric.profile", dest="fabric_profile")
+    p_export.add_argument("--fabric.target", dest="fabric_target", default="coreai")
+    p_export.add_argument("--skip-fabric", action="store_true")
+    p_export.add_argument("--existing-artifact", dest="existing_artifact")
+    p_export.add_argument("--verify-runner", action="store_true")
+    p_export.add_argument("--dry-run-fixture", dest="dry_run_fixture")
+    p_export.add_argument("--eval-max-frames", dest="eval_max_frames", type=int, default=0)
+    p_export.add_argument("--compare-max-frames", dest="compare_max_frames", type=int, default=0)
+    p_export.add_argument("--compare-tolerance.cosine", dest="compare_tolerance_cosine", type=float, default=0.999)
+    p_export.add_argument("--compare-tolerance.max-mae", dest="compare_tolerance_max_mae", type=float, default=1e-4)
+    p_export.add_argument("--compare-tolerance.mean-mae", dest="compare_tolerance_mean_mae", type=float, default=1e-5)
+    p_export.add_argument("--publish-ready", action="store_true")
+    p_export.add_argument("--overwrite", action="store_true")
+    p_export.add_argument("--fail-fast", action="store_true")
+    p_export.add_argument("--json", action="store_true")
+    p_export.set_defaults(func=cmd_export)
 
     # --- eval (spec §12.4) — v0.4 ---
     # --- eval (spec §12.4) — v0.4 ---
@@ -179,8 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.5. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval, compare.",
+        f"'{args.command}' is not implemented in v0.6. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -657,5 +682,97 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print("Numeric action parity PROVEN on {} frames.".format(m.get('frames_compared', 0)))
     else:
         print("Numeric action parity NOT proven.")
+
+    return 0 if result.ok else 1
+
+
+# MARK: - export (v0.6 — export/verify/package pipeline)
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Export/verify/package a LeRobot policy as a CoreAI artifact."""
+    from .errors import CoreAIPolicyError
+
+    config = ExportConfig(
+        torch_policy_path=args.torch_policy_path,
+        output_dir=Path(args.output_dir),
+        policy_type=args.policy_type,
+        robot_type=args.robot_type,
+        dataset_repo_id=args.dataset_repo_id,
+        runner_url=args.runner_url,
+        model_id=args.model_id,
+        output_repo_id=args.output_repo_id,
+        artifact_name=args.artifact_name,
+        fabric_config=Path(args.fabric_config) if args.fabric_config else None,
+        fabric_profile=args.fabric_profile,
+        fabric_target=args.fabric_target,
+        skip_fabric=args.skip_fabric,
+        existing_artifact=Path(args.existing_artifact) if args.existing_artifact else None,
+        verify_runner=args.verify_runner,
+        dry_run_fixture=Path(args.dry_run_fixture) if args.dry_run_fixture else None,
+        eval_max_frames=args.eval_max_frames,
+        compare_max_frames=args.compare_max_frames,
+        compare_tolerance_cosine=args.compare_tolerance_cosine,
+        compare_tolerance_max_mae=args.compare_tolerance_max_mae,
+        compare_tolerance_mean_mae=args.compare_tolerance_mean_mae,
+        publish_ready=args.publish_ready,
+        overwrite=args.overwrite,
+        fail_fast=args.fail_fast,
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai export")
+        print("=" * 50)
+        print(f"Source policy: {args.torch_policy_path}")
+        print(f"Output dir:    {args.output_dir}")
+        print(f"Fabric:        {'skipped' if args.skip_fabric else 'enabled'}")
+        print(f"Runner verify: {'yes' if args.verify_runner else 'no'}")
+        print(f"Dry-run:       {'yes' if args.dry_run_fixture else 'no'}")
+        print(f"Eval:          {args.eval_max_frames} frames" if args.eval_max_frames > 0 else "Eval:          skipped")
+        print(f"Compare:       {args.compare_max_frames} frames" if args.compare_max_frames > 0 else "Compare:       skipped")
+
+    try:
+        result = run_coreai_export_pipeline(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Export failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0 if result.ok else 1
+
+    v = result.report.get("verification", {})
+    c = result.report.get("claims", {})
+    print()
+    if result.artifact_path:
+        print(f"✓ Artifact exported")
+    print(f"✓ Manifest valid: {v.get('manifest_valid', False)}")
+    if v.get("runner_checked"):
+        print(f"✓ Runner supports action: {v.get('runner_ok', False)}")
+    if v.get("dry_run", {}).get("ran"):
+        print(f"✓ Dry-run: {'passed' if v['dry_run'].get('ok') else 'failed'}")
+    if v.get("eval", {}).get("ran"):
+        print(f"✓ Eval: {'passed' if v['eval'].get('ok') else 'failed'}")
+    if v.get("compare", {}).get("ran"):
+        print(f"✓ Compare: {'passed' if v['compare'].get('ok') else 'failed'}")
+    if c.get("publish_ready"):
+        print(f"✓ Publish folder ready")
+    print(f"✓ No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  report: {result.report_path}")
+    print(f"  trace:  {result.trace_path}")
+    if result.manifest_path:
+        print(f"  manifest: {result.manifest_path}")
+    print("=" * 50)
+    if c.get("proves_numeric_action_fidelity"):
+        print("Numeric action fidelity PROVEN.")
+    else:
+        print("Export completed. Numeric fidelity not proven (no compare or compare failed).")
 
     return 0 if result.ok else 1
