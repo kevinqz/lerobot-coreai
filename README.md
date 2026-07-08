@@ -10,6 +10,9 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
+> **v0.1 is metadata-only:** `inspect`, `doctor`, manifest validation, and policy metadata API.
+> Runtime inference (`select_action`, rollout) starts in v0.2.
+
 ---
 
 ## What this is
