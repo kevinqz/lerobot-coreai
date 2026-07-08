@@ -118,14 +118,14 @@ v0.3 implements fixture-based dry_run only.
 
 | Mode | Status | Behavior |
 |------|--------|----------|
-| `dry_run` | v0.3 planned | No physical robot. Fixture-based action generation. |
+| `dry_run` | v0.3 ✅ | No physical robot. Fixture-based action generation. |
 | `shadow` | v0.6 planned | Robot/cameras live, actions logged, no motor commands. |
 | `sim` | v0.6 planned | Simulation receives actions. |
 | `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-> v0.2 does not implement physical robot actuation.
-> `real`, `shadow`, and `sim` are future safety modes and are not executable yet.
-> No robot commands are sent by v0.2.
+> v0.3 implements fixture-based dry_run only.
+> shadow, sim, and real are future safety modes and are not executable yet.
+> No robot commands are sent by v0.3.
 
 ## Version policy
 

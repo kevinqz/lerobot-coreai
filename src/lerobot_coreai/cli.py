@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import __version__
@@ -16,6 +17,7 @@ from .catalog import list_lerobot_policies
 from .compatibility.versions import check_lerobot_compatibility, get_installed_lerobot_version
 from .errors import CoreAIPolicyError, DownloadError, ManifestError
 from .manifest import load_manifest
+from .rollout import DryRunRolloutConfig, run_dry_run_rollout
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--output", dest="output",
                            help="Write action JSON to file (default: stdout)")
     p_predict.add_argument("--json", action="store_true", help="Output as JSON")
+    p_predict.add_argument("--metadata", action="store_true", help="Include metadata in output")
     p_predict.set_defaults(func=cmd_predict)
 
     # --- export (spec §12.3) — v0.4 ---
@@ -136,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.2. "
-        f"Available commands: inspect, doctor, list, predict.",
+        f"'{args.command}' is not implemented in v0.3. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run.",
         file=sys.stderr,
     )
     return 1
@@ -344,20 +347,17 @@ def cmd_predict(args: argparse.Namespace) -> int:
     from .policy import CoreAIPolicy
     from .errors import CoreAIPolicyError
 
-    # Load observation fixture.
-    obs_path = Path(args.observation)
-    if not obs_path.is_file():
-        print(f"Error: observation fixture not found: {obs_path}", file=sys.stderr)
-        return 1
-    observation = json.loads(obs_path.read_text())
+    # Load observation fixture (supports flat + typed formats with path resolution).
+    from .fixtures import load_observation_fixture
 
     # Load policy with runner.
     try:
+        observation = load_observation_fixture(args.observation)
         policy = CoreAIPolicy.from_pretrained(
             args.policy_path,
             runner_url=args.runner_url,
         )
-        result = policy.predict_action(observation, return_metadata=False)
+        result = policy.predict_action(observation, return_metadata=args.metadata)
     except CoreAIPolicyError as e:
         print(f"Error: {e}", file=sys.stderr)
         print("No robot commands were sent.", file=sys.stderr)
@@ -396,8 +396,6 @@ def cmd_rollout(args: argparse.Namespace) -> int:
     if mode == "dry_run" and not args.fixture:
         print("Error: --fixture is required for dry_run mode.", file=sys.stderr)
         return 1
-
-    from .rollout import DryRunRolloutConfig, run_dry_run_rollout
 
     output_dir = args.output_dir or f"runs/{args.policy_path.split('/')[-1]}-dry-run"
 

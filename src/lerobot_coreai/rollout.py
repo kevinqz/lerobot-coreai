@@ -12,6 +12,7 @@ from typing import Any
 
 from .errors import CoreAIPolicyError
 from .fixtures import load_observation_fixture
+from .policy import CoreAIPolicy
 from .reports import build_failure_report, build_success_report, save_json
 from .safety import ensure_mode_supported_for_v03
 from .trace import TraceWriter
@@ -57,8 +58,6 @@ def run_dry_run_rollout(config: DryRunRolloutConfig) -> DryRunRolloutResult:
 
     Never sends robot commands.
     """
-    from .policy import CoreAIPolicy
-
     output_dir = Path(config.output_dir)
     action_path = output_dir / "action.json"
     observation_path = output_dir / "observation.json"
@@ -79,8 +78,10 @@ def run_dry_run_rollout(config: DryRunRolloutConfig) -> DryRunRolloutResult:
     trace = TraceWriter(trace_path)
     trace.write("rollout.started", {"mode": "dry_run", "policy": config.policy_path})
 
+    stage = "init"
     try:
         # Load policy.
+        stage = "policy.load"
         trace.write("policy.loading")
         policy = CoreAIPolicy.from_pretrained(
             config.policy_path,
@@ -97,23 +98,28 @@ def run_dry_run_rollout(config: DryRunRolloutConfig) -> DryRunRolloutResult:
         trace.write("runner.checked")
 
         # Validate robot type.
+        stage = "robot_type.validation"
         validate_robot_type(config.robot_type, policy.manifest)
         trace.write("robot_type.validated", {"requested": config.robot_type})
 
         # Load fixture.
+        stage = "fixture.load"
         observation = load_observation_fixture(config.fixture_path)
         trace.write("observation.loaded", {"source": str(config.fixture_path), "keys": list(observation.keys())})
 
         # Save observation.
+        stage = "observation.save"
         save_json(observation_path, observation)
 
         # Predict action.
+        stage = "runner.predict"
         result = policy.predict_action(observation, return_metadata=True)
         action = result["action"]
         metadata = result.get("metadata", {})
         trace.write("action.generated", {"shape": _safe_shape(action)})
 
         # Save action.
+        stage = "action.save"
         save_json(action_path, result)
 
         # Build success report.
@@ -138,6 +144,7 @@ def run_dry_run_rollout(config: DryRunRolloutConfig) -> DryRunRolloutResult:
             files=files,
         )
         save_json(report_path, report)
+        stage = "report.write"
         trace.write("files.written", {"files": list(files.keys())})
         trace.write("rollout.completed", {"ok": True})
 
@@ -155,7 +162,6 @@ def run_dry_run_rollout(config: DryRunRolloutConfig) -> DryRunRolloutResult:
         # Build failure report.
         error_type = type(e).__name__
         error_msg = str(e)
-        stage = "unknown"
 
         # Try to save failure report.
         try:
