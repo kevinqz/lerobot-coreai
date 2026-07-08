@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.set_defaults(func=cmd_not_implemented)
 
     # --- rollout (spec §12.5) — v0.2+ ---
-    p_rollout = sub.add_parser("rollout", help="Run policy rollout with runtime=coreai (v0.2)")
+    p_rollout = sub.add_parser("rollout", help="Run policy rollout with runtime=coreai (v0.3 planned)")
     p_rollout.add_argument("--policy.path", dest="policy_path", required=True)
     p_rollout.add_argument("--robot.type", dest="robot_type")
     p_rollout.add_argument("--mode", choices=["dry_run", "shadow", "sim", "real"], default="dry_run")
@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare.set_defaults(func=cmd_not_implemented)
 
     # --- serve (spec §12, serve) — v0.2 ---
-    p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (v0.2)")
+    p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (v0.3 planned)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
@@ -127,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.1 (metadata-only). "
-        f"Available commands: inspect, doctor.",
+        f"'{args.command}' is not implemented in v0.2. "
+        f"Available commands: inspect, doctor, list, predict.",
         file=sys.stderr,
     )
     return 1
@@ -249,7 +249,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         except RunnerError as e:
             checks.append((False, f"coreai-runner check failed: {e}"))
     elif require_runner:
-        checks.append((False, "coreai-runner not reachable (--require-runner set but no --runner.url)"))
+        # --require-runner without --runner.url: check the default socket.
+        from .runner import RunnerClient
+        from .errors import RunnerError
+        default_url = "unix:///tmp/coreai-runner.sock"
+        try:
+            rc = RunnerClient(default_url)
+            rc.health()
+            checks.append((True, f"coreai-runner reachable at {default_url} (default)"))
+            rc.close()
+        except RunnerError as e:
+            checks.append((False, f"coreai-runner not reachable at {default_url}: {e}"))
     else:
         checks.append((True, "coreai-runner check: skipped (pass --runner.url to check)"))
 

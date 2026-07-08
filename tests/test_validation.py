@@ -102,6 +102,12 @@ class TestActionValidation:
         with pytest.raises(ActionValidationError, match="Inf"):
             validate_action_output(action, manifest)
 
+    def test_ragged_action_fails(self, manifest):
+        """Action with inconsistent row lengths should fail."""
+        action = [[0.0] * 7] + [[0.0] * 6 for _ in range(15)]  # first row 7, rest 6
+        with pytest.raises(ActionValidationError, match="ragged"):
+            validate_action_output(action, manifest)
+
 
 class TestRobotTypeValidation:
     def test_matching_robot_type_passes(self, manifest):

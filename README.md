@@ -112,29 +112,25 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 
 ## Safety model
 
-Rollout modes enforce safety through the workflow, not scary new concepts:
+v0.2 does not implement physical robot actuation. `select_action()` generates
+actions but never sends motor commands.
 
-| Mode | Behavior |
-|------|----------|
-| `dry_run` | No physical robot required. No motor commands. |
-| `shadow` | Robot/cameras may be live. Actions generated and logged. No motor commands. |
-| `sim` | Simulation receives actions. No physical robot. |
-| `real` | Physical robot receives actions. **Requires explicit confirmation.** |
+Rollout modes are documented as future safety modes:
 
-```bash
-# Real mode requires the confirmation flag
-lerobot-coreai rollout \
-  --policy.path kevinqz/ACT-SO101-CoreAI \
-  --robot.type so101 \
-  --mode real \
-  --confirm-real-robot-actuation
-```
+| Mode | Status | Behavior |
+|------|--------|----------|
+| `dry_run` | v0.3 planned | No physical robot. Fixture-based action generation. |
+| `shadow` | v0.6 planned | Robot/cameras live, actions logged, no motor commands. |
+| `sim` | v0.6 planned | Simulation receives actions. |
+| `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-No flag, no actuation.
+> v0.2 does not implement physical robot actuation.
+> `real`, `shadow`, and `sim` are future safety modes and are not executable yet.
+> No robot commands are sent by v0.2.
 
 ## Version policy
 
-`lerobot-coreai` 0.1.x supports LeRobot 0.6.x public APIs. If the LeRobot version is unsupported, `lerobot-coreai` warns clearly, allows metadata-only commands, and blocks rollout/eval unless `--allow-unsupported-lerobot` is passed.
+`lerobot-coreai` 0.2.x supports LeRobot 0.6.x public APIs. If the LeRobot version is unsupported, `lerobot-coreai` warns clearly, allows metadata-only commands, and blocks rollout/eval unless `--allow-unsupported-lerobot` is passed.
 
 ## Ecosystem
 

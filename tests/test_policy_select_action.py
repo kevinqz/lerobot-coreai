@@ -112,3 +112,45 @@ class TestSelectActionWithMockedRunner:
         call_args = mock_runner.predict_action.call_args[0][0]
         # model_id should be derived from repo_id: kevinqz/EVO1-SO100-CoreAI -> evo1-so100
         assert call_args.model_id == "evo1-so100"
+
+
+class TestValidateRunner:
+    def test_validate_runner_calls_health_and_capabilities(self, monkeypatch, valid_manifest_dict):
+        """from_pretrained(validate_runner=True) should call health() and supports_action()."""
+        from lerobot_coreai.manifest import LeRobotCoreAIManifest
+        from lerobot_coreai.types import RunnerHealth, RunnerCapabilities
+
+        manifest = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+        mock_runner = MagicMock()
+        mock_runner.health.return_value = RunnerHealth(status="healthy")
+        mock_runner.capabilities.return_value = RunnerCapabilities(supports_action=True)
+
+        with patch("lerobot_coreai.policy.load_manifest", return_value=manifest), \
+             patch("lerobot_coreai.policy.RunnerClient", return_value=mock_runner):
+            policy = CoreAIPolicy.from_pretrained(
+                "kevinqz/EVO1-SO100-CoreAI",
+                runner_url="http://localhost:8710",
+                validate_runner=True,
+            )
+
+        mock_runner.health.assert_called_once()
+        mock_runner.supports_action.assert_called_once()
+
+    def test_validate_runner_uses_default_url(self, monkeypatch, valid_manifest_dict):
+        """validate_runner=True without explicit URL should use the default runtime URL."""
+        from lerobot_coreai.manifest import LeRobotCoreAIManifest
+        from lerobot_coreai.types import RunnerHealth, RunnerCapabilities
+
+        manifest = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+        mock_runner = MagicMock()
+        mock_runner.health.return_value = RunnerHealth(status="healthy")
+        mock_runner.capabilities.return_value = RunnerCapabilities(supports_action=True)
+
+        with patch("lerobot_coreai.policy.load_manifest", return_value=manifest), \
+             patch("lerobot_coreai.policy.RunnerClient", return_value=mock_runner) as mock_rc:
+            policy = CoreAIPolicy.from_pretrained(
+                "kevinqz/EVO1-SO100-CoreAI",
+                validate_runner=True,
+            )
+        # RunnerClient should have been created with the default URL
+        mock_rc.assert_called_once()

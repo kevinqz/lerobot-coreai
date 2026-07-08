@@ -134,13 +134,13 @@ class RunnerClient:
     def _get(self, path: str) -> httpx.Response:
         try:
             resp = self._client.get(path)
-        except httpx.ConnectError as e:
-            raise RunnerNotReachableError(
-                f"coreai-runner not reachable at {self.runner_url}: {e}"
-            ) from e
         except httpx.TimeoutException as e:
             raise RunnerTimeoutError(
                 f"coreai-runner timed out after {self.timeout_s}s: {e}"
+            ) from e
+        except (httpx.ConnectError, httpx.TransportError) as e:
+            raise RunnerNotReachableError(
+                f"coreai-runner not reachable at {self.runner_url}: {e}"
             ) from e
         self._check_status(resp)
         return resp
@@ -148,13 +148,13 @@ class RunnerClient:
     def _post(self, path: str, json_body: dict[str, Any]) -> httpx.Response:
         try:
             resp = self._client.post(path, json=json_body)
-        except httpx.ConnectError as e:
-            raise RunnerNotReachableError(
-                f"coreai-runner not reachable at {self.runner_url}: {e}"
-            ) from e
         except httpx.TimeoutException as e:
             raise RunnerTimeoutError(
                 f"coreai-runner timed out after {self.timeout_s}s: {e}"
+            ) from e
+        except (httpx.ConnectError, httpx.TransportError) as e:
+            raise RunnerNotReachableError(
+                f"coreai-runner not reachable at {self.runner_url}: {e}"
             ) from e
         self._check_status(resp)
         return resp

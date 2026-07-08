@@ -118,6 +118,9 @@ class CoreAIPolicy:
         # Create runner client if a URL is provided or validate_runner is True.
         runner_client: RunnerClient | None = None
         url = endpoint or runner_url
+        if not url and validate_runner:
+            # validate_runner=True without explicit URL: use the default runtime URL.
+            url = runtime.runner_url
         if url:
             runner_client = RunnerClient(url, timeout_s=runtime.timeout_s)
 
@@ -131,7 +134,7 @@ class CoreAIPolicy:
         )
 
         if validate_runner:
-            policy._ensure_runner()
+            policy._validate_runner()
 
         return policy
 
@@ -249,6 +252,16 @@ class CoreAIPolicy:
                 "or construct a RunnerClient directly.\n"
                 "No robot commands were sent."
             )
+
+    def _validate_runner(self) -> None:
+        """Validate that the runner is alive and supports action inference.
+
+        Calls health() and supports_action(). Raises on any failure.
+        """
+        self._ensure_runner()
+        assert self._runner_client is not None
+        self._runner_client.health()
+        self._runner_client.supports_action()
 
     @property
     def runner(self) -> RunnerClient | None:

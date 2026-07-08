@@ -98,7 +98,11 @@ def validate_action_output(
     if action_spec and action_spec.shape:
         expected = action_spec.shape  # e.g. [16, 7]
         actual = _get_nested_shape(action)
-        if actual is not None and actual != list(expected):
+        if actual is None:
+            raise ActionValidationError(
+                f"Action has invalid or ragged shape (expected {expected})"
+            )
+        if actual != list(expected):
             raise ActionValidationError(
                 f"Action shape mismatch: expected {expected}, got {actual}"
             )
@@ -142,15 +146,25 @@ def _format_expected(manifest: LeRobotCoreAIManifest) -> str:
 
 
 def _get_shape(value: Any) -> list[int] | None:
-    """Get the shape of a list or nested list. Returns None for scalars/strings."""
+    """Get the shape of a list or nested list. Returns None for scalars/strings.
+
+    Detects ragged arrays (sublists of different lengths) and returns None to
+    signal an invalid shape — the caller should treat None from a non-scalar
+    as a validation failure.
+    """
     if isinstance(value, str):
         return None
     if isinstance(value, (list, tuple)):
         if len(value) == 0:
             return [0]
-        inner = _get_shape(value[0])
-        if inner is not None:
-            return [len(value)] + inner
+        child_shapes = [_get_shape(v) for v in value]
+        first = child_shapes[0]
+        # If any child shape differs from the first, it's ragged — return None
+        # so the caller's shape check fails.
+        if any(s != first for s in child_shapes):
+            return None
+        if first is not None:
+            return [len(value)] + first
         return [len(value)]
     return None
 
