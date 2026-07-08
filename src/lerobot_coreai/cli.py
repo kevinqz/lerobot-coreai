@@ -18,6 +18,7 @@ from .compatibility.versions import check_lerobot_compatibility, get_installed_l
 from .errors import CoreAIPolicyError, DownloadError, ManifestError
 from .manifest import load_manifest
 from .rollout import DryRunRolloutConfig, run_dry_run_rollout
+from .eval import EvalConfig, run_lerobot_dataset_eval
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,10 +102,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.set_defaults(func=cmd_not_implemented)
 
     # --- eval (spec §12.4) — v0.3 ---
-    p_eval = sub.add_parser("eval", help="Evaluate a CoreAI policy on a LeRobotDataset (v0.3)")
+    # --- eval (spec §12.4) — v0.4 ---
+    p_eval = sub.add_parser("eval", help="Evaluate a CoreAI policy on a LeRobotDataset (v0.4)")
     p_eval.add_argument("--policy.path", dest="policy_path", required=True)
     p_eval.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
-    p_eval.set_defaults(func=cmd_not_implemented)
+    p_eval.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock")
+    p_eval.add_argument("--robot.type", dest="robot_type")
+    p_eval.add_argument("--max-frames", dest="max_frames", type=int, default=32)
+    p_eval.add_argument("--start-index", dest="start_index", type=int, default=0)
+    p_eval.add_argument("--stride", dest="stride", type=int, default=1)
+    p_eval.add_argument("--episodes", dest="episodes",
+                        help="Comma-separated episode indices (e.g. 0,1,2)")
+    p_eval.add_argument("--dataset.root", dest="dataset_root")
+    p_eval.add_argument("--dataset.revision", dest="dataset_revision")
+    p_eval.add_argument("--no-download-videos", dest="download_videos", action="store_false", default=True)
+    p_eval.add_argument("--video-backend", dest="video_backend")
+    p_eval.add_argument("--output-dir", dest="output_dir")
+    p_eval.add_argument("--overwrite", action="store_true")
+    p_eval.add_argument("--strict", action="store_true")
+    p_eval.add_argument("--fail-fast", action="store_true")
+    p_eval.add_argument("--json", action="store_true")
+    p_eval.set_defaults(func=cmd_eval)
 
     # --- rollout (spec §12.5) — v0.2+ ---
     p_rollout = sub.add_parser("rollout", help="Run fixture-based dry-run rollout (v0.3)")
@@ -454,3 +472,78 @@ def cmd_rollout(args: argparse.Namespace) -> int:
     print("Dry-run completed successfully.")
 
     return 0
+
+
+# MARK: - eval (v0.4 — LeRobotDataset replay/eval)
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Evaluate a CoreAI policy on a LeRobotDataset."""
+    from .errors import CoreAIPolicyError
+
+    # Parse episodes.
+    episodes = None
+    if args.episodes:
+        episodes = [int(e.strip()) for e in args.episodes.split(",")]
+
+    output_dir = args.output_dir or f"runs/{args.policy_path.split('/')[-1]}-eval"
+
+    config = EvalConfig(
+        policy_path=args.policy_path,
+        dataset_repo_id=args.dataset_repo_id,
+        runner_url=args.runner_url,
+        output_dir=Path(output_dir),
+        robot_type=args.robot_type,
+        max_frames=args.max_frames,
+        start_index=args.start_index,
+        stride=args.stride,
+        episodes=episodes,
+        dataset_root=Path(args.dataset_root) if args.dataset_root else None,
+        dataset_revision=args.dataset_revision,
+        download_videos=args.download_videos,
+        video_backend=args.video_backend,
+        strict_observation_keys=args.strict,
+        fail_fast=args.fail_fast,
+        overwrite=args.overwrite,
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai eval")
+        print("=" * 50)
+        print(f"Policy: {args.policy_path}")
+        print(f"Dataset: {args.dataset_repo_id}")
+        print(f"Runner: {args.runner_url}")
+        print(f"Max frames: {args.max_frames}")
+
+    try:
+        result = run_lerobot_dataset_eval(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Eval failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0
+
+    m = result.report.get("metrics", {})
+    print()
+    print(f"✓ Eval completed")
+    print(f"  frames processed: {m.get('frames_processed', 0)}")
+    print(f"  actions generated: {m.get('actions_generated', 0)}")
+    print(f"  actions failed: {m.get('actions_failed', 0)}")
+    if m.get("mean_total_ms"):
+        print(f"  mean inference: {m['mean_total_ms']:.1f}ms")
+    print(f"  No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  actions: {result.actions_path}")
+    print(f"  trace:   {result.trace_path}")
+    print(f"  report:  {result.report_path}")
+    print("=" * 50)
+
+    return 0 if result.ok else 1

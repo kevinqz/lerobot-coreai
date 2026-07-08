@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/eval-report.schema.json",
+  "title": "lerobot-coreai eval report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "lerobot_coreai_version", "ok", "mode", "policy", "dataset", "runner", "metrics", "safety", "errors"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.eval_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "const": "dataset_eval"},
+    "policy": {"type": "object"},
+    "dataset": {"type": "object"},
+    "runner": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": ["frames_requested", "frames_processed", "actions_generated", "actions_failed"],
+      "properties": {
+        "frames_requested": {"type": "integer"},
+        "frames_processed": {"type": "integer"},
+        "actions_generated": {"type": "integer"},
+        "actions_failed": {"type": "integer"},
+        "shape_errors": {"type": "integer"},
+        "nan_errors": {"type": "integer"},
+        "inf_errors": {"type": "integer"},
+        "runner_errors": {"type": "integer"},
+        "mean_total_ms": {"type": ["number", "null"]},
+        "p95_total_ms": {"type": ["number", "null"]}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": ["physical_actuation_possible", "motor_commands_available", "robot_connected", "actions_sent"],
+      "properties": {
+        "physical_actuation_possible": {"type": "boolean", "const": false},
+        "motor_commands_available": {"type": "boolean", "const": false},
+        "robot_connected": {"type": "boolean", "const": false},
+        "actions_sent": {"type": "integer", "const": 0}
+      }
+    },
+    "errors": {"type": "array"}
+  }
+}

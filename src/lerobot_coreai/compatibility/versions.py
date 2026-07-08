@@ -14,8 +14,11 @@ from ..errors import VersionMismatchError
 # Format: set of "<major>.<minor>" strings.
 SUPPORTED_LEROBOT_VERSIONS = {"0.6"}
 
-# Recommended version (the one the current artifacts were exported against).
-RECOMMENDED_LEROBOT_VERSION = "0.6.0"
+# Baseline version (the one the current artifacts were exported against).
+BASELINE_LEROBOT_VERSION = "0.6.0"
+
+# Latest verified version (tested against upstream main).
+RECOMMENDED_LEROBOT_VERSION = "0.6.1"
 
 
 def get_installed_lerobot_version() -> str | None:

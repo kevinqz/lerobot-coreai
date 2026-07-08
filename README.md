@@ -10,8 +10,8 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **v0.3:** `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata. Fixture-based `rollout --mode dry_run` with reports.
-> `inspect`, `doctor`, `list` work without a runner.
+> **v0.4:** `eval` command reads LeRobotDataset frames and generates actions via CoreAI runner.
+> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata. `rollout --mode dry_run` with reports.
 
 ---
 
@@ -107,8 +107,8 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `list` | v0.1 ✅ | List LeRobot policies from the catalog |
 | `predict` | v0.2 ✅ | Predict action from single observation |
 | `rollout --mode dry_run` | v0.3 ✅ | Fixture-based dry-run; no robot actuation |
-| `eval` | v0.4 planned | LeRobotDataset replay |
-| `compare` | v0.4 planned | PyTorch vs CoreAI |
+| `eval` | v0.4 ✅ | LeRobotDataset replay/eval; no robot actuation |
+| `compare` | v0.5 planned | PyTorch vs CoreAI action parity |
 | `export` | v0.5 planned | Fabric wrapper |
 
 ## Safety model
