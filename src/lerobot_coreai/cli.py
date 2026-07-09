@@ -25,6 +25,7 @@ from .shadow import ShadowConfig, run_shadow_mode
 from .sim import SimConfig, run_sim_mode
 from .sim_quality import SimQualityConfig
 from .sim_regression import SimRegressionConfig, run_sim_regression
+from .sim_bundle import SimBundleConfig, package_sim_run, verify_sim_bundle
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -299,6 +300,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.add_argument("--quality.max-error-rate", dest="quality_max_error_rate", type=float, default=0.0)
     p_sim.add_argument("--quality.fail-on-quality", dest="quality_fail_on_quality", action="store_true",
                        help="Fail the run if quality gates don't pass")
+    # Reproducibility bundle (v0.8.4).
+    p_sim.add_argument("--package-run", dest="package_run", action="store_true",
+                       help="Package the run into a reproducibility bundle after it completes")
+    p_sim.add_argument("--package-output-dir", dest="package_output_dir",
+                       help="Bundle output dir (default: <output-dir>/bundle)")
+    p_sim.add_argument("--package-overwrite", dest="package_overwrite", action="store_true",
+                       help="Overwrite a non-empty bundle output dir")
+    p_sim.add_argument("--redact-runner-url", dest="redact_runner_url", action="store_true",
+                       help="Redact the runner URL in the bundle")
+    p_sim.add_argument("--no-redact-local-paths", dest="redact_local_paths", action="store_false",
+                       help="Keep absolute local paths in the bundle (default: redacted)")
+    p_sim.add_argument("--include-observations-dir", dest="include_observations_dir", action="store_true",
+                       help="Include the full observations/ dir in the bundle (may be large)")
     p_sim.add_argument("--json", action="store_true")
     p_sim.set_defaults(func=cmd_sim)
 
@@ -314,6 +328,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_simreg.add_argument("--max-runner-p95-increase-ms", dest="max_runner_p95_increase_ms", type=float)
     p_simreg.add_argument("--json", action="store_true")
     p_simreg.set_defaults(func=cmd_sim_regression)
+
+    # --- package-sim-run (v0.8.4) — reproducibility bundle ---
+    p_pkg = sub.add_parser("package-sim-run",
+                           help="Package a simulator-only run into a reproducibility bundle (v0.8.4)")
+    p_pkg.add_argument("--run-dir", dest="run_dir", required=True)
+    p_pkg.add_argument("--output-dir", dest="output_dir", required=True)
+    p_pkg.add_argument("--overwrite", dest="overwrite", action="store_true")
+    p_pkg.add_argument("--redact-runner-url", dest="redact_runner_url", action="store_true")
+    p_pkg.add_argument("--no-redact-local-paths", dest="redact_local_paths", action="store_false")
+    p_pkg.add_argument("--include-observations-dir", dest="include_observations_dir", action="store_true")
+    p_pkg.add_argument("--no-actions", dest="include_actions", action="store_false")
+    p_pkg.add_argument("--no-traces", dest="include_traces", action="store_false")
+    p_pkg.add_argument("--no-csv", dest="include_csv", action="store_false")
+    p_pkg.add_argument("--no-summary", dest="include_summary", action="store_false")
+    p_pkg.add_argument("--no-failure-taxonomy", dest="include_failure_taxonomy", action="store_false")
+    p_pkg.add_argument("--json", action="store_true")
+    p_pkg.set_defaults(func=cmd_package_sim_run)
+
+    # --- verify-sim-bundle (v0.8.4) ---
+    p_verify = sub.add_parser("verify-sim-bundle",
+                              help="Verify a sim bundle (manifest, checksums, invariants) (v0.8.4)")
+    p_verify.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_verify.add_argument("--json", action="store_true")
+    p_verify.set_defaults(func=cmd_verify_sim_bundle)
 
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
@@ -353,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -945,6 +983,12 @@ def cmd_sim(args: argparse.Namespace) -> int:
         failure_taxonomy=getattr(args, "failure_taxonomy", True),
         quality_config=quality_config,
         fail_on_quality=getattr(args, "quality_fail_on_quality", False),
+        package_run=getattr(args, "package_run", False),
+        package_output_dir=Path(args.package_output_dir) if getattr(args, "package_output_dir", None) else None,
+        package_overwrite=getattr(args, "package_overwrite", False),
+        redact_runner_url=getattr(args, "redact_runner_url", False),
+        redact_local_paths=getattr(args, "redact_local_paths", True),
+        include_observations_dir=getattr(args, "include_observations_dir", False),
     )
 
     if not args.json:
@@ -1005,6 +1049,10 @@ def cmd_sim(args: argparse.Namespace) -> int:
         print(f"  step csv:     {result.output_dir / files['step_metrics_csv']}")
     elif not getattr(args, "export_csv", False):
         print("  CSV exports:  disabled (use --export-csv to write episode/step metrics)")
+    bundle = result.report.get("bundle")
+    if bundle:
+        status = "created" if bundle.get("created") else "FAILED"
+        print(f"  bundle:       {bundle.get('output_dir')} ({status})")
 
     # v0.8.3: surface quality gate results in human mode.
     quality = result.report.get("quality")
@@ -1079,6 +1127,124 @@ def cmd_sim_regression(args: argparse.Namespace) -> int:
     else:
         print("Regression check FAILED — candidate degraded beyond thresholds.")
     return 0 if result.passed else 1
+
+
+# MARK: - package-sim-run (v0.8.4 — reproducibility bundle)
+
+def cmd_package_sim_run(args: argparse.Namespace) -> int:
+    """Package a simulator-only run into a reproducibility bundle."""
+    from .errors import CoreAIPolicyError
+
+    config = SimBundleConfig(
+        run_dir=Path(args.run_dir),
+        output_dir=Path(args.output_dir),
+        overwrite=getattr(args, "overwrite", False),
+        redact_runner_url=getattr(args, "redact_runner_url", False),
+        redact_local_paths=getattr(args, "redact_local_paths", True),
+        include_observations_dir=getattr(args, "include_observations_dir", False),
+        include_actions=getattr(args, "include_actions", True),
+        include_traces=getattr(args, "include_traces", True),
+        include_csv=getattr(args, "include_csv", True),
+        include_summary=getattr(args, "include_summary", True),
+        include_failure_taxonomy=getattr(args, "include_failure_taxonomy", True),
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai package-sim-run")
+        print("=" * 50)
+        print(f"Run dir: {args.run_dir}")
+        print(f"Output:  {args.output_dir}")
+
+    try:
+        result = package_sim_run(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Packaging failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps({
+            "ok": result.ok,
+            "output_dir": str(result.output_dir),
+            "manifest_path": str(result.manifest_path),
+            "checksums_path": str(result.checksums_path),
+            "files_copied": result.files_copied,
+            "warnings": result.warnings,
+        }, indent=2))
+        return 0 if result.ok else 1
+
+    print()
+    print(f"✓ Loaded sim_report.json")
+    print(f"✓ Verified no-robot-egress invariants")
+    print(f"✓ Copied {len(result.files_copied)} files")
+    print(f"✓ Wrote bundle_manifest.json")
+    print(f"✓ Wrote checksums.json")
+    print(f"✓ Wrote README.md")
+    print(f"✓ Wrote reproducibility.md")
+    if result.warnings:
+        print("Warnings:")
+        for w in result.warnings:
+            print(f"  - {w}")
+    print("=" * 50)
+    print("Bundle completed successfully.")
+    return 0
+
+
+# MARK: - verify-sim-bundle (v0.8.4)
+
+def cmd_verify_sim_bundle(args: argparse.Namespace) -> int:
+    """Verify a sim bundle: manifest, checksums, no-robot-egress invariants."""
+    bundle_dir = Path(args.bundle_dir)
+
+    if not args.json:
+        print(f"lerobot-coreai verify-sim-bundle")
+        print("=" * 50)
+        print(f"Bundle: {bundle_dir}")
+
+    result = verify_sim_bundle(bundle_dir)
+
+    if args.json:
+        import json
+        print(json.dumps({
+            "ok": result.ok,
+            "files_checked": result.files_checked,
+            "checksum_failures": result.checksum_failures,
+            "invariant_failures": result.invariant_failures,
+            "warnings": result.warnings,
+        }, indent=2))
+        return 0 if result.ok else 1
+
+    # Split invariant failures into manifest-level, source-report-level, and
+    # schema-level for a clear, auditable readout.
+    inv = result.invariant_failures
+    schema_fails = [f for f in inv if "schema" in f]
+    source_fails = [f for f in inv if f.startswith("source report")]
+    manifest_fails = [f for f in inv if f not in schema_fails and f not in source_fails]
+
+    def _line(ok_msg, fails):
+        if fails:
+            print(f"✗ {len(fails)} failure(s):")
+            for f in fails:
+                print(f"  - {f}")
+        else:
+            print(f"✓ {ok_msg}")
+
+    print()
+    _line("manifest schema valid", schema_fails)
+    _line(f"checksums valid ({result.files_checked} files)", result.checksum_failures)
+    _line("source report valid", source_fails)
+    _line("no-robot-egress invariants preserved", manifest_fails)
+    print("=" * 50)
+    if result.ok:
+        print("Bundle verification passed.")
+    else:
+        print("Bundle verification FAILED.")
+    return 0 if result.ok else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)

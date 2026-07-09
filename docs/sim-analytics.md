@@ -2,6 +2,10 @@
 
 v0.8.2 turns simulator-only runs into auditable evaluation artifacts.
 
+> The analytics artifacts described here (report, CSVs, summary, taxonomy) can
+> be packaged into a self-contained, checksummed reproducibility bundle — see
+> [sim-bundles.md](sim-bundles.md) (v0.8.4).
+
 ## What it proves
 
 - Simulator episode metrics (reward, success rate, episode length)

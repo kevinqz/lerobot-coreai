@@ -116,6 +116,8 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `shadow` | v0.7 ✅ | Motor-blocked observation loop; actions generated and logged, never sent |
 | `sim` | v0.8 ✅ | Simulator-only action egress; actions drive a simulator, never a robot |
 | `sim-regression` | v0.8.3 ✅ | Compare two sim runs for regression |
+| `package-sim-run` | v0.8.4 ✅ | Package a sim run into a reproducibility bundle |
+| `verify-sim-bundle` | v0.8.4 ✅ | Verify a sim bundle (manifest, checksums, invariants) |
 
 ## Safety model
 
@@ -126,6 +128,7 @@ v0.8 adds simulator-only sim mode: actions drive a simulator, never a robot.
 v0.8.1 adds a gymnasium simulator adapter (`[sim]` extra) for sim mode.
 v0.8.2 adds sim analytics: CSV exports, markdown summaries, failure taxonomy, and richer report sections for simulator-only runs.
 v0.8.3 adds sim quality gates and a sim-regression command to compare two sim runs for regression.
+v0.8.4 adds reproducibility bundles for simulator-only runs, including manifests, checksums, environment metadata, runner metadata, and audit-ready package outputs.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
@@ -156,6 +159,8 @@ v0.7.1 adds optional `[camera]` extra (OpenCV) for shadow mode camera source.
 v0.8 adds simulator-only sim mode (`fake` and `replay` environments).
 v0.8.1 adds a gymnasium simulator adapter (`[sim]` extra).
 v0.8.2 adds sim analytics (CSV exports, markdown summaries, failure taxonomy).
+v0.8.3 adds sim quality gates and the `sim-regression` command.
+v0.8.4 adds reproducibility bundles (`package-sim-run` / `verify-sim-bundle`).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

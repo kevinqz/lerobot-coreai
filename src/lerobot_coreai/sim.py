@@ -32,6 +32,7 @@ from .serialization import make_json_safe_observation
 from .sim_analytics import build_sim_analytics, write_episode_metrics_csv, write_step_metrics_csv
 from .sim_egress import SimEgress
 from .sim_quality import SimQualityConfig, SimQualityResult, evaluate_sim_quality
+from .sim_bundle import SimBundleConfig, package_sim_run
 from .sim_envs import SimEnvConfig, SimEnvironment, build_sim_environment
 from .sim_summary import build_sim_summary_markdown
 from .trace import TraceWriter
@@ -74,6 +75,13 @@ class SimConfig:
     # Quality gates (v0.8.3).
     quality_config: SimQualityConfig | None = None
     fail_on_quality: bool = False
+    # Reproducibility bundle (v0.8.4).
+    package_run: bool = False
+    package_output_dir: Path | None = None
+    package_overwrite: bool = False
+    include_observations_dir: bool = False
+    redact_runner_url: bool = False
+    redact_local_paths: bool = True
 
 
 @dataclass
@@ -770,12 +778,44 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             summary_path.write_text(build_sim_summary_markdown(report))
         except Exception:
             pass  # best-effort
+
     trace.write("sim.completed", {
         "ok": not quality_failed,
         "episodes": episodes_completed,
         "steps": metrics["steps_completed"],
     })
     trace.close()
+
+    # v0.8.4: optionally package the run into a reproducibility bundle.
+    # Packaging runs AFTER the trace is finalized and closed, so the bundled
+    # sim_trace.jsonl contains sim.completed and represents the closed run.
+    # It never alters sim results — a packaging failure is recorded as a
+    # warning; the sim result stays ok.
+    if config.package_run:
+        package_output_dir = config.package_output_dir or (output_dir / "bundle")
+        bundle_section: dict[str, Any] = {"output_dir": str(package_output_dir)}
+        try:
+            bundle_result = package_sim_run(SimBundleConfig(
+                run_dir=output_dir,
+                output_dir=package_output_dir,
+                overwrite=config.package_overwrite,
+                redact_runner_url=config.redact_runner_url,
+                redact_local_paths=config.redact_local_paths,
+                include_observations_dir=config.include_observations_dir,
+            ))
+            bundle_section.update({
+                "created": bundle_result.ok,
+                "manifest": str(bundle_result.manifest_path),
+                "checksums": str(bundle_result.checksums_path),
+                "warnings": bundle_result.warnings,
+            })
+            files_map["bundle"] = str(package_output_dir)
+        except Exception as e:  # packaging is auxiliary — never fail the sim.
+            bundle_section.update({"created": False, "error": str(e)})
+            report.setdefault("warnings", []).append(f"bundle packaging failed: {e}")
+        report["bundle"] = bundle_section
+        report["files"] = files_map
+        save_json(report_path, report)
 
     return SimResult(
         ok=not quality_failed,
