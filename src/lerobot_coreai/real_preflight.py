@@ -173,6 +173,7 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
     _c("runner_url_present", bool(config.runner_url))
 
     # Safety profile.
+    profile_action_shape: list[int] | None = None
     sp_path = Path(config.safety_profile) if config.safety_profile else None
     if not sp_path or not sp_path.is_file():
         _c("safety_profile_exists", False, str(sp_path))
@@ -180,6 +181,7 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
         _c("safety_profile_exists", True)
         try:
             profile = resolve_safety_profile(path=sp_path)
+            profile_action_shape = profile.action_shape
             _c("safety_profile_valid", True)
             rt_ok = profile.robot_type is None or profile.robot_type == config.robot_type
             _c("safety_profile_robot_type_matches", rt_ok,
@@ -214,6 +216,15 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
             pf = adapter.preflight()
             _c("robot_adapter_preflight_passes", bool(pf.get("ok")),
                "" if pf.get("ok") else str(pf))
+            # v1.0.3: an external-http controller must satisfy the capability
+            # contract, coherent with robot type / profile shape / fps.
+            if config.robot_adapter == "external-http" and pf.get("ok"):
+                from .external_http_contract import validate_controller_preflight
+                for name, ok, msg in validate_controller_preflight(
+                        pf, robot_type=config.robot_type,
+                        profile_action_shape=profile_action_shape,
+                        requested_fps=config.fps):
+                    _c(name, ok, msg)
     except CoreAIPolicyError as e:
         _c("robot_adapter_known", False, str(e))
 

@@ -188,6 +188,7 @@ v0.9.4 hardens the pre-1.0 governance layer: stricter approval/readiness schemas
 v1.0.0 adds guarded real mode (`real --mode preflight|guarded`): the first real-egress path, gated on the entire pre-real-mode evidence chain. Guarded real egress for CoreAI-backed, LeRobot-shaped policies — not a native upstream LeRobot integration, and not proof of physical safety.
 v1.0.1 hardens the external-http adapter with an optional bearer token (`--robot.token` / `LEROBOT_COREAI_ROBOT_TOKEN`), completing the loopback-only egress boundary.
 v1.0.2 adds `verify-real-session` (offline audit of a completed guarded real session: schema, action accounting, sent⇒allowed, trace order), a conditional real-report schema, a post-session real safety-quality gate, and loopback URL canonicalization.
+v1.0.3 adds an external-http controller capability contract: in guarded mode the controller's `/preflight` must declare `robot_type`/`action_shape`/`supports_stop`/`supports_ready`/`max_fps`, validated against a schema and cross-checked with the requested robot type, safety-profile shape, and fps.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
