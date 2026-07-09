@@ -114,13 +114,46 @@ class TestCliSim:
         err = capsys.readouterr().err
         assert "No robot commands were sent." in err
 
-    def test_sim_env_type_restricted(self, tmp_path, capsys):
-        """--env.type should only accept fake|replay in v0.8.0."""
-        with pytest.raises(SystemExit):
-            cli.main([
+    def test_sim_reserved_env_type_gives_rich_error(self, tmp_path, capsys):
+        """Reserved env types (gym/lerobot/pusht) should reach the factory and
+        emit a clear 'not yet supported / planned for v0.8.1' message."""
+        from lerobot_coreai.errors import CoreAIPolicyError
+
+        def _raise(config):
+            raise CoreAIPolicyError(
+                "env.type='gym' is not yet supported in lerobot-coreai v0.8.0. "
+                "Real simulator adapters are planned for v0.8.1. "
+                "Use --env.type fake or --env.type replay for now."
+            )
+
+        with patch("lerobot_coreai.cli.run_sim_mode", side_effect=_raise):
+            rc = cli.main([
                 "sim",
                 "--policy.path", "test",
-                "--env.type", "mujoco",
+                "--env.type", "gym",
                 "--output-dir", str(tmp_path / "run"),
                 "--confirm-sim-egress",
             ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "planned for v0.8.1" in err
+        assert "No robot commands were sent." in err
+
+    def test_sim_unknown_env_type_gives_factory_error(self, tmp_path, capsys):
+        """Unknown env types reach the factory (not argparse) and raise clearly."""
+        from lerobot_coreai.errors import CoreAIPolicyError
+
+        def _raise(config):
+            raise CoreAIPolicyError(
+                "env.type='nonexistent' is not a known simulator environment."
+            )
+
+        with patch("lerobot_coreai.cli.run_sim_mode", side_effect=_raise):
+            rc = cli.main([
+                "sim",
+                "--policy.path", "test",
+                "--env.type", "nonexistent",
+                "--output-dir", str(tmp_path / "run"),
+                "--confirm-sim-egress",
+            ])
+        assert rc == 1

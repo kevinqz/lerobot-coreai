@@ -71,12 +71,16 @@ def fake_cv2(monkeypatch):
 # MARK: - Tests
 
 class TestCameraSourceMissingCV2:
-    def test_open_without_cv2_raises(self):
+    def test_open_without_cv2_raises(self, monkeypatch):
+        # Simulate cv2 not being installed, regardless of the test environment
+        # (LeRobot may pull in opencv as a transitive dependency).
+        monkeypatch.setitem(sys.modules, "cv2", None)
         src = CameraObservationSource()
         with pytest.raises(CoreAIPolicyError, match="lerobot-coreai\\[camera\\]"):
             src.open()
 
-    def test_error_message_has_install_hint(self):
+    def test_error_message_has_install_hint(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "cv2", None)
         src = CameraObservationSource()
         try:
             src.open()

@@ -143,8 +143,11 @@ class TestFolderImageObservationSource:
 
 
 class TestCameraObservationSource:
-    def test_open_without_cv2_raises_install_hint(self):
+    def test_open_without_cv2_raises_install_hint(self, monkeypatch):
         """Without cv2 installed, open() should raise with install hint."""
+        # Simulate cv2 not being installed, regardless of the test environment.
+        import sys
+        monkeypatch.setitem(sys.modules, "cv2", None)
         src = CameraObservationSource()
         with pytest.raises(CoreAIPolicyError, match="lerobot-coreai\\[camera\\]"):
             src.open()

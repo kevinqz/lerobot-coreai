@@ -376,9 +376,14 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                     "keys": list(obs.keys()),
                 })
                 # Save full observation.
+                # Use a global step index for frame_index so per-step artifacts
+                # (e.g. saved image frames) don't collide across episodes.
+                global_step = metrics["steps_completed"]
                 obs_file = obs_dir / f"ep{episode:03d}_step{step:06d}.json"
                 try:
-                    safe_obs = make_json_safe_observation(obs, output_dir=output_dir, frame_index=step)
+                    safe_obs = make_json_safe_observation(
+                        obs, output_dir=output_dir, frame_index=global_step
+                    )
                     save_json(obs_file, safe_obs)
                 except Exception as e:
                     metrics["env_errors"] += 1
@@ -527,6 +532,9 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                     trace.write("episode.terminated", {"episode": episode, "steps": episode_steps})
                     break
 
+                # Pace the loop — sleep per step to maintain target fps (matches shadow).
+                sleep_to_maintain_fps(step_started, config.fps)
+
             # Truncated if we hit max steps without done.
             if not episode_terminated and episode_steps >= config.max_steps_per_episode:
                 episode_truncated = True
@@ -548,9 +556,6 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             episode_summaries.append(episode_summary)
             _append_jsonl(episodes_path, episode_summary)
             trace.write("episode.completed", {"episode": episode, "summary": episode_summary})
-
-            # Pace the loop.
-            sleep_to_maintain_fps(time.monotonic(), config.fps)
 
         trace.write("loop.completed", {
             "episodes_completed": metrics["episodes_completed"],

@@ -322,3 +322,95 @@ class TestSimActionsJsonl:
                 assert rec["egress"]["destination"] == "simulator"
             assert "reward" in rec
             assert "done" in rec
+
+
+class TestSimFpsPacing:
+    def test_fps_pacing_called_per_step(self, tmp_path, valid_manifest_dict):
+        """sleep_to_maintain_fps must be called once per non-terminal step, inside the step loop."""
+        output_dir = tmp_path / "run"
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        with patch("lerobot_coreai.sim.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            with patch("lerobot_coreai.sim.sleep_to_maintain_fps") as mock_sleep:
+                config = SimConfig(
+                    policy_path="test/policy",
+                    output_dir=output_dir,
+                    env_type="fake",
+                    confirm_sim_egress=True,
+                    episodes=1,
+                    max_steps_per_episode=3,
+                    fps=30.0,
+                )
+                result = run_sim_mode(config)
+
+        assert result.ok is True
+        # fake env: steps 0,1,2 complete; step 2 is terminal (done) so it breaks
+        # before pacing. Pacing happens on the non-terminal steps: 0 and 1.
+        assert mock_sleep.call_count == 2
+
+    def test_fps_pacing_called_across_episodes(self, tmp_path, valid_manifest_dict):
+        """Pacing must be per-step, not per-episode."""
+        output_dir = tmp_path / "run"
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        with patch("lerobot_coreai.sim.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            with patch("lerobot_coreai.sim.sleep_to_maintain_fps") as mock_sleep:
+                config = SimConfig(
+                    policy_path="test/policy",
+                    output_dir=output_dir,
+                    env_type="fake",
+                    confirm_sim_egress=True,
+                    episodes=2,
+                    max_steps_per_episode=3,
+                    fps=30.0,
+                )
+                run_sim_mode(config)
+
+        # 2 episodes × (3 steps, last terminal) = 2 non-terminal paces per episode = 4.
+        assert mock_sleep.call_count == 4
+
+    def test_no_pacing_when_done_breaks_early(self, tmp_path, valid_manifest_dict):
+        """When an episode ends early (done=True), pacing should not be called for that step."""
+        output_dir = tmp_path / "run"
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        with patch("lerobot_coreai.sim.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            with patch("lerobot_coreai.sim.sleep_to_maintain_fps") as mock_sleep:
+                config = SimConfig(
+                    policy_path="test/policy",
+                    output_dir=output_dir,
+                    env_type="fake",
+                    confirm_sim_egress=True,
+                    episodes=1,
+                    max_steps_per_episode=3,
+                    fps=30.0,
+                )
+                # Build a fake env that ends at step 2.
+                from lerobot_coreai.sim_envs import FakeSimEnvironment
+                fake_env = FakeSimEnvironment(max_steps=2, action_size=7)
+                with patch("lerobot_coreai.sim.build_sim_environment", return_value=fake_env):
+                    run_sim_mode(config)
+
+        # 2 steps complete; step 2 is terminal → breaks before pacing → 1 pace call (step 0).
+        assert mock_sleep.call_count == 1
+
+    def test_no_pacing_when_fps_zero(self, tmp_path, valid_manifest_dict):
+        """fps=0 means no pacing at all (sleep is a no-op, but it is still called)."""
+        output_dir = tmp_path / "run"
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        with patch("lerobot_coreai.sim.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            with patch("lerobot_coreai.sim.sleep_to_maintain_fps") as mock_sleep:
+                config = SimConfig(
+                    policy_path="test/policy",
+                    output_dir=output_dir,
+                    env_type="fake",
+                    confirm_sim_egress=True,
+                    episodes=1,
+                    max_steps_per_episode=3,
+                    fps=0.0,
+                )
+                run_sim_mode(config)
+
+        # fps=0 → pacing is still invoked per non-terminal step (the helper is a no-op).
+        assert mock_sleep.call_count == 2

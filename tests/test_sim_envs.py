@@ -84,18 +84,16 @@ class TestReplaySimEnvironment:
             observations_dir=obs_dir, reward_per_step=0.5, success_on_last_step=True,
         )
         env.reset()
-        # 3 observations: reset→obs[0], step→obs[1], step→obs[2], step→exhausted.
+        # 3 observations: reset→obs[0], step 1→obs[1] done=False, step 2→obs[2] done=True.
         obs1, r1, d1, _ = env.step([0.0] * 7)
         assert obs1["observation.state"] == [1.0] * 7
         assert r1 == 0.5
         assert d1 is False
-        obs2, r2, d2, _ = env.step([0.0] * 7)
+        obs2, r2, d2, info2 = env.step([0.0] * 7)
         assert obs2["observation.state"] == [2.0] * 7
-        assert d2 is False
-        obs3, r3, d3, info3 = env.step([0.0] * 7)
-        assert d3 is True
-        assert info3["success"] is True
-        assert r3 == 0.5
+        assert d2 is True
+        assert info2["success"] is True
+        assert r2 == 0.5
 
     def test_empty_dir_raises(self, tmp_path):
         d = tmp_path / "empty"

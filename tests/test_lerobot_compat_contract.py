@@ -70,13 +70,28 @@ class TestLeRobotCompatContract:
         )
 
     def test_core_package_does_not_import_lerobot(self):
-        """Importing the top-level package must not require LeRobot."""
-        # Ensure a fresh import path check: the core package is LeRobot-free.
-        import importlib
+        """Importing lerobot_coreai must not pull in lerobot as a side effect.
 
-        import lerobot_coreai  # noqa: F401
-        # 'lerobot' itself must NOT be a hard dependency of the core package.
-        # We only assert it is not imported as a side effect of the top-level import.
-        # (If LeRobot happens to be installed in the test env, that's fine — we check
-        # that our package does not force it.)
-        assert "lerobot" not in sys.modules or True  # no hard requirement enforced
+        The core package is LeRobot-free: importing it should never add 'lerobot'
+        to sys.modules. We run this in a fresh subprocess so it does not disturb
+        the module cache of the test process (which would break mock patches in
+        later tests).
+        """
+        import subprocess
+
+        snippet = (
+            "import sys; "
+            "import lerobot_coreai; "
+            "leaked = [m for m in sys.modules if m == 'lerobot' or m.startswith('lerobot.')]; "
+            "print('LEAKED:' + ','.join(leaked) if leaked else 'CLEAN')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            f"subprocess failed: {result.stderr}\nstdout: {result.stdout}"
+        )
+        assert result.stdout.strip() == "CLEAN", (
+            f"importing lerobot_coreai pulled in lerobot modules: {result.stdout.strip()}"
+        )

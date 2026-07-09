@@ -143,22 +143,26 @@ class ReplaySimEnvironment:
         return obs
 
     def step(self, action: Any) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
+        # Advance to the next observation. With N observations:
+        #   reset → obs[0]
+        #   step 1 → obs[1], done=False
+        #   ...
+        #   step N-1 → obs[N-1] (last), done=True
+        # No extra terminal step is required — the step that returns the last
+        # observation is itself terminal.
         self.step_index += 1
-        exhausted = self.step_index >= len(self.observations)
-        if exhausted:
-            obs = dict(self.observations[-1])
-            done = True
-        else:
-            obs = dict(self.observations[self.step_index])
-            done = False
+        last_step = self.step_index >= len(self.observations) - 1
+        idx = min(self.step_index, len(self.observations) - 1)
+        obs = dict(self.observations[idx])
         if self.task:
             obs["task"] = self.task
         if self.state_vector:
             obs.setdefault("observation.state", list(self.state_vector))
+        done = last_step
         reward = self.reward_per_step
         info: dict[str, Any] = {
             "sim_step": self.step_index,
-            "success": self.success_on_last_step and exhausted,
+            "success": self.success_on_last_step and last_step,
         }
         return obs, reward, done, info
 

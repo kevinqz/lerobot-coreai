@@ -245,8 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.add_argument("--policy.path", dest="policy_path", required=True,
                        help="HF repo id of the CoreAI artifact")
     p_sim.add_argument("--env.type", dest="env_type", required=True,
-                       choices=["fake", "replay"],
-                       help="Simulator environment type (v0.8.0: fake, replay)")
+                       help="Simulator environment type (v0.8.0: fake, replay; gym/lerobot/pusht reserved for v0.8.1)")
     p_sim.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock",
                        help="coreai-runner URL (default: unix socket)")
     p_sim.add_argument("--output-dir", dest="output_dir", required=True,
