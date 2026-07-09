@@ -115,28 +115,27 @@ class TestCliSim:
         assert "No robot commands were sent." in err
 
     def test_sim_reserved_env_type_gives_rich_error(self, tmp_path, capsys):
-        """Reserved env types (gym/lerobot/pusht) should reach the factory and
-        emit a clear 'not yet supported / planned for v0.8.1' message."""
+        """Reserved env types (lerobot/pusht) should reach the factory and
+        emit a clear 'not yet supported' message. gym is supported in v0.8.1."""
         from lerobot_coreai.errors import CoreAIPolicyError
 
         def _raise(config):
             raise CoreAIPolicyError(
-                "env.type='gym' is not yet supported in lerobot-coreai v0.8.0. "
-                "Real simulator adapters are planned for v0.8.1. "
-                "Use --env.type fake or --env.type replay for now."
+                "env.type='lerobot' is not yet supported in lerobot-coreai v0.8.1. "
+                "Use --env.type fake, replay, or gym for now."
             )
 
         with patch("lerobot_coreai.cli.run_sim_mode", side_effect=_raise):
             rc = cli.main([
                 "sim",
                 "--policy.path", "test",
-                "--env.type", "gym",
+                "--env.type", "lerobot",
                 "--output-dir", str(tmp_path / "run"),
                 "--confirm-sim-egress",
             ])
         assert rc == 1
         err = capsys.readouterr().err
-        assert "planned for v0.8.1" in err
+        assert "not yet supported" in err
         assert "No robot commands were sent." in err
 
     def test_sim_unknown_env_type_gives_factory_error(self, tmp_path, capsys):
@@ -157,3 +156,60 @@ class TestCliSim:
                 "--confirm-sim-egress",
             ])
         assert rc == 1
+
+    def test_sim_gym_args_passed(self, tmp_path):
+        """--env.id and --env.kwargs-json should reach the constructed SimConfig."""
+        mock_result = _mock_sim_result(tmp_path)
+        with patch("lerobot_coreai.cli.run_sim_mode", return_value=mock_result) as mock_run:
+            cli.main([
+                "sim",
+                "--policy.path", "test",
+                "--env.type", "gym",
+                "--env.id", "PushT-v0",
+                "--env.kwargs-json", '{"foo": 1, "bar": "x"}',
+                "--output-dir", str(tmp_path / "run"),
+                "--confirm-sim-egress",
+            ])
+        config = mock_run.call_args[0][0]
+        assert config.env_type == "gym"
+        assert config.env_id == "PushT-v0"
+        assert config.env_kwargs == {"foo": 1, "bar": "x"}
+
+    def test_sim_gym_invalid_kwargs_json_rc1(self, tmp_path, capsys):
+        """Invalid --env.kwargs-json should fail with rc 1 before the run."""
+        rc = cli.main([
+            "sim",
+            "--policy.path", "test",
+            "--env.type", "gym",
+            "--env.id", "PushT-v0",
+            "--env.kwargs-json", "{not valid json",
+            "--output-dir", str(tmp_path / "run"),
+            "--confirm-sim-egress",
+        ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "invalid --env.kwargs-json" in err
+
+    def test_sim_gym_missing_gymnasium_rc1(self, tmp_path, capsys):
+        """If gymnasium is not installed, the run should fail with the install hint."""
+        from lerobot_coreai.errors import CoreAIPolicyError
+
+        def _raise(config):
+            raise CoreAIPolicyError(
+                "Sim gym adapter requires gymnasium. Install with "
+                '`pip install "lerobot-coreai[sim]"`.'
+            )
+
+        with patch("lerobot_coreai.cli.run_sim_mode", side_effect=_raise):
+            rc = cli.main([
+                "sim",
+                "--policy.path", "test",
+                "--env.type", "gym",
+                "--env.id", "PushT-v0",
+                "--output-dir", str(tmp_path / "run"),
+                "--confirm-sim-egress",
+            ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "lerobot-coreai[sim]" in err
+        assert "No robot commands were sent." in err

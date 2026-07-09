@@ -4,11 +4,13 @@
 # internal state and return observations/reward/done. A SimEnvironment is a
 # *simulator* — never a robot, motor, serial device, or actuator.
 #
-# v0.8.0 ships two in-process environments:
-#   - fake:  a deterministic stub for testing the loop end-to-end
-#   - replay: replays a stored observation sequence deterministically
+# Supported environments:
+#   - fake:   a deterministic stub for testing the loop end-to-end (v0.8.0)
+#   - replay: replays a stored observation sequence deterministically (v0.8.0)
+#   - gym:    gymnasium adapter, lazy-imported behind the [sim] extra (v0.8.1)
 #
-# Real simulator adapters (gym/lerobot/pusht) are reserved for v0.8.1.
+# gymnasium is imported lazily only when env.type == 'gym', so the core package
+# stays free of hard gym/LeRobot imports. Reserved for later: lerobot, pusht.
 
 from __future__ import annotations
 
@@ -46,6 +48,9 @@ class SimEnvConfig:
     task: str | None = None
     state_vector: list[float] | None = None
     max_steps: int = 300
+    # Gym/gymnasium adapter options (v0.8.1).
+    env_id: str | None = None
+    env_kwargs: dict[str, Any] | None = None
 
 
 @dataclass
@@ -170,11 +175,122 @@ class ReplaySimEnvironment:
         pass
 
 
+# MARK: - Gym/gymnasium adapter (v0.8.1)
+
+def _require_gymnasium():
+    """Import gymnasium lazily; raise a clear error if not installed.
+
+    The core package stays free of a hard gymnasium import — it is only pulled
+    in when env.type == 'gym'.
+    """
+    try:
+        import gymnasium
+    except ImportError as e:
+        raise CoreAIPolicyError(
+            "Sim gym adapter requires gymnasium. Install with "
+            '`pip install "lerobot-coreai[sim]"`.'
+        ) from e
+    return gymnasium
+
+
+def normalize_gym_observation(
+    obs: Any,
+    info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert a gymnasium observation to the dict shape the Protocol expects.
+
+    - dict -> passthrough (copied)
+    - scalar / list / tuple / numpy-array-like -> {"observation.state": [...]}
+    - anything else -> CoreAIPolicyError (ambiguous)
+
+    We do not invent universal support — if the observation cannot be mapped,
+    the caller must provide an env adapter or observation mapping.
+    """
+    if isinstance(obs, dict):
+        return dict(obs)
+
+    # numpy array-like: prefer .tolist() to avoid a hard numpy dependency.
+    if hasattr(obs, "tolist") and callable(obs.tolist):
+        return {"observation.state": list(obs.tolist())}
+
+    if isinstance(obs, (list, tuple)):
+        return {"observation.state": list(obs)}
+
+    # Bare numbers (int/float) -> single-element state vector.
+    if isinstance(obs, (int, float)):
+        return {"observation.state": [float(obs)]}
+
+    raise CoreAIPolicyError(
+        "Gym observation could not be normalized automatically. "
+        "Provide an env adapter or observation mapping."
+    )
+
+
+@dataclass
+class GymSimEnvironment:
+    """A gymnasium-backed simulator environment.
+
+    Wraps a gymnasium env (created via gymnasium.make(env_id, **kwargs)) and
+    adapts its reset/step API to the SimEnvironment Protocol:
+
+      reset(seed=...) -> (obs, info)              [gymnasium 2-tuple]
+      step(action)   -> (obs, reward, terminated, truncated, info)  [5-tuple]
+
+    The Protocol expects a 4-tuple step with a single `done`, so terminated and
+    truncated are collapsed: done = terminated or truncated. The original flags
+    are preserved in info["terminated"] / info["truncated"].
+
+    gymnasium is imported lazily in __post_init__, so the core package has no
+    hard dependency on it.
+    """
+
+    env_id: str
+    env_kwargs: dict[str, Any] = field(default_factory=dict)
+    seed: int | None = None
+    render: bool = False
+    task: str | None = None
+    state_vector: list[float] | None = None
+    _env: Any = None
+
+    def __post_init__(self) -> None:
+        gym = _require_gymnasium()
+        self._env = gym.make(self.env_id, **self.env_kwargs)
+
+    def reset(self, *, seed: int | None = None) -> dict[str, Any]:
+        obs, info = self._env.reset(seed=seed)
+        result = normalize_gym_observation(obs, info)
+        if self.task:
+            result["task"] = self.task
+        if self.state_vector:
+            result.setdefault("observation.state", list(self.state_vector))
+        return result
+
+    def step(self, action: Any) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
+        obs, reward, terminated, truncated, info = self._env.step(action)
+        done = bool(terminated or truncated)
+        info = dict(info or {})
+        info["terminated"] = bool(terminated)
+        info["truncated"] = bool(truncated)
+        result = normalize_gym_observation(obs, info)
+        if self.task:
+            result["task"] = self.task
+        if self.state_vector:
+            result.setdefault("observation.state", list(self.state_vector))
+        return result, float(reward), done, info
+
+    def close(self) -> None:
+        if self._env is not None:
+            try:
+                self._env.close()
+            except Exception:
+                pass  # best-effort
+
+
 def build_sim_environment(config: SimEnvConfig) -> SimEnvironment:
     """Build a SimEnvironment from config.
 
-    v0.8.0 supports: fake, replay.
-    Reserved for v0.8.1: gym, lerobot, pusht.
+    Supports: fake, replay (v0.8.0), gym (v0.8.1).
+    Reserved for later: lerobot, pusht.
     """
     env_type = config.env_type
 
@@ -214,15 +330,28 @@ def build_sim_environment(config: SimEnvConfig) -> SimEnvironment:
             state_vector=config.state_vector,
         )
 
-    # Reserved names — real simulator adapters land in v0.8.1.
-    if env_type in ("gym", "lerobot", "pusht"):
+    if env_type == "gym":
+        if not config.env_id:
+            raise CoreAIPolicyError(
+                "Gym adapter requires --env.id (e.g. --env.id PushT-v0)."
+            )
+        return GymSimEnvironment(
+            env_id=config.env_id,
+            env_kwargs=config.env_kwargs or {},
+            seed=config.seed,
+            render=config.render,
+            task=config.task,
+            state_vector=config.state_vector,
+        )
+
+    # Reserved names — real simulator adapters land in a later release.
+    if env_type in ("lerobot", "pusht"):
         raise CoreAIPolicyError(
-            f"env.type='{env_type}' is not yet supported in lerobot-coreai v0.8.0. "
-            f"Real simulator adapters are planned for v0.8.1. "
-            f"Use --env.type fake or --env.type replay for now."
+            f"env.type='{env_type}' is not yet supported in lerobot-coreai v0.8.1. "
+            f"Use --env.type fake, replay, or gym for now."
         )
 
     raise CoreAIPolicyError(
         f"env.type='{env_type}' is not a known simulator environment. "
-        f"Supported in v0.8.0: fake, replay."
+        f"Supported: fake, replay, gym."
     )

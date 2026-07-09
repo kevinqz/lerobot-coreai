@@ -62,7 +62,8 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 - **v0.7**: motor-blocked shadow mode
 - **v0.7.1**: optional camera observation source (`[camera]` extra)
 - **v0.7.2**: observation adapters, live metrics, run quality diagnostics
-- **v0.8** (current): sim mode (action egress to simulator only)
+- **v0.8**: sim mode (action egress to simulator only)
+- **v0.8.1** (current): gymnasium simulator adapter (`[sim]` extra)
 
 ## Hardware
 

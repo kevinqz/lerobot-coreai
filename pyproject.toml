@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-coreai"
-version = "0.8.0"
+version = "0.8.1"
 description = "Apple CoreAI runtime backend for LeRobot policies."
 readme = "README.md"
 license = "Apache-2.0"
@@ -44,8 +44,12 @@ camera = [
     # Optional camera observation source for shadow mode (v0.7.1).
     "opencv-python>=4.8",
 ]
+sim = [
+    # Optional gymnasium simulator adapter for sim mode (v0.8.1).
+    "gymnasium>=0.29",
+]
 all = [
-    "lerobot-coreai[lerobot,fabric,camera]",
+    "lerobot-coreai[lerobot,fabric,camera,sim]",
 ]
 test = [
     "pytest>=7",

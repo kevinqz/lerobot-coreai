@@ -53,6 +53,9 @@ class SimConfig:
     env_render: bool = False
     env_record_video: bool = False
     env_video_dir: Path | None = None
+    # Gym/gymnasium adapter options (v0.8.1).
+    env_id: str | None = None
+    env_kwargs: dict[str, Any] | None = None
     image_key: str = "observation.images.wrist"
     strict_observation_keys: bool = False
     fail_fast: bool = False
@@ -303,6 +306,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             task=config.task,
             state_vector=config.state_vector,
             max_steps=config.max_steps_per_episode,
+            env_id=config.env_id,
+            env_kwargs=config.env_kwargs,
         ))
         env_built = True
         trace.write("environment.built", {"type": config.env_type})
