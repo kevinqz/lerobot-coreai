@@ -25,6 +25,14 @@ from .policy import CoreAIPolicy
 from .reports import infer_shape, now_iso, save_json
 from .serialization import make_json_safe_observation
 from .shadow_quality import ShadowQualityConfig, ShadowQualityResult, evaluate_shadow_quality
+from .safety_profiles import resolve_safety_profile
+from .safety_supervisor import SafetyContext, SafetySupervisor, safe_evaluate
+from .safety_reports import (
+    SafetyAccumulator,
+    append_safety_decision,
+    build_safety_summary,
+    build_safety_summary_markdown,
+)
 from .trace import TraceWriter
 from .validation import validate_robot_type
 
@@ -69,6 +77,14 @@ class ShadowConfig:
     live_every: int = 1
     quality_config: ShadowQualityConfig | None = None
     fail_on_quality: bool = False
+    # Runtime safety supervisor (v0.9.0) — diagnostic only.
+    # Shadow ALWAYS blocks every action via ActionBlocker regardless of the
+    # supervisor. Enabling the supervisor only adds auditable decisions so
+    # safety profiles can be calibrated with zero egress risk. Default off.
+    supervisor_mode: str = "off"
+    safety_profile: Path | None = None
+    safety_profile_name: str | None = None
+    safety_report: bool = True
 
 
 @dataclass
@@ -226,6 +242,21 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     }
     errors: list[dict[str, Any]] = []
     steps_completed = 0
+
+    # v0.9.0: optional diagnostic safety supervisor (shadow still blocks all).
+    supervisor_mode = config.supervisor_mode
+    supervisor: SafetySupervisor | None = None
+    safety_profile_obj = None
+    safety_acc: SafetyAccumulator | None = None
+    safety_report_path: Path | None = None
+    if supervisor_mode != "off":
+        safety_profile_obj = resolve_safety_profile(
+            path=config.safety_profile, name=config.safety_profile_name,
+        )
+        supervisor = SafetySupervisor(safety_profile_obj, mode=supervisor_mode)
+        safety_acc = SafetyAccumulator(profile=safety_profile_obj.name, mode=supervisor_mode)
+        if config.safety_report:
+            safety_report_path = output_dir / "safety_report.jsonl"
 
     # v0.7.2: live metrics collector + adapter config.
     live_collector = LiveMetricsCollector()
@@ -423,6 +454,23 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                     raise
                 continue
 
+            # v0.9.0: optional diagnostic supervision (never affects egress —
+            # ActionBlocker below is the final, unconditional block).
+            if supervisor is not None:
+                ctx = SafetyContext(
+                    mode="shadow", step=step,
+                    robot_type=policy.robot_type, policy_type=policy.policy_type,
+                )
+                supervised = safe_evaluate(supervisor, action, context=ctx)
+                if safety_report_path is not None:
+                    append_safety_decision(safety_report_path, supervised.decision, context=ctx)
+                if safety_acc is not None:
+                    safety_acc.add(supervised.decision)
+                trace.write("safety.decision", {
+                    "step": step, "allowed": supervised.decision.allowed,
+                    "reasons": supervised.decision.reasons,
+                })
+
             # Block the action (never send).
             blocked = blocker.block(action)
             metrics["actions_generated"] += 1
@@ -606,6 +654,28 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         quality=quality_section,
         adapter=adapter_section,
     )
+    # v0.9.0: attach diagnostic safety supervisor section (shadow never egresses).
+    if supervisor is not None and safety_acc is not None:
+        safety_summary = build_safety_summary(safety_acc)
+        if config.safety_report:
+            try:
+                save_json(output_dir / "safety_summary.json", safety_summary)
+                (output_dir / "safety_summary.md").write_text(
+                    build_safety_summary_markdown(safety_summary))
+            except Exception:
+                pass  # best-effort
+        report["safety_supervisor"] = {
+            "enabled": True,
+            "mode": supervisor_mode,
+            "profile": safety_acc.profile,
+            "actions_supervised": safety_acc.actions_supervised,
+            "actions_allowed": safety_acc.actions_allowed,
+            "actions_blocked": safety_acc.actions_blocked,
+            "actions_modified": safety_acc.actions_modified,
+            "critical_failures": safety_acc.critical_failures,
+            "top_reasons": safety_acc.top_reasons(),
+            "note": "Shadow mode blocks all actions via ActionBlocker; supervisor is diagnostic only.",
+        }
     save_json(report_path, report)
     trace.write("shadow.completed", {"ok": not quality_failed, "steps": steps_completed})
     trace.close()

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/safety-report.schema.json",
+  "title": "lerobot-coreai safety summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "profile",
+    "mode",
+    "actions_supervised",
+    "actions_allowed",
+    "actions_blocked",
+    "actions_modified",
+    "critical_failures",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.safety_summary.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "profile": {"type": "string"},
+    "mode": {"type": "string", "enum": ["off", "report_only", "enforce"]},
+    "actions_supervised": {"type": "integer", "minimum": 0},
+    "actions_allowed": {"type": "integer", "minimum": 0},
+    "actions_blocked": {"type": "integer", "minimum": 0},
+    "actions_modified": {"type": "integer", "minimum": 0},
+    "critical_failures": {"type": "integer", "minimum": 0},
+    "would_block_actions": {"type": "integer", "minimum": 0},
+    "critical_findings": {"type": "integer", "minimum": 0},
+    "top_reasons": {"type": "object"},
+    "passed": {"type": "boolean"},
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_physical_safety",
+        "proves_real_world_safety",
+        "proves_real_task_success"
+      ],
+      "properties": {
+        "proves_software_supervision": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "proves_real_task_success": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

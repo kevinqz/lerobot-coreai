@@ -261,6 +261,9 @@ def _build_bundle_manifest(
         "observations.jsonl": "observations",
         "episode_metrics.csv": "episode_metrics_csv",
         "step_metrics.csv": "step_metrics_csv",
+        "safety_report.jsonl": "safety_report",
+        "safety_summary.json": "safety_summary",
+        "safety_summary.md": "safety_summary_md",
     }
     files_map = {"checksums": "checksums.json"}
     for f in files_copied:
@@ -299,6 +302,7 @@ def _build_bundle_manifest(
             "proves_real_world_safety": claims.get("proves_real_world_safety"),
         },
         "files": files_map,
+        "safety_supervisor": report.get("safety_supervisor"),
         "warnings": warnings,
     }
 
@@ -447,6 +451,10 @@ def package_sim_run(config: SimBundleConfig) -> SimBundleResult:
         ("failure_taxonomy.json", config.include_failure_taxonomy),
         ("episode_metrics.csv", config.include_csv),
         ("step_metrics.csv", config.include_csv),
+        # v0.9.0 safety supervisor artifacts (small; always included if present).
+        ("safety_report.jsonl", True),
+        ("safety_summary.json", True),
+        ("safety_summary.md", True),
     ]
     for fname, enabled in optional_files:
         if not enabled:
@@ -606,6 +614,19 @@ def verify_sim_bundle(bundle_dir: Path) -> SimBundleVerificationResult:
             )
         except json.JSONDecodeError as e:
             invariant_failures.append(f"source report unreadable: {e}")
+
+    # (6) If a safety summary is bundled, it must not overclaim.
+    safety_summary_path = bundle_dir / "source_run" / "safety_summary.json"
+    if safety_summary_path.is_file():
+        try:
+            ss = json.loads(safety_summary_path.read_text())
+            claims = ss.get("claims", {}) or {}
+            for key in ("proves_physical_safety", "proves_real_world_safety",
+                        "proves_real_task_success"):
+                if claims.get(key) is not False:
+                    invariant_failures.append(f"safety summary claims.{key} is not false")
+        except json.JSONDecodeError as e:
+            invariant_failures.append(f"safety summary unreadable: {e}")
 
     result.invariant_failures = invariant_failures
     result.warnings = warnings

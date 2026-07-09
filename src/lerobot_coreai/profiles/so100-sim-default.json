@@ -1,0 +1,21 @@
+{
+  "schema_version": "lerobot-coreai.safety_profile.v0",
+  "name": "so100-sim-default",
+  "description": "Conservative software bounds for SO-100-family policies in simulation (16x7 action, normalized [-1,1], bounded step delta and L2 norm). Illustrative software guard only — NOT a certified hardware safety envelope and NOT proof of physical robot safety.",
+  "robot_type": "so100",
+  "action_shape": [16, 7],
+  "min_action": -1.0,
+  "max_action": 1.0,
+  "max_abs_action": 1.0,
+  "max_delta": 0.5,
+  "max_l2_norm": 8.0,
+  "allow_nan": false,
+  "allow_inf": false,
+  "allow_shape_change": false,
+  "clip_to_bounds": true,
+  "block_on_clip": false,
+  "require_finite": true,
+  "require_known_shape": true,
+  "require_robot_type_match": true,
+  "mode": "fail_closed"
+}
