@@ -281,6 +281,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Print live metrics every N steps (default: 1)")
     p_sim.add_argument("--confirm-sim-egress", dest="confirm_sim_egress", action="store_true",
                        help="Confirm that actions may be sent to the simulator (required)")
+    # Analytics artifacts (v0.8.2).
+    p_sim.add_argument("--export-csv", dest="export_csv", action="store_true",
+                       help="Write episode_metrics.csv and step_metrics.csv")
+    p_sim.add_argument("--no-summary-md", dest="summary_md", action="store_false",
+                       help="Do not write sim_summary.md (written by default)")
+    p_sim.add_argument("--no-failure-taxonomy", dest="failure_taxonomy", action="store_false",
+                       help="Do not write failure_taxonomy.json (written by default)")
     p_sim.add_argument("--json", action="store_true")
     p_sim.set_defaults(func=cmd_sim)
 
@@ -890,6 +897,9 @@ def cmd_sim(args: argparse.Namespace) -> int:
         live=getattr(args, "live", False),
         live_every=getattr(args, "live_every", 1),
         confirm_sim_egress=getattr(args, "confirm_sim_egress", False),
+        export_csv=getattr(args, "export_csv", False),
+        summary_md=getattr(args, "summary_md", True),
+        failure_taxonomy=getattr(args, "failure_taxonomy", True),
     )
 
     if not args.json:
@@ -940,6 +950,16 @@ def cmd_sim(args: argparse.Namespace) -> int:
     print(f"  observations: {result.observations_path}")
     print(f"  trace:        {result.trace_path}")
     print(f"  report:       {result.report_path}")
+    files = result.report.get("files", {})
+    if files.get("summary"):
+        print(f"  summary:      {result.output_dir / files['summary']}")
+    if files.get("failure_taxonomy"):
+        print(f"  taxonomy:     {result.output_dir / files['failure_taxonomy']}")
+    if files.get("episode_metrics_csv"):
+        print(f"  episode csv:  {result.output_dir / files['episode_metrics_csv']}")
+        print(f"  step csv:     {result.output_dir / files['step_metrics_csv']}")
+    elif not getattr(args, "export_csv", False):
+        print("  CSV exports:  disabled (use --export-csv to write episode/step metrics)")
     print("=" * 50)
     print("Sim run completed successfully.")
 

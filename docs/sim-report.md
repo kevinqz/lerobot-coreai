@@ -118,3 +118,16 @@ If the environment does not provide a `success` signal in its `info` dict,
   "errors": []
 }
 ```
+
+## Optional analytics sections (v0.8.2)
+
+v0.8.2 adds four optional sections to `sim_report.json`:
+
+- `episode_metrics` — reward/success/step aggregates across episodes
+- `latency_metrics` — runner / loop / env-step percentiles (p50/p95/max)
+- `action_metrics` — mean/max abs action, NaN/Inf counts, unique shapes, shape changes
+- `failure_metrics` — error counts by category and overall error rate
+
+These sections are optional — older reports without them remain valid. See
+[Sim Analytics](sim-analytics.md) for details. These are simulator analytics
+only. They do not prove real-world task success or physical robot safety.

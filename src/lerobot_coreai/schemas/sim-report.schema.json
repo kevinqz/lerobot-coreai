@@ -84,6 +84,26 @@
       "type": "object",
       "additionalProperties": true,
       "description": "Optional per-run timing/action diagnostics"
+    },
+    "episode_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional sim episode analytics (v0.8.2). Simulator analytics only."
+    },
+    "latency_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional sim latency analytics (v0.8.2). Simulator analytics only."
+    },
+    "action_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional sim action diagnostics (v0.8.2). Simulator analytics only."
+    },
+    "failure_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional sim failure analytics (v0.8.2). Simulator analytics only."
     }
   }
 }

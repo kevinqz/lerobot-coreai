@@ -23,13 +23,16 @@ from typing import Any
 
 from . import __version__
 from .errors import CoreAIPolicyError
+from .failure_taxonomy import build_failure_taxonomy
 from .live_metrics import LiveMetricSample, LiveMetricsCollector, summarize_action
 from .observation_adapters import ObservationAdapterConfig, adapt_observation
 from .policy import CoreAIPolicy
 from .reports import infer_shape, now_iso, save_json
 from .serialization import make_json_safe_observation
+from .sim_analytics import build_sim_analytics, write_episode_metrics_csv, write_step_metrics_csv
 from .sim_egress import SimEgress
 from .sim_envs import SimEnvConfig, SimEnvironment, build_sim_environment
+from .sim_summary import build_sim_summary_markdown
 from .trace import TraceWriter
 from .validation import validate_robot_type
 
@@ -63,6 +66,10 @@ class SimConfig:
     live: bool = False
     live_every: int = 1
     confirm_sim_egress: bool = False
+    # Analytics artifacts (v0.8.2).
+    export_csv: bool = False
+    summary_md: bool = True
+    failure_taxonomy: bool = True
 
 
 @dataclass
@@ -109,6 +116,10 @@ def build_sim_report(
     files: dict[str, str],
     errors: list[dict[str, Any]],
     live_metrics: dict[str, Any] | None = None,
+    episode_metrics: dict[str, Any] | None = None,
+    latency_metrics: dict[str, Any] | None = None,
+    action_metrics: dict[str, Any] | None = None,
+    failure_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the sim_report.json dict.
 
@@ -154,6 +165,15 @@ def build_sim_report(
     }
     if live_metrics is not None:
         report["live_metrics"] = live_metrics
+    # v0.8.2 analytics sections (only included when present).
+    if episode_metrics is not None:
+        report["episode_metrics"] = episode_metrics
+    if latency_metrics is not None:
+        report["latency_metrics"] = latency_metrics
+    if action_metrics is not None:
+        report["action_metrics"] = action_metrics
+    if failure_metrics is not None:
+        report["failure_metrics"] = failure_metrics
     return report
 
 
@@ -445,8 +465,11 @@ def run_sim_mode(config: SimConfig) -> SimResult:
 
                 # Egress action to the simulator (never to a robot).
                 metrics["actions_generated"] += 1
+                env_step_ms: float | None = None
                 try:
+                    env_step_started = time.monotonic()
                     egress_result, next_obs, reward, done, info = egress.send_to_simulator(env, action)
+                    env_step_ms = (time.monotonic() - env_step_started) * 1000.0
                     metrics["actions_sent_to_simulator"] += 1
                 except Exception as e:
                     metrics["env_errors"] += 1
@@ -493,6 +516,7 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                     "timing": {
                         "runner_total_ms": runner_total_ms,
                         "loop_total_ms": loop_total_ms,
+                        "env_step_ms": env_step_ms,
                     },
                     "diagnostics": {
                         "mean_abs": action_diag["mean_abs"],
@@ -603,6 +627,20 @@ def run_sim_mode(config: SimConfig) -> SimResult:
     final_metrics["mean_episode_reward"] = mean_episode_reward
     final_metrics["success_rate"] = success_rate
 
+    # v0.8.2: build analytics from the JSONL artifacts written so far, and
+    # generate the audit artifacts (CSV/summary/taxonomy). Re-reading the JSONL
+    # files is simpler than threading every record through memory and is fine
+    # for the run sizes sim mode targets.
+    analytics = build_sim_analytics(
+        actions_path=actions_path,
+        episodes_path=episodes_path,
+        errors=errors,
+    )
+    episode_analytics = analytics["episode_metrics"]
+    latency_analytics = analytics["latency_metrics"]
+    action_analytics = analytics["action_metrics"]
+    failure_analytics = analytics["failure_metrics"]
+
     files_map = {
         "actions": "actions.jsonl",
         "episodes": "episodes.jsonl",
@@ -610,6 +648,32 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         "trace": "sim_trace.jsonl",
         "report": "sim_report.json",
     }
+
+    # Generate audit artifacts.
+    if config.export_csv:
+        episode_csv_path = output_dir / "episode_metrics.csv"
+        step_csv_path = output_dir / "step_metrics.csv"
+        try:
+            from .sim_analytics import load_jsonl
+            write_episode_metrics_csv(episode_csv_path, episode_summaries)
+            write_step_metrics_csv(step_csv_path, load_jsonl(actions_path))
+            files_map["episode_metrics_csv"] = "episode_metrics.csv"
+            files_map["step_metrics_csv"] = "step_metrics.csv"
+        except Exception:
+            pass  # best-effort; CSV is optional
+    if config.failure_taxonomy:
+        taxonomy_path = output_dir / "failure_taxonomy.json"
+        try:
+            save_json(taxonomy_path, build_failure_taxonomy(errors))
+            files_map["failure_taxonomy"] = "failure_taxonomy.json"
+        except Exception:
+            pass  # best-effort
+    summary_path: Path | None = None
+    if config.summary_md:
+        summary_path = output_dir / "sim_summary.md"
+        files_map["summary"] = "sim_summary.md"
+        # Content is written after the report is built (it reads the report dict).
+
     env_meta = {
         "type": config.env_type,
         "episodes": config.episodes,
@@ -640,9 +704,15 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                 files=files_map,
                 errors=errors,
                 live_metrics=live_summary,
+                episode_metrics=episode_analytics,
+                latency_metrics=latency_analytics,
+                action_metrics=action_analytics,
+                failure_metrics=failure_analytics,
             )
             try:
                 save_json(report_path, fail_report)
+                if summary_path is not None:
+                    summary_path.write_text(build_sim_summary_markdown(fail_report))
             except Exception:
                 pass  # best-effort
         trace.close()
@@ -660,8 +730,17 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         files=files_map,
         errors=errors,
         live_metrics=live_summary,
+        episode_metrics=episode_analytics,
+        latency_metrics=latency_analytics,
+        action_metrics=action_analytics,
+        failure_metrics=failure_analytics,
     )
     save_json(report_path, report)
+    if summary_path is not None:
+        try:
+            summary_path.write_text(build_sim_summary_markdown(report))
+        except Exception:
+            pass  # best-effort
     trace.write("sim.completed", {
         "ok": True,
         "episodes": episodes_completed,
