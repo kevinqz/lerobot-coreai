@@ -481,11 +481,11 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
 
             # v0.7.2: optional live console output.
             if config.live and (step % config.live_every == 0):
-                fps_est = 1000.0 / loop_total_ms if loop_total_ms > 0 else 0
+                proc_fps = 1000.0 / loop_total_ms if loop_total_ms > 0 else 0
                 print(
                     f"[shadow] step={step} obs=ok action=ok blocked=yes "
                     f"loop={loop_total_ms:.1f}ms runner={runner_total_ms or 0:.1f}ms "
-                    f"fps={fps_est:.1f} shape={action_diag['shape']}"
+                    f"processing_fps={proc_fps:.1f} shape={action_diag['shape']}"
                 )
 
             steps_completed += 1
@@ -514,7 +514,10 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 pass  # best-effort
 
     # v0.7.2: compute live metrics summary + quality evaluation for the report.
-    live_summary = live_collector.summary()
+    # Wall-clock duration includes setup, loop, and pacing sleeps — used for
+    # effective_fps (real paced rate). processing_fps comes from loop_ms sum.
+    loop_total_s = time.monotonic() - loop_start
+    live_summary = live_collector.summary(wall_duration_s=loop_total_s)
     total_steps_attempted = steps_completed + metrics["observation_errors"] + metrics["runner_errors"] + metrics["validation_errors"]
     error_rate = 0.0
     if total_steps_attempted > 0:
@@ -538,7 +541,6 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     # Failure path — write the failure report (after finally, so source_closed is correct).
     if fatal_error is not None:
         if policy is not None:
-            loop_total_s = time.monotonic() - loop_start
             fail_report = build_shadow_report(
                 ok=False,
                 policy=policy,
@@ -576,7 +578,6 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     quality_failed = quality_result is not None and not quality_result.passed and config.fail_on_quality
 
     # Success path — build the report.
-    loop_total_s = time.monotonic() - loop_start
     final_metrics = _finalize_metrics(metrics, loop_times_ms, runner_times_ms)
     files_map = {
         "actions": "actions.jsonl",

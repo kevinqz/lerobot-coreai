@@ -18,6 +18,7 @@ def _summary(**overrides):
         "max_loop_ms": 35.4,
         "mean_runner_ms": 12.3,
         "p95_runner_ms": 15.2,
+        "processing_fps": 63.3,
         "effective_fps": 9.7,
         "latency_spikes": 0,
         "nan_actions": 0,

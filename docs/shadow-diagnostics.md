@@ -21,7 +21,7 @@ quality gate failures set `result.ok=False`.
 | NaN actions | `max_nan_actions` (internal) | Max acceptable NaN action values |
 | Inf actions | `max_inf_actions` (internal) | Max acceptable Inf action values |
 | Shape changes | `allow_action_shape_changes` (internal) | Whether action shape may change mid-run |
-| Min effective FPS | `--quality.min-effective-fps` | Minimum achieved FPS |
+| Min effective FPS | `--quality.min-effective-fps` | Minimum real paced FPS (wall-clock, includes sleep) |
 
 ## Usage
 
@@ -54,6 +54,10 @@ The `quality` section in `shadow_report.json`:
       {"name": "max_inf_actions", "passed": true, "value": 0, "threshold": 0},
       {"name": "no_action_shape_changes", "passed": true, "value": 0, "threshold": 0},
       {"name": "min_effective_fps", "passed": true, "value": 9.7, "threshold": 5.0}
+
+> `min_effective_fps` checks the **real paced FPS** (wall-clock duration including
+> sleep/pacing), not the compute-only `processing_fps`. When `fps=0` (no pacing),
+> `effective_fps` is `None` and this gate is skipped.
     ]
   }
 }

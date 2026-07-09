@@ -40,8 +40,15 @@ class LiveMetricsCollector:
     def add(self, sample: LiveMetricSample) -> None:
         self.samples.append(sample)
 
-    def summary(self) -> dict[str, Any]:
-        """Produce a summary dict for the shadow report."""
+    def summary(self, *, wall_duration_s: float | None = None) -> dict[str, Any]:
+        """Produce a summary dict for the shadow report.
+
+        Args:
+            wall_duration_s: Real wall-clock duration of the run (including
+                sleep/pacing). When provided, ``effective_fps`` reflects the
+                true paced frame rate. ``processing_fps`` is always computed
+                from per-step ``loop_ms`` (compute-only, excludes sleep).
+        """
         if not self.samples:
             return {
                 "samples": 0,
@@ -51,6 +58,7 @@ class LiveMetricsCollector:
                 "max_loop_ms": None,
                 "mean_runner_ms": None,
                 "p95_runner_ms": None,
+                "processing_fps": None,
                 "effective_fps": None,
                 "latency_spikes": 0,
                 "nan_actions": 0,
@@ -60,7 +68,7 @@ class LiveMetricsCollector:
 
         loop_times = [s.loop_ms for s in self.samples if s.loop_ms is not None]
         runner_times = [s.runner_ms for s in self.samples if s.runner_ms is not None]
-        total_duration_s = self._total_duration()
+        processing_duration_s = self._total_duration()
         nan_count = sum(s.action_nan_count for s in self.samples)
         inf_count = sum(s.action_inf_count for s in self.samples)
 
@@ -73,9 +81,15 @@ class LiveMetricsCollector:
             mean_loop = sum(loop_times) / len(loop_times)
             latency_spikes = sum(1 for t in loop_times if t > 2 * mean_loop)
 
+        # processing_fps: compute-only throughput (excludes sleep/pacing).
+        processing_fps = None
+        if processing_duration_s and processing_duration_s > 0:
+            processing_fps = len(self.samples) / processing_duration_s
+
+        # effective_fps: real paced rate including sleep, from wall-clock duration.
         effective_fps = None
-        if total_duration_s and total_duration_s > 0:
-            effective_fps = len(self.samples) / total_duration_s
+        if wall_duration_s is not None and wall_duration_s > 0:
+            effective_fps = len(self.samples) / wall_duration_s
 
         return {
             "samples": len(self.samples),
@@ -85,6 +99,7 @@ class LiveMetricsCollector:
             "max_loop_ms": max(loop_times) if loop_times else None,
             "mean_runner_ms": _mean(runner_times),
             "p95_runner_ms": _percentile(runner_times, 95),
+            "processing_fps": processing_fps,
             "effective_fps": effective_fps,
             "latency_spikes": latency_spikes,
             "nan_actions": nan_count,
@@ -93,7 +108,7 @@ class LiveMetricsCollector:
         }
 
     def _total_duration(self) -> float | None:
-        """Estimate total duration from loop_ms samples."""
+        """Compute processing duration from loop_ms samples (excludes sleep)."""
         loop_times = [s.loop_ms for s in self.samples if s.loop_ms is not None]
         if not loop_times:
             return None

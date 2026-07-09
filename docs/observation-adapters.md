@@ -8,8 +8,8 @@ into the shape the policy expects. Added in v0.7.2.
 - Inject `task` text into observations
 - Inject `observation.state` from a vector or JSON file
 - Map image key aliases (`camera_front` → `observation.images.front`)
-- Check required keys (explicit or manifest-driven)
-- Drop unknown keys not in the manifest
+- Check explicit required keys (config-provided via `--adapter.required-keys`)
+- When `--adapter.drop-unknown-keys` is set, filter to manifest keys and warn about dropped ones
 
 Adapters return warnings for non-fatal issues and raise for fatal ones (missing required
 key, invalid state JSON, non-numeric state vector).

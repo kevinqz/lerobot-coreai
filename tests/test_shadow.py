@@ -413,3 +413,192 @@ class TestShadowTraceClose:
         assert "shadow.completed" in trace_text
         assert "observation_source.closed" in trace_text
 
+
+class TestShadowDiagnostics:
+    """Integration tests for v0.7.2 diagnostics: live_metrics, adapter, quality, action diagnostics."""
+
+    def test_report_contains_live_metrics(self, tmp_path, valid_manifest_dict):
+        """shadow_report.json should contain live_metrics with processing_fps."""
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=4)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=4,
+                fps=0,
+            )
+            result = run_shadow_mode(config)
+
+        assert "live_metrics" in result.report
+        lm = result.report["live_metrics"]
+        assert lm["samples"] == 4
+        assert lm["mean_loop_ms"] is not None
+        assert "processing_fps" in lm
+        assert lm["processing_fps"] is not None
+        # fps=0 means no pacing → effective_fps from wall duration
+        assert "effective_fps" in lm
+
+    def test_report_contains_adapter(self, tmp_path, valid_manifest_dict):
+        """shadow_report.json should contain adapter section."""
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+            )
+            result = run_shadow_mode(config)
+
+        assert "adapter" in result.report
+        assert result.report["adapter"]["image_key"] == "observation.images.wrist"
+        assert result.report["adapter"]["required_keys"] == []
+        assert result.report["adapter"]["warnings"] == []
+
+    def test_quality_section_when_config_set(self, tmp_path, valid_manifest_dict):
+        """Quality section should appear when quality_config is provided."""
+        from lerobot_coreai.shadow_quality import ShadowQualityConfig
+
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+                quality_config=ShadowQualityConfig(max_runner_p95_ms=50.0),
+            )
+            result = run_shadow_mode(config)
+
+        assert "quality" in result.report
+        assert result.report["quality"]["passed"] is True
+        assert len(result.report["quality"]["checks"]) > 0
+
+    def test_quality_section_absent_without_config(self, tmp_path, valid_manifest_dict):
+        """Quality section should NOT appear when no quality_config is set."""
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+            )
+            result = run_shadow_mode(config)
+
+        assert "quality" not in result.report
+
+    def test_actions_jsonl_contains_diagnostics(self, tmp_path, valid_manifest_dict):
+        """Each successful action record in actions.jsonl should include diagnostics."""
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=3)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=3,
+                fps=0,
+            )
+            result = run_shadow_mode(config)
+
+        lines = result.actions_path.read_text().strip().split("\n")
+        assert len(lines) == 3
+        for line in lines:
+            record = json.loads(line)
+            assert record["ok"] is True
+            assert "diagnostics" in record
+            diag = record["diagnostics"]
+            assert "mean_abs" in diag
+            assert "max_abs" in diag
+            assert "nan_count" in diag
+            assert "inf_count" in diag
+
+    def test_fail_on_quality_true_sets_ok_false(self, tmp_path, valid_manifest_dict):
+        """fail_on_quality=True should set result.ok=False when quality fails."""
+        from lerobot_coreai.shadow_quality import ShadowQualityConfig
+
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        # Mock returns timing.total_ms=12.3, so max_runner_p95_ms=0.0001 will fail.
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+                quality_config=ShadowQualityConfig(max_runner_p95_ms=0.0001),
+                fail_on_quality=True,
+            )
+            result = run_shadow_mode(config)
+
+        assert result.ok is False
+        assert result.report["ok"] is False
+        assert result.report["quality"]["passed"] is False
+
+    def test_fail_on_quality_false_keeps_ok_true(self, tmp_path, valid_manifest_dict):
+        """fail_on_quality=False (default) should keep result.ok=True even when quality fails."""
+        from lerobot_coreai.shadow_quality import ShadowQualityConfig
+
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+                quality_config=ShadowQualityConfig(max_runner_p95_ms=0.0001),
+                fail_on_quality=False,
+            )
+            result = run_shadow_mode(config)
+
+        assert result.ok is True
+        assert result.report["quality"]["passed"] is False
+
+    def test_adapter_warnings_when_keys_dropped(self, tmp_path, valid_manifest_dict):
+        """Adapter should warn when non-manifest keys are dropped."""
+        # Build fixtures with an extra key not in the manifest.
+        fixtures_dir = tmp_path / "fixtures"
+        fixtures_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(2):
+            (fixtures_dir / f"{i:06d}.json").write_text(json.dumps({
+                "observation.state": [0.0] * 7,
+                "observation.images.wrist": "wrist.png",
+                "observation.images.front": "front.png",  # not in manifest
+                "task": "pick up the cube",
+            }))
+
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+                drop_unknown_keys=True,
+            )
+            result = run_shadow_mode(config)
+
+        warnings = result.report["adapter"]["warnings"]
+        assert any("Dropped non-manifest keys" in w for w in warnings)
+

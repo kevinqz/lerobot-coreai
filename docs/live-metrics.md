@@ -28,11 +28,16 @@ The `live_metrics` section in `shadow_report.json`:
 | `max_loop_ms` | Maximum per-step wall time |
 | `mean_runner_ms` | Mean runner predict time |
 | `p95_runner_ms` | 95th percentile runner predict time |
-| `effective_fps` | Achieved FPS based on loop time |
+| `processing_fps` | Compute-only throughput (excludes sleep/pacing) |
+| `effective_fps` | Real paced FPS from wall-clock duration (includes sleep) |
 | `latency_spikes` | Steps where loop_ms > 2× mean |
 | `nan_actions` | Total NaN action values across run |
 | `inf_actions` | Total Inf action values across run |
 | `shape_changes` | Steps where action shape changed from previous |
+
+`processing_fps` shows how fast the system can infer (read → predict → block → log).
+`effective_fps` shows how close the run stayed to the target FPS, including pacing sleeps.
+When `fps=0` (no pacing), `effective_fps` is `None` and only `processing_fps` is reported.
 
 ## Action diagnostics in actions.jsonl
 
@@ -60,7 +65,7 @@ lerobot-coreai shadow --live --live-every 1 ...
 
 Output format:
 ```
-[shadow] step=12 obs=ok action=ok blocked=yes loop=15.8ms runner=12.3ms fps=9.8 shape=[16,7]
+[shadow] step=12 obs=ok action=ok blocked=yes loop=15.8ms runner=12.3ms processing_fps=63.3 shape=[16,7]
 ```
 
 Use `--live-every N` to print every N steps instead of every step.

@@ -41,6 +41,8 @@ class TestLiveMetricsCollector:
         assert s["samples"] == 0
         assert s["mean_loop_ms"] is None
         assert s["p95_loop_ms"] is None
+        assert s["processing_fps"] is None
+        assert s["effective_fps"] is None
 
     def test_add_and_summary(self):
         c = LiveMetricsCollector()
@@ -61,14 +63,42 @@ class TestLiveMetricsCollector:
         assert s["p95_loop_ms"] is not None
         assert s["p95_loop_ms"] >= s["p50_loop_ms"]
 
-    def test_effective_fps(self):
+    def test_processing_fps(self):
         c = LiveMetricsCollector()
-        # 10 samples at 100ms each = 1 second total → 10 fps
+        # 10 samples at 100ms each = 1 second processing → 10 fps
         for i in range(10):
             c.add(LiveMetricSample(step=i, ts=f"t{i}", loop_ms=100.0))
         s = c.summary()
+        assert s["processing_fps"] is not None
+        assert abs(s["processing_fps"] - 10.0) < 1.0
+
+    def test_effective_fps_from_wall_duration(self):
+        """effective_fps uses wall-clock duration (includes sleep/pacing)."""
+        c = LiveMetricsCollector()
+        # 10 samples, processing time = 1s, but wall duration = 2s (sleep)
+        for i in range(10):
+            c.add(LiveMetricSample(step=i, ts=f"t{i}", loop_ms=100.0))
+        s = c.summary(wall_duration_s=2.0)
+        assert s["processing_fps"] is not None
+        assert abs(s["processing_fps"] - 10.0) < 1.0
         assert s["effective_fps"] is not None
-        assert abs(s["effective_fps"] - 10.0) < 1.0
+        assert abs(s["effective_fps"] - 5.0) < 1.0
+
+    def test_effective_fps_none_without_wall_duration(self):
+        """Without wall_duration_s, effective_fps is None (processing_fps only)."""
+        c = LiveMetricsCollector()
+        c.add(LiveMetricSample(step=0, ts="t0", loop_ms=100.0))
+        s = c.summary()
+        assert s["processing_fps"] is not None
+        assert s["effective_fps"] is None
+
+    def test_processing_fps_none_when_no_loop_ms(self):
+        """When samples have no loop_ms, processing_fps is None."""
+        c = LiveMetricsCollector()
+        c.add(LiveMetricSample(step=0, ts="t0", loop_ms=None))
+        s = c.summary(wall_duration_s=1.0)
+        assert s["processing_fps"] is None
+        assert s["effective_fps"] is not None  # still computable from wall_duration
 
     def test_nan_actions_accumulate(self):
         c = LiveMetricsCollector()
