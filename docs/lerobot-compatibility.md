@@ -61,12 +61,13 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 - **v0.6**: export/verify/package pipeline
 - **v0.7**: motor-blocked shadow mode
 - **v0.7.1**: optional camera observation source (`[camera]` extra)
-- **v0.7.2** (current): observation adapters, live metrics, run quality diagnostics
-- **v0.8**: sim mode (action egress to simulator only)
+- **v0.7.2**: observation adapters, live metrics, run quality diagnostics
+- **v0.8** (current): sim mode (action egress to simulator only)
 
 ## Hardware
 
-- v0.7 has **zero** code paths for sending robot commands
+- v0.8 has **zero** code paths for sending robot commands
 - Shadow mode blocks all action egress via `ActionBlocker`
+- Sim mode sends actions to a simulator via `SimEgress`; robot egress always raises
 - No serial, dynamixel, feetech, motor bus, or teleop imports
-- Verified by automated tests (`test_no_hardware_actuation.py`, `test_shadow_no_actuation.py`)
+- Verified by automated tests (`test_no_hardware_actuation.py`, `test_shadow_no_actuation.py`, `test_sim_no_robot_actuation.py`)

@@ -22,6 +22,7 @@ from .eval import EvalConfig, run_lerobot_dataset_eval
 from .compare import CompareConfig, run_lerobot_policy_compare
 from .export import ExportConfig, run_coreai_export_pipeline
 from .shadow import ShadowConfig, run_shadow_mode
+from .sim import SimConfig, run_sim_mode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -239,6 +240,47 @@ def build_parser() -> argparse.ArgumentParser:
     p_shadow.add_argument("--json", action="store_true")
     p_shadow.set_defaults(func=cmd_shadow)
 
+    # --- sim (v0.8) — simulator-only action egress ---
+    p_sim = sub.add_parser("sim", help="Run simulator-only sim mode (v0.8)")
+    p_sim.add_argument("--policy.path", dest="policy_path", required=True,
+                       help="HF repo id of the CoreAI artifact")
+    p_sim.add_argument("--env.type", dest="env_type", required=True,
+                       choices=["fake", "replay"],
+                       help="Simulator environment type (v0.8.0: fake, replay)")
+    p_sim.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock",
+                       help="coreai-runner URL (default: unix socket)")
+    p_sim.add_argument("--output-dir", dest="output_dir", required=True,
+                       help="Output directory for reports/logs")
+    p_sim.add_argument("--robot.type", dest="robot_type")
+    # Environment args.
+    p_sim.add_argument("--env.config", dest="env_config",
+                       help="Environment config JSON (for --env.type replay)")
+    p_sim.add_argument("--env.render", dest="env_render", action="store_true")
+    p_sim.add_argument("--env.record-video", dest="env_record_video", action="store_true")
+    p_sim.add_argument("--env.video-dir", dest="env_video_dir")
+    # Observation args.
+    p_sim.add_argument("--task", dest="task", help="Task text to include in each observation")
+    p_sim.add_argument("--state-vector", dest="state_vector",
+                       help="Comma-separated floats for observation.state")
+    p_sim.add_argument("--image-key", dest="image_key", default="observation.images.wrist",
+                       help="Observation key for image frames (default: observation.images.wrist)")
+    # Loop args.
+    p_sim.add_argument("--episodes", dest="episodes", type=int, default=1)
+    p_sim.add_argument("--max-steps-per-episode", dest="max_steps_per_episode", type=int, default=300)
+    p_sim.add_argument("--seed", dest="seed", type=int)
+    p_sim.add_argument("--fps", dest="fps", type=float, default=0.0)
+    p_sim.add_argument("--strict", dest="strict", action="store_true")
+    p_sim.add_argument("--fail-fast", dest="fail_fast", action="store_true")
+    p_sim.add_argument("--overwrite", dest="overwrite", action="store_true")
+    p_sim.add_argument("--live", dest="live", action="store_true",
+                       help="Print live metrics per step")
+    p_sim.add_argument("--live-every", dest="live_every", type=int, default=1,
+                       help="Print live metrics every N steps (default: 1)")
+    p_sim.add_argument("--confirm-sim-egress", dest="confirm_sim_egress", action="store_true",
+                       help="Confirm that actions may be sent to the simulator (required)")
+    p_sim.add_argument("--json", action="store_true")
+    p_sim.set_defaults(func=cmd_sim)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -276,8 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.7. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, eval, compare, export.",
+        f"'{args.command}' is not implemented in v0.8. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -788,6 +830,96 @@ def cmd_shadow(args: argparse.Namespace) -> int:
     print(f"  report:          {result.report_path}")
     print("=" * 50)
     print("Shadow run completed successfully.")
+
+    return 0
+
+
+# MARK: - sim (v0.8 — simulator-only action egress)
+
+def cmd_sim(args: argparse.Namespace) -> int:
+    """Run simulator-only sim mode: observe, generate actions, egress to simulator only."""
+    from .errors import CoreAIPolicyError
+
+    # Parse state-vector (comma-separated floats) if provided.
+    state_vector = None
+    if args.state_vector:
+        state_vector = [float(v.strip()) for v in args.state_vector.split(",")]
+
+    config = SimConfig(
+        policy_path=args.policy_path,
+        runner_url=args.runner_url,
+        output_dir=Path(args.output_dir),
+        env_type=args.env_type,
+        robot_type=args.robot_type,
+        task=args.task,
+        state_vector=state_vector,
+        image_key=args.image_key,
+        env_config=Path(args.env_config) if args.env_config else None,
+        env_render=getattr(args, "env_render", False),
+        env_record_video=getattr(args, "env_record_video", False),
+        env_video_dir=Path(args.env_video_dir) if args.env_video_dir else None,
+        episodes=args.episodes,
+        max_steps_per_episode=args.max_steps_per_episode,
+        seed=args.seed,
+        fps=args.fps,
+        strict_observation_keys=args.strict,
+        fail_fast=args.fail_fast,
+        overwrite=args.overwrite,
+        live=getattr(args, "live", False),
+        live_every=getattr(args, "live_every", 1),
+        confirm_sim_egress=getattr(args, "confirm_sim_egress", False),
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai sim")
+        print("=" * 50)
+        print(f"Policy: {args.policy_path}")
+        print(f"Mode: sim")
+        print(f"Environment: {args.env_type}")
+        print(f"Runner: {args.runner_url}")
+        print(f"Episodes: {args.episodes}")
+        print(f"Max steps/episode: {args.max_steps_per_episode}")
+        print(f"FPS target: {args.fps}")
+
+    try:
+        result = run_sim_mode(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Sim failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        report_path = Path(args.output_dir) / "sim_report.json"
+        if report_path.exists():
+            print(f"Failure report: {report_path}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0 if result.ok else 1
+
+    m = result.report.get("metrics", {})
+    print()
+    print(f"✓ Policy loaded")
+    print(f"✓ Runner supports action")
+    print(f"✓ Environment built ({args.env_type})")
+    print(f"✓ {m.get('episodes_completed', 0)} episodes completed")
+    print(f"✓ {m.get('steps_completed', 0)} steps completed")
+    print(f"✓ {m.get('actions_generated', 0)} actions generated")
+    print(f"✓ {m.get('actions_sent_to_simulator', 0)} actions sent to simulator")
+    print(f"✓ 0 actions sent to robot")
+    print(f"✓ No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  actions:      {result.actions_path}")
+    print(f"  episodes:     {result.episodes_path}")
+    print(f"  observations: {result.observations_path}")
+    print(f"  trace:        {result.trace_path}")
+    print(f"  report:       {result.report_path}")
+    print("=" * 50)
+    print("Sim run completed successfully.")
 
     return 0
 
