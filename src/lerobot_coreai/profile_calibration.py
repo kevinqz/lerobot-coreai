@@ -87,6 +87,7 @@ def read_action_samples(actions_path: Path) -> dict[str, Any]:
     invalid = 0
     nan_steps = 0
     inf_steps = 0
+    nonfinite = 0
     for line in actions_path.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -112,12 +113,14 @@ def read_action_samples(actions_path: Path) -> dict[str, Any]:
             nan_steps += 1
         if has_inf:
             inf_steps += 1
+        if has_nan or has_inf:
+            nonfinite += 1
         valid += 1
         flats.append(flat)
         shapes.append(tuple(shape) if shape is not None else None)
     return {
         "flats": flats, "shapes": shapes, "valid": valid, "invalid": invalid,
-        "nan_steps": nan_steps, "inf_steps": inf_steps,
+        "nan_steps": nan_steps, "inf_steps": inf_steps, "nonfinite": nonfinite,
     }
 
 
@@ -161,6 +164,11 @@ def compute_action_statistics(actions_path: Path) -> dict[str, Any]:
     return {
         "valid_actions": data["valid"],
         "invalid_actions": data["invalid"],
+        # v0.9.4: explicit parseable / finite / non-finite / used counts.
+        "parseable_actions": data["valid"],
+        "nonfinite_actions": data["nonfinite"],
+        "finite_actions": data["valid"] - data["nonfinite"],
+        "calibration_samples_used": len(flats),
         "nan_action_steps": data["nan_steps"],
         "inf_action_steps": data["inf_steps"],
         "shape_changes": shape_changes,
@@ -261,6 +269,10 @@ def build_calibration_report(
         "samples": stats["valid_actions"],
         "valid_actions": stats["valid_actions"],
         "invalid_actions": stats["invalid_actions"],
+        "parseable_actions": stats["parseable_actions"],
+        "finite_actions": stats["finite_actions"],
+        "nonfinite_actions": stats["nonfinite_actions"],
+        "calibration_samples_used": stats["calibration_samples_used"],
         "nan_action_steps": stats["nan_action_steps"],
         "inf_action_steps": stats["inf_action_steps"],
         "dominant_shape": stats["dominant_shape"],

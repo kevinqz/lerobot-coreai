@@ -89,6 +89,10 @@ class ApprovalRequest:
     artifacts: dict[str, dict[str, str]]
     warnings: list[str]
     approval_manifest_draft: dict[str, Any]
+    # v0.9.4: distinguish "required checks passed" from "warnings present" so the
+    # UX is unambiguous (ok = required passed AND (warnings allowed or none)).
+    required_checks_passed: bool = True
+    warnings_present: bool = False
 
 
 @dataclass
@@ -267,11 +271,15 @@ def build_approval_request(config: ApprovalConfig) -> ApprovalRequest:
         raise CoreAIPolicyError(
             f"Bundle manifest not found in {bundle_dir}. Package the run first.")
     checks, artifacts, warnings = _run_approval_checks(bundle_dir, config)
-    ok = not _required_failed(checks) and (config.allow_warnings or not warnings)
+    required_checks_passed = not _required_failed(checks)
+    warnings_present = bool(warnings)
+    ok = required_checks_passed and (config.allow_warnings or not warnings_present)
     draft = _build_manifest_dict(config, bundle_dir, checks, artifacts, warnings,
                                  approved=False, operator=None)
-    return ApprovalRequest(ok=ok, checks=checks, artifacts=artifacts,
-                           warnings=warnings, approval_manifest_draft=draft)
+    return ApprovalRequest(
+        ok=ok, checks=checks, artifacts=artifacts, warnings=warnings,
+        approval_manifest_draft=draft, required_checks_passed=required_checks_passed,
+        warnings_present=warnings_present)
 
 
 def approve_bundle(config: ApprovalConfig) -> dict[str, Any]:

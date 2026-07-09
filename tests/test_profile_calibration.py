@@ -45,6 +45,11 @@ def test_invalid_and_nan_counted(tmp_path):
     stats = compute_action_statistics(path)
     assert stats["invalid_actions"] == 2
     assert stats["nan_action_steps"] == 1
+    # v0.9.4: explicit parseable/finite/nonfinite/used counts.
+    assert stats["parseable_actions"] == 2   # the good one + the NaN one parse
+    assert stats["nonfinite_actions"] == 1
+    assert stats["finite_actions"] == 1
+    assert stats["calibration_samples_used"] == 2
 
 
 def test_calibration_uses_quantile_and_margin(tmp_path):

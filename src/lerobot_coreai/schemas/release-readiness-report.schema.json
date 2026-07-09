@@ -39,5 +39,21 @@
         "authorizes_unrestricted_real_world_actuation": {"type": "boolean", "const": false}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "comment": "A ready report must claim readiness for scope; a not-ready one must not.",
+      "if": {"properties": {"ready": {"const": true}}, "required": ["ready"]},
+      "then": {
+        "properties": {
+          "claims": {"properties": {"proves_release_readiness_for_scope": {"const": true}}}
+        }
+      },
+      "else": {
+        "properties": {
+          "claims": {"properties": {"proves_release_readiness_for_scope": {"const": false}}}
+        }
+      }
+    }
+  ]
 }

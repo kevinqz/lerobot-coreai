@@ -15,6 +15,24 @@ def test_malformed_summary_missing_counts_fails_closed():
         evaluate_safety_quality({"passed": True}, SafetyQualityConfig())
 
 
+def test_noninteger_count_field_fails_closed():
+    with pytest.raises(CoreAIPolicyError, match="actions_blocked must be"):
+        evaluate_safety_quality({
+            "actions_supervised": 10, "actions_blocked": "two", "actions_modified": 0,
+            "critical_failures": 0, "critical_findings": 0, "would_block_actions": 0,
+            "passed": True,
+        }, SafetyQualityConfig())
+
+
+def test_nonbool_passed_fails_closed():
+    with pytest.raises(CoreAIPolicyError, match="passed must be a boolean"):
+        evaluate_safety_quality({
+            "actions_supervised": 10, "actions_blocked": 0, "actions_modified": 0,
+            "critical_failures": 0, "critical_findings": 0, "would_block_actions": 0,
+            "passed": "yes",
+        }, SafetyQualityConfig())
+
+
 def test_zero_actions_fails_closed():
     with pytest.raises(CoreAIPolicyError, match="actions_supervised"):
         evaluate_safety_quality({
