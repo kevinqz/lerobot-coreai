@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/real-session.schema.json",
+  "title": "lerobot-coreai real session",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "session_id",
+    "created_at",
+    "operator",
+    "mode",
+    "robot_adapter",
+    "robot_type",
+    "policy_path",
+    "safety_profile",
+    "readiness_report",
+    "approval",
+    "max_steps",
+    "fps",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.real_session.v0"},
+    "session_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "operator": {"type": ["string", "null"]},
+    "mode": {"type": "string", "enum": ["preflight", "guarded"]},
+    "robot_adapter": {"type": "string"},
+    "robot_type": {"type": "string"},
+    "policy_path": {"type": "string"},
+    "runner_url": {"type": ["string", "null"]},
+    "safety_profile": {"type": ["string", "null"]},
+    "readiness_report": {"type": ["string", "null"]},
+    "approval": {"type": ["string", "null"]},
+    "max_steps": {"type": ["integer", "null"]},
+    "fps": {"type": "number"},
+    "status": {"type": "string"}
+  }
+}
