@@ -78,6 +78,15 @@ class TestSupervisorCheckCli:
         assert summary["critical_findings"] >= 1
         assert summary["passed"] is False
 
+    def test_sim_supervisor_off_with_safety_gate_rc1(self, tmp_path):
+        # Contradictory combination: gate the safety but turn supervisor off.
+        rc = cli.main([
+            "sim", "--policy.path", "test/p", "--env.type", "fake",
+            "--output-dir", str(tmp_path / "run"), "--confirm-sim-egress",
+            "--supervisor.mode", "off", "--safety.fail-on-safety-quality",
+        ])
+        assert rc == 1
+
     def test_invalid_profile_rc1(self, tmp_path):
         actions = _write_actions(tmp_path, [[[0.0] * 7] * 16])
         bad = tmp_path / "bad.json"
