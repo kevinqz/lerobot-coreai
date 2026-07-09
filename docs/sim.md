@@ -132,12 +132,18 @@ shape the policy expects:
 
 | File | Description |
 |------|-------------|
-| `sim_report.json` | Structured report with metrics, safety invariants, claims |
+| `sim_report.json` | Structured report with metrics, safety invariants, claims, analytics |
+| `sim_summary.md` | Human-readable markdown summary (written by default, v0.8.2) |
+| `failure_taxonomy.json` | Errors classified by stage/type/category (written by default, v0.8.2) |
 | `sim_trace.jsonl` | Event trace (one JSON per line) |
-| `actions.jsonl` | Per-step action records (generated, egressed to simulator) |
+| `actions.jsonl` | Per-step action records (generated, egressed to simulator, with timing) |
 | `episodes.jsonl` | Per-episode summaries (reward, success, action counts) |
 | `observations.jsonl` | Per-step observation records |
 | `observations/epNNN_stepNNNNNN.json` | Full observation for each step |
+| `episode_metrics.csv` | Per-episode CSV (with `--export-csv`, v0.8.2) |
+| `step_metrics.csv` | Per-step CSV (with `--export-csv`, v0.8.2) |
+
+See [Sim Analytics](sim-analytics.md) for the analytics sections added in v0.8.2.
 
 ## CLI arguments
 
@@ -164,6 +170,9 @@ shape the policy expects:
 | `--live` | no | off | Print live metrics per step |
 | `--live-every` | no | `1` | Print live metrics every N steps |
 | `--json` | no | off | Print report as JSON |
+| `--export-csv` | no | off | Write `episode_metrics.csv` and `step_metrics.csv` (v0.8.2) |
+| `--no-summary-md` | no | off | Do not write `sim_summary.md` (v0.8.2; written by default) |
+| `--no-failure-taxonomy` | no | off | Do not write `failure_taxonomy.json` (v0.8.2; written by default) |
 
 ## Safety guarantees
 

@@ -123,6 +123,7 @@ v0.7.1 adds optional local camera observation source for shadow mode.
 v0.7.2 adds observation adapters, live metrics, and run quality diagnostics.
 v0.8 adds simulator-only sim mode: actions drive a simulator, never a robot.
 v0.8.1 adds a gymnasium simulator adapter (`[sim]` extra) for sim mode.
+v0.8.2 adds sim analytics: CSV exports, markdown summaries, failure taxonomy, and richer report sections for simulator-only runs.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
@@ -152,6 +153,7 @@ It cannot prove task success or physical robot safety.
 v0.7.1 adds optional `[camera]` extra (OpenCV) for shadow mode camera source.
 v0.8 adds simulator-only sim mode (`fake` and `replay` environments).
 v0.8.1 adds a gymnasium simulator adapter (`[sim]` extra).
+v0.8.2 adds sim analytics (CSV exports, markdown summaries, failure taxonomy).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
