@@ -21,6 +21,10 @@ from .observation_adapters import ObservationAdapterConfig, adapt_observation
 from .policy import CoreAIPolicy
 from .reports import now_iso, save_json
 from .real_egress import DeadmanSwitch, RateLimiter, RealEgressGuard
+from .real_metrics import (
+    RealMetricsCollector, build_real_metrics_markdown, build_real_metrics_report,
+    write_real_metrics_csv,
+)
 from .real_preflight import RealPreflightConfig, evaluate_real_preflight
 from .real_reports import (
     build_real_report, build_real_report_markdown, build_real_session,
@@ -65,6 +69,11 @@ class RealModeConfig:
     obs_require_task: bool = False
     obs_required_keys: list[str] | None = None
     obs_drop_unknown_keys: bool = False
+    # Redaction (v1.0.5).
+    redact_paths: bool = False
+    redact_runner_url: bool = False
+    redact_robot_endpoint: bool = False
+    redact_operator: bool = False
 
     def has_observation_config(self) -> bool:
         return bool(
@@ -98,6 +107,39 @@ def _preflight_config(config: RealModeConfig) -> RealPreflightConfig:
         attest_workspace_clear=config.attest_workspace_clear,
         has_observation_config=config.has_observation_config(),
     )
+
+
+def _redact(obj: dict[str, Any], config: RealModeConfig) -> dict[str, Any]:
+    """Return a redacted copy of a session/report dict per the config flags.
+
+    Endpoints are never persisted, so --redact-robot-endpoint is a documented
+    no-op on the current artifacts (nothing to leak).
+    """
+    if not (config.redact_paths or config.redact_runner_url
+            or config.redact_operator or config.redact_robot_endpoint):
+        return obj
+    import copy
+    d = copy.deepcopy(obj)
+
+    def _basename(v):
+        return Path(v).name if isinstance(v, str) and v else v
+
+    if config.redact_operator:
+        if d.get("operator"):
+            d["operator"] = "<redacted>"
+    if config.redact_runner_url:
+        if d.get("runner_url"):
+            d["runner_url"] = "<redacted>"
+    if config.redact_paths:
+        for k in ("safety_profile", "readiness_report", "approval"):
+            if d.get(k):
+                d[k] = _basename(d[k])
+        # Report-shaped nested paths.
+        if isinstance(d.get("readiness"), dict) and d["readiness"].get("report"):
+            d["readiness"]["report"] = _basename(d["readiness"]["report"])
+        if isinstance(d.get("approval"), dict) and d["approval"].get("path"):
+            d["approval"]["path"] = _basename(d["approval"]["path"])
+    return d
 
 
 def _build_obs_config(config: RealModeConfig) -> ObservationAdapterConfig:
@@ -145,6 +187,7 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
             actions_blocked_before_robot=blocked, readiness_ready=ready,
             approval_valid=approval_valid, approval_id=approval_id,
             stop_reason=stop_reason, estop_triggered=estop, deadman_lost=deadman_lost)
+        report = _redact(report, config)
         save_json(output_dir / "real_report.json", report)
         (output_dir / "real_report.md").write_text(build_real_report_markdown(report))
         return RealModeResult(ok=ok, output_dir=output_dir, report=report,
@@ -230,6 +273,8 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
     stop_reason = None
     fatal: Exception | None = None
     adapter_connected = False
+    metrics = RealMetricsCollector(fps=config.fps)
+    loop_start = time.monotonic()
     try:
         policy = CoreAIPolicy.from_pretrained(
             config.policy_path, runner_url=config.runner_url,
@@ -244,23 +289,32 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
         loop_start = time.monotonic()
 
         for step in range(config.max_steps or 0):
+            step_start = time.monotonic()
             # Bounded by duration as well as step count.
             if config.duration_seconds is not None and \
                     (time.monotonic() - loop_start) >= config.duration_seconds:
                 stop_reason = "duration_seconds_reached"
                 break
             deadman.heartbeat()  # software liveness for this bounded session
+            _t = time.monotonic()
             obs = adapter.get_observation()
             trace.write("real.observation.read", {"step": step})
             safe_obs = adapt_observation(obs, adapter_config, manifest=policy.manifest)
             safe_obs = safe_obs.observation
+            observation_ms = (time.monotonic() - _t) * 1000.0
+            _t = time.monotonic()
             pred = policy.predict_action(safe_obs, return_metadata=True)
             raw_action = pred["action"]
+            policy_ms = (time.monotonic() - _t) * 1000.0
             trace.write("real.action.generated", {"step": step})
 
             ctx = SafetyContext(mode="real", step=step, robot_type=config.robot_type,
                                 policy_type=policy.policy_type, action_source="policy")
+            _t = time.monotonic()
             decision = guard.send_action(raw_action, ctx)
+            egress_ms = (time.monotonic() - _t) * 1000.0
+            metrics.add(observation_ms=observation_ms, policy_ms=policy_ms,
+                        egress_ms=egress_ms, loop_ms=(time.monotonic() - step_start) * 1000.0)
             acc.add(_decision_obj(decision))
             append_safety_decision(safety_report_path,
                                    _decision_obj(decision), context=ctx)
@@ -298,7 +352,15 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
                 trace.write("real.adapter.disconnect", {})
         session["status"] = "failed"
 
-    save_json(output_dir / "real_session.json", session)
+    # v1.0.5: per-step runtime metrics.
+    if metrics.steps:
+        wall = time.monotonic() - loop_start
+        metrics_report = build_real_metrics_report(metrics, wall_seconds=wall)
+        save_json(output_dir / "real_metrics.json", metrics_report)
+        (output_dir / "real_metrics.md").write_text(build_real_metrics_markdown(metrics_report))
+        write_real_metrics_csv(output_dir / "real_metrics.csv", metrics.steps)
+
+    save_json(output_dir / "real_session.json", _redact(session, config))
     summary = build_safety_summary(acc)
     save_json(output_dir / "safety_summary.json", summary)
     # v1.0.2: post-session safety quality gate (real-strict: zero blocks/findings).
