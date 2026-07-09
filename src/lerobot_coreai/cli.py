@@ -576,6 +576,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_real.add_argument("--json", action="store_true")
     p_real.set_defaults(func=cmd_real)
 
+    # --- verify-real-session (v1.0.2) — offline real-session audit ---
+    p_vrs = sub.add_parser("verify-real-session",
+                           help="Verify a completed guarded real session directory (v1.0.2)")
+    p_vrs.add_argument("--run-dir", dest="run_dir", required=True)
+    p_vrs.add_argument("--bundle-dir", dest="bundle_dir")
+    p_vrs.add_argument("--approval", dest="approval")
+    p_vrs.add_argument("--readiness-report", dest="readiness_report")
+    p_vrs.add_argument("--json", action="store_true")
+    p_vrs.set_defaults(func=cmd_verify_real_session)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -614,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2308,6 +2318,34 @@ def cmd_real(args: argparse.Namespace) -> int:
     else:
         print("Guarded real session completed." if result.ok
               else "Guarded real session did not complete cleanly.")
+    return 0 if result.ok else 1
+
+
+# MARK: - verify-real-session (v1.0.2 — offline real-session audit)
+
+def cmd_verify_real_session(args: argparse.Namespace) -> int:
+    """Verify a completed guarded real session directory, offline."""
+    import json as _json
+
+    from .real_verify import verify_real_session
+
+    result = verify_real_session(
+        Path(args.run_dir),
+        bundle_dir=Path(args.bundle_dir) if getattr(args, "bundle_dir", None) else None,
+        approval=Path(args.approval) if getattr(args, "approval", None) else None,
+        readiness_report=Path(args.readiness_report) if getattr(args, "readiness_report", None) else None,
+    )
+    if args.json:
+        print(_json.dumps({"ok": result.ok, "checks": result.checks}, indent=2))
+        return 0 if result.ok else 1
+
+    print("lerobot-coreai verify-real-session")
+    print("=" * 50)
+    for c in result.checks:
+        mark = "✓" if c["passed"] else "✗"
+        print(f"{mark} {c['name']}{(' — ' + c['message']) if c['message'] else ''}")
+    print("=" * 50)
+    print("Real session verified." if result.ok else "Real session verification FAILED.")
     return 0 if result.ok else 1
 
 

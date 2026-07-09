@@ -95,6 +95,26 @@
           }
         }
       }
+    },
+    {
+      "comment": "an OK guarded real session must have passed every gate and armed the egress path.",
+      "if": {
+        "properties": {"mode": {"const": "guarded_real"}, "ok": {"const": true}},
+        "required": ["mode", "ok"]
+      },
+      "then": {
+        "properties": {
+          "readiness": {"properties": {"ready": {"const": true}}},
+          "approval": {"properties": {"valid": {"const": true}}},
+          "safety_supervisor": {"properties": {"mode": {"const": "enforce"}}},
+          "egress": {"properties": {"robot_egress_path_enabled": {"const": true}}},
+          "stop": {
+            "properties": {
+              "reason": {"enum": ["max_steps_reached", "duration_seconds_reached"]}
+            }
+          }
+        }
+      }
     }
   ]
 }

@@ -46,6 +46,18 @@ guarded-mode attestations require the operator to confirm a physical e-stop is
 ready and the workspace is clear. The deadman may be disabled **only** for the
 `mock` adapter; for any real adapter it cannot be disabled.
 
+## Offline audit (v1.0.2)
+
+After a session, `verify-real-session --run-dir <dir>` re-checks the artifacts
+independently: `real_report`/`real_session` schema validity, no overclaim,
+action accounting (`actions_sent_to_robot` matches the records), the invariants
+that **every sent action was supervisor-allowed** and **no blocked action was
+sent**, and trace order (no action before arming, no egress before a supervisor
+decision, adapter stopped after egress, terminal event present). Pass
+`--bundle-dir` / `--approval` / `--readiness-report` to also re-verify that the
+readiness and approval the session relied on still hold. A post-session
+`real_safety_quality_report.json` applies the safety gates to the session summary.
+
 ## Honest claims
 
 Real mode never claims physical safety. The strongest true statement is:

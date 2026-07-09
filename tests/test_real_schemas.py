@@ -75,6 +75,29 @@ def test_preflight_mode_report_must_have_zero_egress():
         jsonschema.validate(r, _schema("real-report.schema.json"))
 
 
+def test_ok_guarded_report_requires_gates_passed():
+    # An ok guarded_real report claiming ready=false must fail the conditional schema.
+    r = _report()
+    r["stop"] = {"reason": "max_steps_reached"}
+    r["readiness"]["ready"] = False
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(r, _schema("real-report.schema.json"))
+
+
+def test_ok_guarded_report_bad_stop_reason_fails():
+    r = _report()
+    r["stop"] = {"reason": "supervisor_blocked"}  # not a clean completion
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(r, _schema("real-report.schema.json"))
+
+
+def test_ok_guarded_report_clean_passes():
+    r = _report()
+    r["stop"] = {"reason": "max_steps_reached"}
+    r["egress"]["robot_egress_path_enabled"] = True
+    jsonschema.validate(r, _schema("real-report.schema.json"))
+
+
 def test_preflight_mode_zero_egress_passes():
     r = _report(mode="preflight", sent=0, egress=False)
     r["egress"]["action_egress"] = "none"
