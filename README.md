@@ -115,6 +115,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 ## Safety model
 
 v0.7 adds motor-blocked shadow mode.
+v0.7.1 adds optional local camera observation source for shadow mode.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 It never connects to a robot and never sends motor commands.
@@ -137,6 +138,7 @@ It cannot prove task success or physical robot safety.
 ## Version policy
 
 `lerobot-coreai` 0.7.x supports LeRobot `>=0.6.0,<0.7.0`.
+v0.7.1 adds optional `[camera]` extra (OpenCV) for shadow mode camera source.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

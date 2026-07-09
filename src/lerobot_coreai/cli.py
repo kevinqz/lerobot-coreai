@@ -194,6 +194,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_shadow.add_argument("--state-vector", dest="state_vector",
                           help="Comma-separated floats for observation.state")
     p_shadow.add_argument("--task", dest="task", help="Task text to include in each observation")
+    # Camera source args (v0.7.1).
+    p_shadow.add_argument("--camera.index", dest="camera_index", type=int, default=0,
+                          help="Camera device index (default: 0)")
+    p_shadow.add_argument("--camera.width", dest="camera_width", type=int,
+                          help="Requested camera frame width")
+    p_shadow.add_argument("--camera.height", dest="camera_height", type=int,
+                          help="Requested camera frame height")
+    p_shadow.add_argument("--camera.fps", dest="camera_fps", type=float,
+                          help="Requested camera FPS")
+    p_shadow.add_argument("--no-save-camera-frames", dest="save_camera_frames",
+                          action="store_false", default=True,
+                          help="Do not save camera frames to disk (default: frames are saved)")
     # Loop args.
     p_shadow.add_argument("--max-steps", dest="max_steps", type=int, default=32)
     p_shadow.add_argument("--duration-seconds", dest="duration_seconds", type=float)
@@ -659,6 +671,11 @@ def cmd_shadow(args: argparse.Namespace) -> int:
         state_json=Path(args.state_json) if args.state_json else None,
         state_vector=state_vector,
         task=args.task,
+        camera_index=args.camera_index,
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
+        camera_fps=args.camera_fps,
+        save_camera_frames=args.save_camera_frames,
         max_steps=args.max_steps,
         duration_seconds=args.duration_seconds,
         fps=args.fps,

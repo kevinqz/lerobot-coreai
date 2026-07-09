@@ -197,39 +197,108 @@ class FolderImageObservationSource:
         return None
 
 
-# MARK: - Camera source (stub — coming in v0.7.1)
+# MARK: - Camera source (experimental — v0.7.1)
+
+def _require_cv2():
+    """Import cv2 lazily; raise a clear error if not installed."""
+    try:
+        import cv2
+    except ImportError as e:
+        raise CoreAIPolicyError(
+            "Camera source requires OpenCV. Install with "
+            '`pip install "lerobot-coreai[camera]"`.'
+        ) from e
+    return cv2
+
 
 @dataclass
 class CameraObservationSource:
-    """Camera capture source — experimental, coming in v0.7.1.
+    """Local RGB camera observation source for shadow mode (experimental).
 
-    open() raises immediately so that camera mode fails loudly and early rather
-    than silently producing nothing.
+    Opens a cv2.VideoCapture, captures frames, saves them to disk, and returns
+    an observation with the image key pointing to the saved frame path.
+
+    This is observation-only. It does not connect to a robot or actuator.
+    cv2 is imported lazily at open() time, so the core package works without it.
     """
 
-    camera_index: int | None = None
-    camera_width: int | None = None
-    camera_height: int | None = None
+    camera_index: int = 0
+    image_key: str = "observation.images.wrist"
+    output_dir: Path | None = None
+    width: int | None = None
+    height: int | None = None
     camera_fps: float | None = None
+    task: str | None = None
+    state_vector: list[float] | None = None
+    save_frames: bool = True
+    _cv2: Any = None
+    _cap: Any = None
+    _frame_index: int = 0
+    _closed: bool = False
 
     def open(self) -> None:
-        raise CoreAIPolicyError(
-            "Camera observation source is experimental and will be available in "
-            "lerobot-coreai v0.7.1. Use --observation-source folder or fixtures for now."
-        )
+        cv2 = _require_cv2()
+        self._cv2 = cv2
+        self._cap = cv2.VideoCapture(self.camera_index)
+        if not self._cap or not self._cap.isOpened():
+            raise CoreAIPolicyError(
+                f"Could not open camera index {self.camera_index}. "
+                f"Check that the device is connected and not in use."
+            )
+        if self.width:
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        if self.height:
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        if self.camera_fps:
+            self._cap.set(cv2.CAP_PROP_FPS, self.camera_fps)
+        if self.save_frames and self.output_dir is not None:
+            (Path(self.output_dir) / "frames").mkdir(parents=True, exist_ok=True)
+        self._frame_index = 0
 
     def read(self) -> dict[str, Any] | None:
-        raise CoreAIPolicyError(
-            "Camera observation source is experimental and will be available in "
-            "lerobot-coreai v0.7.1."
-        )
+        if self._cap is None or self._closed:
+            return None
+        ok, frame = self._cap.read()
+        if not ok or frame is None:
+            raise CoreAIPolicyError(
+                f"Failed to read frame from camera index {self.camera_index}."
+            )
+        frame_path = self._save_frame(frame)
+        obs: dict[str, Any] = {self.image_key: str(frame_path)}
+        if self.state_vector is not None:
+            obs["observation.state"] = list(self.state_vector)
+        if self.task is not None:
+            obs["task"] = self.task
+        self._frame_index += 1
+        return obs
 
     def close(self) -> None:
-        pass
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        self._closed = True
 
     @property
     def source_type(self) -> str:
         return "camera"
+
+    def _save_frame(self, frame: Any) -> Path:
+        """Save a frame to disk. Returns the path."""
+        if not self.save_frames or self.output_dir is None:
+            # If not saving, we still need a path for the observation.
+            # Use a temp-style name in output_dir/frames.
+            path = Path(self.output_dir) / "frames" / f"step_{self._frame_index:06d}.png"
+            Path(self.output_dir, "frames").mkdir(parents=True, exist_ok=True)
+        else:
+            path = Path(self.output_dir) / "frames" / f"step_{self._frame_index:06d}.png"
+
+        assert self._cv2 is not None  # open() guarantees cv2 is loaded
+        success = self._cv2.imwrite(str(path), frame)
+        if not success:
+            raise CoreAIPolicyError(
+                f"Failed to save camera frame to {path}."
+            )
+        return path
 
 
 # MARK: - Factory
@@ -245,6 +314,11 @@ def build_observation_source(
     state_vector: list[float] | None = None,
     task: str | None = None,
     camera_index: int | None = None,
+    camera_width: int | None = None,
+    camera_height: int | None = None,
+    camera_fps: float | None = None,
+    output_dir: Path | None = None,
+    save_camera_frames: bool = True,
     repeat_fixture: bool = True,
 ) -> ObservationSource:
     """Dispatch to the right observation source by type name.
@@ -284,7 +358,17 @@ def build_observation_source(
         )
 
     if source_type == "camera":
-        return CameraObservationSource(camera_index=camera_index)
+        return CameraObservationSource(
+            camera_index=camera_index if camera_index is not None else 0,
+            image_key=image_key,
+            output_dir=output_dir,
+            width=camera_width,
+            height=camera_height,
+            camera_fps=camera_fps,
+            task=task,
+            state_vector=state_vector,
+            save_frames=save_camera_frames,
+        )
 
     raise CoreAIPolicyError(
         f"Unknown observation source: {source_type!r}. "

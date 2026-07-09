@@ -143,15 +143,15 @@ class TestFolderImageObservationSource:
 
 
 class TestCameraObservationSource:
-    def test_open_raises_experimental(self):
+    def test_open_without_cv2_raises_install_hint(self):
+        """Without cv2 installed, open() should raise with install hint."""
         src = CameraObservationSource()
-        with pytest.raises(CoreAIPolicyError, match="v0.7.1"):
+        with pytest.raises(CoreAIPolicyError, match="lerobot-coreai\\[camera\\]"):
             src.open()
 
-    def test_read_raises_experimental(self):
-        src = CameraObservationSource()
-        with pytest.raises(CoreAIPolicyError):
-            src.read()
+    def test_factory_camera(self):
+        src = build_observation_source("camera", camera_index=0)
+        assert isinstance(src, CameraObservationSource)
 
 
 class TestBuildObservationSource:

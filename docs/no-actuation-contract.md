@@ -30,6 +30,12 @@ that forwards an action to a robot, motor, simulator, or actuator.
 - **Not a task success proof.** Shadow mode does not close a control loop.
 - **Not a physical safety proof.** Shadow mode does not test real-world behavior.
 
+### Camera is observation, not actuation (v0.7.1)
+
+The v0.7.1 camera source reads frames from a local camera and passes them as observations.
+This is an observation device, not an actuation device. The report may show
+`observation_device_connected: true`, but `actuation_device_connected` remains `false`.
+
 ## Enforcement mechanisms
 
 ### 1. `ActionBlocker` (runtime)

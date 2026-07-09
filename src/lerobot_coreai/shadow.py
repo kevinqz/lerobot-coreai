@@ -51,6 +51,11 @@ class ShadowConfig:
     fail_fast: bool = False
     overwrite: bool = False
     include_metadata: bool = True
+    # Camera source options (v0.7.1).
+    camera_width: int | None = None
+    camera_height: int | None = None
+    camera_fps: float | None = None
+    save_camera_frames: bool = True
 
 
 @dataclass
@@ -250,6 +255,11 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
             state_vector=config.state_vector,
             task=config.task,
             camera_index=config.camera_index,
+            camera_width=config.camera_width,
+            camera_height=config.camera_height,
+            camera_fps=config.camera_fps,
+            output_dir=output_dir,
+            save_camera_frames=config.save_camera_frames,
         )
         source.open()
         source_opened = True

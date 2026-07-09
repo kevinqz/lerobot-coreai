@@ -71,10 +71,31 @@ lerobot-coreai shadow \
   --output-dir runs/shadow-single
 ```
 
-### Camera source
+### Camera source (experimental, v0.7.1)
 
-Camera is experimental and coming in v0.7.1. Passing `--observation-source camera` will
-fail with a clear message directing you to use `folder` or `fixtures` for now.
+Uses a local RGB camera as an observation source. Requires the optional `[camera]` extra:
+
+```bash
+pip install "lerobot-coreai[camera]"
+
+lerobot-coreai shadow \
+  --policy.path kevinqz/EVO1-SO100-CoreAI \
+  --observation-source camera \
+  --camera.index 0 \
+  --camera.width 1280 \
+  --camera.height 720 \
+  --camera.fps 10 \
+  --runner.url http://127.0.0.1:8710 \
+  --task "pick up the cube" \
+  --state-vector "0,0,0,0,0,0,0" \
+  --max-steps 32 \
+  --output-dir runs/evo1-camera-shadow
+```
+
+Camera frames are saved to `frames/step_NNNNNN.png`. The observation points to the saved
+frame path, not a raw array. Use `--no-save-camera-frames` to skip saving.
+
+Camera source is observation-only. Actions are still blocked by `ActionBlocker`.
 
 ## Output files
 

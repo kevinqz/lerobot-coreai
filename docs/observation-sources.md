@@ -79,14 +79,41 @@ lerobot-coreai shadow \
   ...
 ```
 
-### `camera` — live camera (experimental, stub)
+### `camera` — live camera (experimental)
 
-Camera capture is **experimental** and will be available in v0.7.1. In v0.7.0, passing
-`--observation-source camera` raises `CoreAIPolicyError` with a message directing you to
-use `folder` or `fixtures`.
+Captures frames from a local RGB camera via OpenCV, saves them to disk, and returns
+an observation with the image key pointing to the saved frame path.
 
-OpenCV will **not** be a hard dependency when camera support lands — it will be an optional
-extra (`[camera]`). Shadow mode works fully without it.
+**Install:**
+```bash
+pip install "lerobot-coreai[camera]"
+```
+
+cv2 is imported lazily at `open()` time — the core package works without it. If cv2 is
+not installed, a clear `CoreAIPolicyError` with install instructions is raised.
+
+```bash
+lerobot-coreai shadow \
+  --observation-source camera \
+  --camera.index 0 \
+  --camera.width 1280 \
+  --camera.height 720 \
+  --camera.fps 10 \
+  --task "pick up the cube" \
+  --state-vector "0,0,0,0,0,0,0" \
+  --output-dir runs/camera-shadow \
+  ...
+```
+
+Camera args:
+- `--camera.index` (default: 0) — camera device index
+- `--camera.width` — requested frame width
+- `--camera.height` — requested frame height
+- `--camera.fps` — requested capture FPS
+- `--no-save-camera-frames` — don't save frames to disk (default: frames saved to `frames/`)
+
+Camera source is **observation-only**. It does not connect to a robot or actuator.
+All actions generated during a camera shadow run are blocked by `ActionBlocker`.
 
 ## Factory
 
