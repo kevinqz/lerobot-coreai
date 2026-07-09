@@ -62,3 +62,58 @@ class TestCliSimQuality:
             ])
         config = mock_run.call_args[0][0]
         assert config.quality_config is None
+
+    def test_fail_on_quality_alone_builds_default_config(self, tmp_path):
+        # --quality.fail-on-quality without explicit thresholds should still
+        # build a config so the default gates (error/nan/inf/shape) are active.
+        mock_result = _mock_sim_result(tmp_path)
+        with patch("lerobot_coreai.cli.run_sim_mode", return_value=mock_result) as mock_run:
+            cli.main([
+                "sim", "--policy.path", "test", "--env.type", "fake",
+                "--output-dir", str(tmp_path / "run"), "--confirm-sim-egress",
+                "--quality.fail-on-quality",
+            ])
+        config = mock_run.call_args[0][0]
+        assert config.quality_config is not None
+        assert config.fail_on_quality is True
+
+    def test_fail_on_quality_returns_rc1_in_human_mode(self, tmp_path):
+        # The core CI contract: failed quality gates → nonzero exit even
+        # without --json.
+        mock_result = _mock_sim_result(tmp_path)
+        mock_result.ok = False
+        mock_result.report["ok"] = False
+        mock_result.report["quality"] = {
+            "passed": False,
+            "checks": [
+                {"name": "min_success_rate", "passed": False,
+                 "value": 0.5, "threshold": 0.8},
+            ],
+        }
+        with patch("lerobot_coreai.cli.run_sim_mode", return_value=mock_result):
+            rc = cli.main([
+                "sim", "--policy.path", "test", "--env.type", "fake",
+                "--output-dir", str(tmp_path / "run"), "--confirm-sim-egress",
+                "--quality.min-success-rate", "0.8",
+                "--quality.fail-on-quality",
+            ])
+        assert rc == 1
+
+    def test_quality_report_only_returns_rc0(self, tmp_path):
+        # Without --quality.fail-on-quality, a failed gate is report-only.
+        mock_result = _mock_sim_result(tmp_path)
+        mock_result.ok = True
+        mock_result.report["quality"] = {
+            "passed": False,
+            "checks": [
+                {"name": "min_success_rate", "passed": False,
+                 "value": 0.5, "threshold": 0.8},
+            ],
+        }
+        with patch("lerobot_coreai.cli.run_sim_mode", return_value=mock_result):
+            rc = cli.main([
+                "sim", "--policy.path", "test", "--env.type", "fake",
+                "--output-dir", str(tmp_path / "run"), "--confirm-sim-egress",
+                "--quality.min-success-rate", "0.8",
+            ])
+        assert rc == 0

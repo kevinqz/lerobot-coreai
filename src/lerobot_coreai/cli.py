@@ -880,12 +880,15 @@ def cmd_sim(args: argparse.Namespace) -> int:
         state_vector = [float(v.strip()) for v in args.state_vector.split(",")]
 
     # Build quality config if any quality args provided (v0.8.3).
+    # --quality.fail-on-quality alone also activates the default gates
+    # (error-rate/NaN/Inf/shape), so a CI gate need not name every threshold.
     quality_config = None
     if any(getattr(args, attr) is not None for attr in [
         "quality_min_success_rate", "quality_min_mean_reward",
         "quality_max_runner_p95_ms", "quality_max_env_step_p95_ms",
         "quality_max_loop_p95_ms",
-    ]) or getattr(args, "quality_max_error_rate", 0.0) != 0.0:
+    ]) or getattr(args, "quality_max_error_rate", 0.0) != 0.0 \
+            or getattr(args, "quality_fail_on_quality", False):
         quality_config = SimQualityConfig(
             min_success_rate=args.quality_min_success_rate,
             min_mean_reward=args.quality_min_mean_reward,
@@ -1002,10 +1005,26 @@ def cmd_sim(args: argparse.Namespace) -> int:
         print(f"  step csv:     {result.output_dir / files['step_metrics_csv']}")
     elif not getattr(args, "export_csv", False):
         print("  CSV exports:  disabled (use --export-csv to write episode/step metrics)")
-    print("=" * 50)
-    print("Sim run completed successfully.")
 
-    return 0
+    # v0.8.3: surface quality gate results in human mode.
+    quality = result.report.get("quality")
+    if quality:
+        print()
+        print(f"Quality: {'PASSED' if quality.get('passed') else 'FAILED'}")
+        for check in quality.get("checks", []):
+            mark = "✓" if check.get("passed") else "✗"
+            print(
+                f"  {mark} {check.get('name')}: "
+                f"value={check.get('value')} threshold={check.get('threshold')}"
+            )
+
+    print("=" * 50)
+    if result.ok:
+        print("Sim run completed successfully.")
+    else:
+        print("Sim run completed with FAILED quality gates.")
+
+    return 0 if result.ok else 1
 
 
 # MARK: - sim-regression (v0.8.3 — compare two sim runs)
