@@ -56,6 +56,21 @@ class RealModeConfig:
     attest_real_hardware: bool = False
     attest_physical_estop: bool = False
     attest_workspace_clear: bool = False
+    # Observation config (v1.0.4).
+    observation_config: Path | None = None
+    obs_image_key: str | None = None
+    obs_state_key: str | None = None
+    obs_task: str | None = None
+    obs_require_state: bool = False
+    obs_require_task: bool = False
+    obs_required_keys: list[str] | None = None
+    obs_drop_unknown_keys: bool = False
+
+    def has_observation_config(self) -> bool:
+        return bool(
+            self.observation_config or self.obs_image_key or self.obs_state_key
+            or self.obs_task or self.obs_require_state or self.obs_require_task
+            or self.obs_required_keys or self.obs_drop_unknown_keys)
 
 
 @dataclass
@@ -81,7 +96,35 @@ def _preflight_config(config: RealModeConfig) -> RealPreflightConfig:
         attest_real_hardware=config.attest_real_hardware,
         attest_physical_estop=config.attest_physical_estop,
         attest_workspace_clear=config.attest_workspace_clear,
+        has_observation_config=config.has_observation_config(),
     )
+
+
+def _build_obs_config(config: RealModeConfig) -> ObservationAdapterConfig:
+    data: dict[str, Any] = {}
+    if config.observation_config:
+        data = json.loads(Path(config.observation_config).read_text())
+    kwargs: dict[str, Any] = {}
+    for k in ("image_key", "state_key", "task", "require_task", "require_state",
+              "required_keys", "drop_unknown_keys"):
+        if k in data:
+            kwargs[k] = data[k]
+    # Individual flags override the config file.
+    if config.obs_image_key is not None:
+        kwargs["image_key"] = config.obs_image_key
+    if config.obs_state_key is not None:
+        kwargs["state_key"] = config.obs_state_key
+    if config.obs_task is not None:
+        kwargs["task"] = config.obs_task
+    if config.obs_require_state:
+        kwargs["require_state"] = True
+    if config.obs_require_task:
+        kwargs["require_task"] = True
+    if config.obs_required_keys is not None:
+        kwargs["required_keys"] = config.obs_required_keys
+    if config.obs_drop_unknown_keys:
+        kwargs["drop_unknown_keys"] = True
+    return ObservationAdapterConfig(**kwargs)
 
 
 def run_real_mode(config: RealModeConfig) -> RealModeResult:
@@ -191,8 +234,7 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
         policy = CoreAIPolicy.from_pretrained(
             config.policy_path, runner_url=config.runner_url,
             validate_runner=True, return_metadata=True)
-        adapter_config = ObservationAdapterConfig()
-
+        adapter_config = _build_obs_config(config)
         adapter.connect()
         adapter_connected = True
         session["status"] = "running"

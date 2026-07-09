@@ -20,7 +20,7 @@ def _mock_policy(valid_manifest_dict):
 def _base_argv(sc, tmp_path, mode):
     return [
         "real", "--mode", mode,
-        "--policy.path", "test/p", "--runner.url", "http://127.0.0.1:8710",
+        "--policy.path", "kevinqz/EVO1-SO100-CoreAI", "--runner.url", "http://127.0.0.1:8710",
         "--robot.adapter", "mock", "--robot.type", sc["robot_type"],
         "--safety.profile", str(sc["profile"]),
         "--readiness-report", str(sc["readiness"]),
