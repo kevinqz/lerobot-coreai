@@ -157,3 +157,11 @@ The generated `bundle_manifest.json` is validated against
 `verify-sim-bundle` re-checks all of them (via the schema and explicit
 assertions) *and* re-validates the bundled `source_run/sim_report.json`, so a
 bundle can be audited long after it leaves the machine that produced it.
+
+## Operator approval (v0.9.3)
+
+A bundle can be submitted for explicit human approval before it is marked
+release-ready — see [operator-approval.md](operator-approval.md) and
+[release-readiness.md](release-readiness.md). The approval **references** the
+bundle by artifact hash and is written outside it, so the bundle's own
+checksums stay valid.
