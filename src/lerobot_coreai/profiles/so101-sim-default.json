@@ -1,9 +1,9 @@
 {
   "schema_version": "lerobot-coreai.safety_profile.v0",
-  "name": "so100-sim-default",
+  "name": "so101-sim-default",
   "profile_version": "0.1.0",
   "profile_type": "software_bounds",
-  "robot_type": "so100",
+  "robot_type": "so101",
   "action_shape": [16, 7],
   "min_action": null,
   "max_action": null,
@@ -21,10 +21,10 @@
   "mode": "fail_closed",
   "intended_modes": ["sim", "shadow"],
   "intended_policy_types": ["act", "diffusion", "pi0", "pi05", "smolvla", "evo1"],
-  "description": "Software action-bound profile for SO-100-family policies in simulator/shadow.",
+  "description": "Software action-bound profile for SO-101-family policies in simulator/shadow.",
   "limitations": [
     "Software action-bound profile for simulator/shadow workflows.",
-    "Does not prove SO-100 physical safety.",
+    "Does not prove SO-101 physical safety.",
     "Does not encode torque/current/thermal limits."
   ]
 }

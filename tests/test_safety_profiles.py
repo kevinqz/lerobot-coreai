@@ -18,6 +18,7 @@ def _valid_dict(**over):
     d = {
         "schema_version": "lerobot-coreai.safety_profile.v0",
         "name": "test-profile",
+        "profile_type": "software_bounds",
         "mode": "fail_closed",
         "max_abs_action": 1.0,
     }
@@ -37,7 +38,27 @@ class TestLoad:
         p = load_builtin_profile("so100-sim-default")
         assert p.robot_type == "so100"
         assert p.action_shape == [16, 7]
-        assert p.clip_to_bounds is True
+        assert p.max_delta == 0.35
+        assert p.max_l2_norm == 6.0
+        assert p.profile_type == "software_bounds"
+
+    def test_builtin_so101(self):
+        p = load_builtin_profile("so101-sim-default")
+        assert p.robot_type == "so101"
+        assert p.action_shape == [16, 7]
+
+    def test_builtin_generic_7dof(self):
+        p = load_builtin_profile("generic-7dof-sim-default")
+        assert p.robot_type is None
+        assert p.action_shape == [7]
+        assert p.require_robot_type_match is False
+        assert p.max_delta == 0.25
+
+    def test_builtin_pusht(self):
+        p = load_builtin_profile("pusht-sim-default")
+        assert p.action_shape == [2]
+        assert p.intended_envs == ["PushT-v0", "pusht"]
+        assert p.max_l2_norm == 1.5
 
     def test_unknown_builtin_fails(self):
         with pytest.raises(CoreAIPolicyError, match="Unknown built-in"):

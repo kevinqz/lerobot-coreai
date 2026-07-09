@@ -16,7 +16,7 @@ def _schema(name):
 def _valid_profile():
     return {
         "schema_version": "lerobot-coreai.safety_profile.v0",
-        "name": "p", "mode": "fail_closed",
+        "name": "p", "mode": "fail_closed", "profile_type": "software_bounds",
         "allow_nan": False, "allow_inf": False,
     }
 
@@ -32,6 +32,20 @@ def test_profile_bad_mode_fails():
         jsonschema.validate(p, _schema("safety-profile.schema.json"))
 
 
+def test_profile_bad_type_fails():
+    p = _valid_profile()
+    p["profile_type"] = "hardware_certified"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(p, _schema("safety-profile.schema.json"))
+
+
+def test_profile_missing_type_fails():
+    p = _valid_profile()
+    del p["profile_type"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(p, _schema("safety-profile.schema.json"))
+
+
 def test_profile_missing_name_fails():
     p = _valid_profile()
     del p["name"]
@@ -40,7 +54,9 @@ def test_profile_missing_name_fails():
 
 
 def test_builtin_profiles_validate():
-    for name in ("default-sim-safe.json", "so100-sim-default.json"):
+    for name in ("default-sim-safe.json", "so100-sim-default.json",
+                 "so101-sim-default.json", "generic-7dof-sim-default.json",
+                 "pusht-sim-default.json"):
         data = json.loads(files("lerobot_coreai.profiles").joinpath(name).read_text())
         jsonschema.validate(data, _schema("safety-profile.schema.json"))
 

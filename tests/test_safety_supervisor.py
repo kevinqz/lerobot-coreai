@@ -145,6 +145,23 @@ class TestDeltaAndNorm:
         r = _sup(max_l2_norm=2.0).evaluate([1.0, 1.0])  # norm ~1.41
         assert r.decision.allowed
 
+    def test_delta_unverifiable_on_shape_change_blocks(self):
+        # v0.9.1: with max_delta set and allow_shape_change, a length change
+        # cannot verify the delta bound → fail-closed (previously it passed).
+        sup = _sup(max_delta=0.5, allow_shape_change=True)
+        sup.evaluate([0.0, 0.0])            # establishes previous (len 2)
+        r = sup.evaluate([0.0, 0.0, 0.0])    # len 3 → unverifiable
+        assert not r.decision.allowed
+        delta = next(c for c in r.decision.checks if c["name"] == "delta")
+        assert delta["reason"] == "delta_unverifiable_shape_changed"
+
+    def test_shape_change_allowed_without_delta_bound(self):
+        # No max_delta → shape changes are permitted (generic-7dof style).
+        sup = _sup(allow_shape_change=True)
+        sup.evaluate([0.0, 0.0])
+        r = sup.evaluate([0.0, 0.0, 0.0])
+        assert r.decision.allowed
+
 
 class TestRobotType:
     def test_robot_type_mismatch_blocks(self):

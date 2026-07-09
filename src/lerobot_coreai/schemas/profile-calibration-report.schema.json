@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/profile-calibration-report.schema.json",
+  "title": "lerobot-coreai profile calibration report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "ok",
+    "actions_path",
+    "samples",
+    "statistics",
+    "recommended_bounds",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.profile_calibration_report.v0"},
+    "ok": {"type": "boolean"},
+    "actions_path": {"type": "string"},
+    "samples": {"type": "integer", "minimum": 0},
+    "statistics": {"type": "object"},
+    "recommended_bounds": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_future_action_safety",
+        "proves_physical_safety",
+        "proves_real_world_safety"
+      ],
+      "properties": {
+        "proves_profile_fit_to_observed_actions": {"type": "boolean"},
+        "proves_future_action_safety": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "proves_real_task_success": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

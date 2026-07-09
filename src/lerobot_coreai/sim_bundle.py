@@ -455,6 +455,14 @@ def package_sim_run(config: SimBundleConfig) -> SimBundleResult:
         ("safety_report.jsonl", True),
         ("safety_summary.json", True),
         ("safety_summary.md", True),
+        # v0.9.1 profile artifacts (small; always included if present).
+        ("profile_calibration_report.json", True),
+        ("profile_calibration_report.md", True),
+        ("calibrated_profile.json", True),
+        ("profile_comparison_report.json", True),
+        ("profile_comparison_report.md", True),
+        ("profile_fit.json", True),
+        ("profile_fit.md", True),
     ]
     for fname, enabled in optional_files:
         if not enabled:
