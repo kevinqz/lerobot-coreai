@@ -238,7 +238,9 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
             stop_reason = "max_steps_reached"
 
         adapter.stop()
+        trace.write("real.adapter.stop", {"reason": stop_reason})
         adapter.disconnect()
+        trace.write("real.adapter.disconnect", {})
         adapter_connected = False
         session["status"] = "stopped"
     except Exception as e:  # fail-closed cleanup
@@ -247,14 +249,31 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
         trace.write("real.session.failed", {"error": str(e)})
         try:
             adapter.stop()
+            trace.write("real.adapter.stop", {"reason": "exception"})
         finally:
             if adapter_connected:
                 adapter.disconnect()
+                trace.write("real.adapter.disconnect", {})
         session["status"] = "failed"
 
     save_json(output_dir / "real_session.json", session)
     summary = build_safety_summary(acc)
     save_json(output_dir / "safety_summary.json", summary)
+    # v1.0.2: post-session safety quality gate (real-strict: zero blocks/findings).
+    try:
+        from .safety_quality import (
+            SafetyQualityConfig, build_safety_quality_markdown,
+            build_safety_quality_report, evaluate_safety_quality,
+        )
+        if summary.get("actions_supervised", 0):
+            sq = evaluate_safety_quality(summary, SafetyQualityConfig())
+            sq_report = build_safety_quality_report(
+                sq, source={"type": "real_session", "path": str(output_dir)})
+            save_json(output_dir / "real_safety_quality_report.json", sq_report)
+            (output_dir / "real_safety_quality_report.md").write_text(
+                build_safety_quality_markdown(sq_report))
+    except Exception:
+        pass  # best-effort auxiliary artifact
     sup_summary = {
         "mode": "enforce", "profile": profile.name,
         "actions_supervised": acc.actions_supervised,

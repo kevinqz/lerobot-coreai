@@ -60,6 +60,17 @@ def test_external_http_loopback_only():
     assert a.name == "external-http"
 
 
+def test_external_http_rejects_obfuscated_and_nonhttp():
+    # Obfuscated loopback forms and non-http schemes are refused (v1.0.2).
+    for bad in ("http://2130706433:8765", "https://127.0.0.1:8765",
+                "file:///tmp/x", "http://8.8.8.8:8765"):
+        with pytest.raises(CoreAIPolicyError):
+            build_robot_adapter("external-http", "so100", endpoint=bad)
+    # localhost and canonical loopback still accepted.
+    assert build_robot_adapter("external-http", "so100",
+                               endpoint="http://localhost:8765").name == "external-http"
+
+
 def test_external_http_no_token_no_auth_header():
     a = build_robot_adapter("external-http", "so100", endpoint="http://127.0.0.1:8765")
     assert "Authorization" not in a._headers()

@@ -131,6 +131,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `verify-approval` | v0.9.3 ✅ | Verify an approval manifest against a bundle |
 | `release-readiness` | v0.9.3 ✅ | Produce a final readiness report from bundle + approval |
 | `real` | v1.0.0 ✅ | Guarded real mode: preflight or bounded guarded session |
+| `verify-real-session` | v1.0.2 ✅ | Offline audit of a completed guarded real session |
 
 ## Safety model
 
@@ -186,6 +187,7 @@ v0.9.3 adds the operator approval protocol + release-readiness evidence (`approv
 v0.9.4 hardens the pre-1.0 governance layer: stricter approval/readiness schemas (conditional invariants), fail-closed type validation of safety-summary counts, explicit parseable/finite/non-finite calibration sample counts, and clearer approval-request required-vs-warnings signalling.
 v1.0.0 adds guarded real mode (`real --mode preflight|guarded`): the first real-egress path, gated on the entire pre-real-mode evidence chain. Guarded real egress for CoreAI-backed, LeRobot-shaped policies — not a native upstream LeRobot integration, and not proof of physical safety.
 v1.0.1 hardens the external-http adapter with an optional bearer token (`--robot.token` / `LEROBOT_COREAI_ROBOT_TOKEN`), completing the loopback-only egress boundary.
+v1.0.2 adds `verify-real-session` (offline audit of a completed guarded real session: schema, action accounting, sent⇒allowed, trace order), a conditional real-report schema, a post-session real safety-quality gate, and loopback URL canonicalization.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

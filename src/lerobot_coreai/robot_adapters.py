@@ -81,22 +81,36 @@ class ExternalHttpRobotAdapter:
 
     name = "external-http"
 
-    # Loopback-only in v1.0.0: real egress must be to a controller the operator
-    # runs on the same machine, not a remote host.
-    _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+    # Loopback-only: real egress must be to a controller the operator runs on
+    # the same machine, not a remote host.
 
     def __init__(self, robot_type: str, endpoint: str | None = None,
                  token: str | None = None, **_ignored: Any):
         if not endpoint:
             raise CoreAIPolicyError(
                 "external-http adapter requires --robot.endpoint.")
+        import ipaddress
         import os
         import urllib.parse
-        host = urllib.parse.urlparse(endpoint).hostname or ""
-        if host.lower() not in self._LOOPBACK_HOSTS:
+        parsed = urllib.parse.urlparse(endpoint)
+        if parsed.scheme != "http":
+            raise CoreAIPolicyError(
+                f"external-http endpoint must be an http:// loopback URL; got scheme "
+                f"{parsed.scheme!r}.")
+        host = (parsed.hostname or "").lower()
+        # Accept the literal 'localhost'; otherwise the host must parse to a
+        # loopback IP (this also catches obfuscated forms like 2130706433 or
+        # 127.000.000.001 that would otherwise slip past a string allowlist).
+        loopback = host == "localhost"
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loopback = False
+        if not loopback:
             raise CoreAIPolicyError(
                 f"external-http endpoint must be loopback (127.0.0.1/localhost) in "
-                f"v1.0.x; refusing remote host {host!r}. Run the controller locally."
+                f"v1.0.x; refusing host {host!r}. Run the controller locally."
             )
         self.robot_type = robot_type
         self.endpoint = endpoint.rstrip("/")
