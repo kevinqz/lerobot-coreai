@@ -64,7 +64,8 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 - **v0.7.2**: observation adapters, live metrics, run quality diagnostics
 - **v0.8**: sim mode (action egress to simulator only)
 - **v0.8.1**: gymnasium simulator adapter (`[sim]` extra)
-- **v0.8.2** (current): sim analytics — CSV exports, markdown summaries, failure taxonomy
+- **v0.8.2**: sim analytics — CSV exports, markdown summaries, failure taxonomy
+- **v0.8.3** (current): sim quality gates + sim-regression harness
 
 ## Hardware
 

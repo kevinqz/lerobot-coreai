@@ -115,6 +115,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `export` | v0.6 ✅ | Export/verify/package LeRobot policy as CoreAI artifact |
 | `shadow` | v0.7 ✅ | Motor-blocked observation loop; actions generated and logged, never sent |
 | `sim` | v0.8 ✅ | Simulator-only action egress; actions drive a simulator, never a robot |
+| `sim-regression` | v0.8.3 ✅ | Compare two sim runs for regression |
 
 ## Safety model
 
@@ -124,6 +125,7 @@ v0.7.2 adds observation adapters, live metrics, and run quality diagnostics.
 v0.8 adds simulator-only sim mode: actions drive a simulator, never a robot.
 v0.8.1 adds a gymnasium simulator adapter (`[sim]` extra) for sim mode.
 v0.8.2 adds sim analytics: CSV exports, markdown summaries, failure taxonomy, and richer report sections for simulator-only runs.
+v0.8.3 adds sim quality gates and a sim-regression command to compare two sim runs for regression.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
