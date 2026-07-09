@@ -494,6 +494,55 @@ def build_parser() -> argparse.ArgumentParser:
     p_sreg.add_argument("--json", action="store_true")
     p_sreg.set_defaults(func=cmd_safety_regression)
 
+    # --- operator approval + release readiness (v0.9.3) ---
+    p_areq = sub.add_parser("approval-request",
+                            help="Build an operator approval checklist for a sim bundle (v0.9.3)")
+    p_areq.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_areq.add_argument("--output-dir", dest="output_dir")
+    p_areq.add_argument("--allow-missing-regression", dest="allow_missing_regression", action="store_true")
+    p_areq.add_argument("--allow-missing-calibration", dest="allow_missing_calibration", action="store_true")
+    p_areq.add_argument("--json", action="store_true")
+    p_areq.set_defaults(func=cmd_approval_request)
+
+    p_appr = sub.add_parser("approve-bundle",
+                            help="Create an operator approval manifest bound to artifact hashes (v0.9.3)")
+    p_appr.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_appr.add_argument("--operator", dest="operator")
+    p_appr.add_argument("--approval-scope", dest="approval_scope",
+                        default="sim_to_guarded_real_readiness")
+    p_appr.add_argument("--expires-days", dest="expires_days", type=int, default=30)
+    p_appr.add_argument("--expires-at", dest="expires_at")
+    p_appr.add_argument("--notes", dest="notes")
+    p_appr.add_argument("--output-dir", dest="output_dir")
+    p_appr.add_argument("--allow-missing-regression", dest="allow_missing_regression", action="store_true")
+    p_appr.add_argument("--allow-missing-calibration", dest="allow_missing_calibration", action="store_true")
+    p_appr.add_argument("--allow-warnings", dest="allow_warnings", action="store_true")
+    p_appr.add_argument("--i-understand-this-does-not-prove-physical-safety",
+                        dest="attest_not_physical_safety", action="store_true")
+    p_appr.add_argument("--i-understand-this-does-not-authorize-unrestricted-real-world-actuation",
+                        dest="attest_not_unrestricted_actuation", action="store_true")
+    p_appr.add_argument("--json", action="store_true")
+    p_appr.set_defaults(func=cmd_approve_bundle)
+
+    p_vappr = sub.add_parser("verify-approval",
+                             help="Verify an approval manifest against a bundle (v0.9.3)")
+    p_vappr.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_vappr.add_argument("--approval", dest="approval", required=True)
+    p_vappr.add_argument("--json", action="store_true")
+    p_vappr.set_defaults(func=cmd_verify_approval)
+
+    p_rr = sub.add_parser("release-readiness",
+                          help="Produce a release readiness report from bundle + approval (v0.9.3)")
+    p_rr.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_rr.add_argument("--approval", dest="approval", required=True)
+    p_rr.add_argument("--output-dir", dest="output_dir")
+    p_rr.add_argument("--allow-missing-regression", dest="allow_missing_regression",
+                      action="store_true",
+                      help="Downgrade a missing/failed safety regression to a warning "
+                           "(only if the approval also waived it)")
+    p_rr.add_argument("--json", action="store_true")
+    p_rr.set_defaults(func=cmd_release_readiness)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -532,7 +581,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -1997,6 +2046,165 @@ def cmd_safety_regression(args: argparse.Namespace) -> int:
     if not result.passed and not fail:
         print("Safety regression FAILED (report-only; pass --fail-on-regression to fail CI).")
     return rc
+
+
+# MARK: - operator approval + release readiness (v0.9.3)
+
+def _approval_config_from_args(args):
+    from .operator_approval import ApprovalConfig
+    return ApprovalConfig(
+        bundle_dir=Path(args.bundle_dir),
+        output_dir=Path(args.output_dir) if getattr(args, "output_dir", None) else None,
+        operator=getattr(args, "operator", None),
+        approval_scope=getattr(args, "approval_scope", "sim_to_guarded_real_readiness"),
+        expires_days=getattr(args, "expires_days", 30),
+        expires_at=getattr(args, "expires_at", None),
+        notes=getattr(args, "notes", None),
+        allow_missing_regression=getattr(args, "allow_missing_regression", False),
+        allow_missing_calibration=getattr(args, "allow_missing_calibration", False),
+        allow_warnings=getattr(args, "allow_warnings", False),
+        attest_not_physical_safety=getattr(args, "attest_not_physical_safety", False),
+        attest_not_unrestricted_actuation=getattr(args, "attest_not_unrestricted_actuation", False),
+    )
+
+
+def cmd_approval_request(args: argparse.Namespace) -> int:
+    """Build an operator approval checklist + draft for a sim evidence bundle."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .operator_approval import build_approval_checklist_markdown, build_approval_request
+    from .reports import save_json
+
+    try:
+        request = build_approval_request(_approval_config_from_args(args))
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "approval_request.json", request.approval_manifest_draft)
+        (output_dir / "approval_checklist.md").write_text(
+            build_approval_checklist_markdown(request))
+
+    if args.json:
+        print(_json.dumps({
+            "ok": request.ok,
+            "checks": [c.to_dict() for c in request.checks],
+            "warnings": request.warnings,
+        }, indent=2))
+        return 0 if request.ok else 1
+
+    print("lerobot-coreai approval-request")
+    print("=" * 50)
+    print(f"Bundle: {args.bundle_dir}")
+    print("\nRequired checks:")
+    for c in request.checks:
+        print(f"{'✓' if c.passed else '✗'} {c.name}{(' — ' + c.message) if c.message else ''}")
+    print("\nWarnings:")
+    for w in (request.warnings or ["None"]):
+        print(f"- {w}")
+    print("=" * 50)
+    print("Ready for operator approval." if request.ok
+          else "Not ready: required checks failed.")
+    return 0 if request.ok else 1
+
+
+def cmd_approve_bundle(args: argparse.Namespace) -> int:
+    """Create an operator approval manifest bound to artifact hashes."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .operator_approval import approve_bundle
+    from .reports import save_json
+
+    try:
+        manifest = approve_bundle(_approval_config_from_args(args))
+    except CoreAIPolicyError as e:
+        print(f"✗ Approval refused: {e}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else Path(".")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "approval_manifest.json"
+    save_json(manifest_path, manifest)
+
+    if args.json:
+        print(_json.dumps(manifest, indent=2))
+        return 0
+    print("lerobot-coreai approve-bundle")
+    print("=" * 50)
+    print(f"✓ Approval id: {manifest['approval_id']}")
+    print(f"✓ Approved by: {manifest['approved_by']}")
+    print(f"✓ Scope: {manifest['approval_scope']}")
+    print(f"✓ Expires: {manifest['expires_at']}")
+    print(f"✓ Manifest: {manifest_path}")
+    print("=" * 50)
+    print("Approval written.")
+    return 0
+
+
+def cmd_verify_approval(args: argparse.Namespace) -> int:
+    """Verify an approval manifest against a bundle."""
+    import json as _json
+
+    from .operator_approval import verify_approval
+
+    result = verify_approval(Path(args.bundle_dir), Path(args.approval))
+    if args.json:
+        print(_json.dumps({
+            "ok": result.approval_valid, "expired": result.expired,
+            "checksum_matches": result.checksum_matches,
+            "checks": [c.to_dict() for c in result.checks],
+        }, indent=2))
+        return 0 if result.approval_valid else 1
+
+    print("lerobot-coreai verify-approval")
+    print("=" * 50)
+    for c in result.checks:
+        print(f"{'✓' if c.passed else '✗'} {c.name}{(' — ' + c.message) if c.message else ''}")
+    print("=" * 50)
+    print("Approval valid." if result.approval_valid else "Approval INVALID.")
+    return 0 if result.approval_valid else 1
+
+
+def cmd_release_readiness(args: argparse.Namespace) -> int:
+    """Produce a release readiness report from a bundle + approval."""
+    import json as _json
+
+    from .release_readiness import (
+        build_release_readiness_markdown, evaluate_release_readiness,
+    )
+    from .reports import save_json
+
+    result = evaluate_release_readiness(
+        Path(args.bundle_dir), Path(args.approval),
+        allow_missing_regression=getattr(args, "allow_missing_regression", False))
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "release_readiness_report.json", result.report)
+        (output_dir / "release_readiness_report.md").write_text(
+            build_release_readiness_markdown(result.report))
+
+    if args.json:
+        print(_json.dumps(result.report, indent=2))
+        return 0 if result.ready else 1
+
+    print("lerobot-coreai release-readiness")
+    print("=" * 50)
+    print(f"Ready: {result.ready}")
+    print(f"Scope: {result.report['readiness_scope']}")
+    if result.blocking_failures:
+        print("Blocking failures:")
+        for b in result.blocking_failures:
+            print(f"  ✗ {b}")
+    print("=" * 50)
+    print("Release-ready for the declared software evidence scope." if result.ready
+          else "NOT release-ready.")
+    return 0 if result.ready else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)

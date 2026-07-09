@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/release-readiness-report.schema.json",
+  "title": "lerobot-coreai release readiness report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "ready",
+    "readiness_scope",
+    "bundle",
+    "approval",
+    "evidence",
+    "blocking_failures",
+    "warnings",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.release_readiness_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ready": {"type": "boolean"},
+    "readiness_scope": {"type": "string"},
+    "bundle": {"type": "object"},
+    "approval": {"type": "object"},
+    "evidence": {"type": "object"},
+    "blocking_failures": {"type": "array"},
+    "warnings": {"type": "array"},
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_physical_safety",
+        "proves_real_world_safety",
+        "authorizes_unrestricted_real_world_actuation"
+      ],
+      "properties": {
+        "proves_release_readiness_for_scope": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "authorizes_unrestricted_real_world_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

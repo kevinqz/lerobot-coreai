@@ -126,6 +126,10 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `profile-compare` | v0.9.1 ✅ | Compare two profiles over the same actions |
 | `safety-gate` | v0.9.2 ✅ | Evaluate a safety summary/run/bundle against safety quality gates |
 | `safety-regression` | v0.9.2 ✅ | Compare baseline vs candidate safety summaries for regressions |
+| `approval-request` | v0.9.3 ✅ | Build an operator approval checklist for a sim evidence bundle |
+| `approve-bundle` | v0.9.3 ✅ | Create an operator approval manifest bound to artifact hashes |
+| `verify-approval` | v0.9.3 ✅ | Verify an approval manifest against a bundle |
+| `release-readiness` | v0.9.3 ✅ | Produce a final readiness report from bundle + approval |
 
 ## Safety model
 
@@ -140,6 +144,7 @@ v0.8.4 adds reproducibility bundles for simulator-only runs, including manifests
 v0.9.0 adds a runtime safety supervisor that validates, bounds, clips, blocks, and audits actions before egress. It is a software safety layer for simulator and future guarded real-mode workflows. It does not prove physical robot safety and does not enable unrestricted real-world actuation.
 v0.9.1 adds robot-family safety profiles and a calibration toolkit (software action-bound contracts; not hardware certification).
 v0.9.2 adds supervisor quality gates and a safety regression harness that can fail CI on unsafe actions or safety regressions. Software CI layer only; does not prove physical robot safety.
+v0.9.3 adds an operator approval protocol and release-readiness evidence: a named operator must explicitly approve a checksummed evidence bundle (safety gates, regression, calibration) before it is marked release-ready. Approval does not prove physical safety and does not authorize real-world actuation.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
@@ -175,6 +180,7 @@ v0.8.4 adds reproducibility bundles (`package-sim-run` / `verify-sim-bundle`).
 v0.9.0 adds a runtime safety supervisor (`--supervisor.mode`, `supervisor-check`).
 v0.9.1 adds robot-family safety profiles and an offline profile calibration toolkit (validate/recommend/calibrate/compare), plus fail-closed delta verification across shape changes. Profiles are software action-bound contracts — they do not certify robot safety.
 v0.9.2 turns supervisor findings into enforceable safety quality gates (`safety-gate`, `sim --safety.*`) and safety regression checks (`safety-regression`). Gates prove only that an artifact met configured software thresholds — not physical or real-world safety.
+v0.9.3 adds the operator approval protocol + release-readiness evidence (`approval-request`, `approve-bundle`, `verify-approval`, `release-readiness`) — the last software gate before guarded real mode. The pre-v1.0 workflow: sim → safety-gate → safety-regression → package-sim-run → verify-sim-bundle → approval-request → approve-bundle → verify-approval → release-readiness.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
