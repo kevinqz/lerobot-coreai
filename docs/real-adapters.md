@@ -56,6 +56,31 @@ are present.
 <t>`. The token is only ever sent as that header — it is never written to reports
 or logs.
 
+### Capability contract (v1.0.3)
+
+In guarded mode, the controller's `GET /preflight` must return a rigid
+capability contract, validated against `external-http-preflight.schema.json`:
+
+```json
+{
+  "ok": true,
+  "controller_schema_version": "lerobot-coreai.external_http.v0",
+  "robot_type": "so100",
+  "action_shape": [16, 7],
+  "observation_keys": ["observation.state", "task"],
+  "supports_stop": true,
+  "supports_ready": true,
+  "supports_safety_state": true,
+  "physical_estop_required": true,
+  "max_fps": 5.0
+}
+```
+
+Real preflight then refuses the session unless the controller's `robot_type`
+matches `--robot.type`, its `action_shape` matches the safety profile's, its
+`max_fps` allows the requested `--fps`, and it advertises `supports_stop` /
+`supports_ready`.
+
 ## Native SO-100 / SO-101
 
 Not built in. `lerobot-coreai` does not ship a native motor-bus driver. Point an

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/external-http-preflight.schema.json",
+  "title": "lerobot-coreai external-http controller preflight",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "ok",
+    "controller_schema_version",
+    "robot_type",
+    "action_shape",
+    "supports_stop",
+    "supports_ready"
+  ],
+  "properties": {
+    "ok": {"type": "boolean", "const": true},
+    "controller_schema_version": {"type": "string", "const": "lerobot-coreai.external_http.v0"},
+    "adapter": {"type": "string"},
+    "robot_type": {"type": "string"},
+    "action_shape": {"type": "array", "items": {"type": "integer"}},
+    "observation_keys": {"type": "array", "items": {"type": "string"}},
+    "supports_stop": {"type": "boolean", "const": true},
+    "supports_ready": {"type": "boolean", "const": true},
+    "supports_safety_state": {"type": "boolean"},
+    "physical_estop_required": {"type": "boolean"},
+    "max_fps": {"type": "number", "exclusiveMinimum": 0}
+  }
+}
