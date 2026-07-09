@@ -245,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.add_argument("--policy.path", dest="policy_path", required=True,
                        help="HF repo id of the CoreAI artifact")
     p_sim.add_argument("--env.type", dest="env_type", required=True,
-                       help="Simulator environment type (v0.8.0: fake, replay; gym/lerobot/pusht reserved for v0.8.1)")
+                       help="Simulator environment type (v0.8.1: fake, replay, gym; lerobot/pusht reserved)")
     p_sim.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock",
                        help="coreai-runner URL (default: unix socket)")
     p_sim.add_argument("--output-dir", dest="output_dir", required=True,
@@ -254,6 +254,10 @@ def build_parser() -> argparse.ArgumentParser:
     # Environment args.
     p_sim.add_argument("--env.config", dest="env_config",
                        help="Environment config JSON (for --env.type replay)")
+    p_sim.add_argument("--env.id", dest="env_id",
+                       help="Gymnasium environment id (for --env.type gym, e.g. PushT-v0)")
+    p_sim.add_argument("--env.kwargs-json", dest="env_kwargs_json",
+                       help='Gymnasium make() kwargs as JSON (for --env.type gym), e.g. \'{"foo": 1}\'')
     p_sim.add_argument("--env.render", dest="env_render", action="store_true")
     p_sim.add_argument("--env.record-video", dest="env_record_video", action="store_true")
     p_sim.add_argument("--env.video-dir", dest="env_video_dir")
@@ -844,6 +848,23 @@ def cmd_sim(args: argparse.Namespace) -> int:
     if args.state_vector:
         state_vector = [float(v.strip()) for v in args.state_vector.split(",")]
 
+    # Parse gym kwargs JSON (for --env.type gym) if provided.
+    env_kwargs = None
+    kwargs_json = getattr(args, "env_kwargs_json", None)
+    if kwargs_json:
+        import json
+        try:
+            env_kwargs = json.loads(kwargs_json)
+        except Exception as e:
+            print(f"Error: invalid --env.kwargs-json: {e}", file=sys.stderr)
+            print("No robot commands were sent.", file=sys.stderr)
+            return 1
+        # gymnasium.make(**kwargs) requires a mapping; reject anything else early.
+        if not isinstance(env_kwargs, dict):
+            print("Error: --env.kwargs-json must be a JSON object.", file=sys.stderr)
+            print("No robot commands were sent.", file=sys.stderr)
+            return 1
+
     config = SimConfig(
         policy_path=args.policy_path,
         runner_url=args.runner_url,
@@ -854,6 +875,8 @@ def cmd_sim(args: argparse.Namespace) -> int:
         state_vector=state_vector,
         image_key=args.image_key,
         env_config=Path(args.env_config) if args.env_config else None,
+        env_id=getattr(args, "env_id", None),
+        env_kwargs=env_kwargs,
         env_render=getattr(args, "env_render", False),
         env_record_video=getattr(args, "env_record_video", False),
         env_video_dir=Path(args.env_video_dir) if args.env_video_dir else None,

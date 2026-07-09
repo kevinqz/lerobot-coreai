@@ -81,10 +81,52 @@ lerobot-coreai sim \
   --output-dir runs/replay-sim
 ```
 
+### Gym / Gymnasium environment (v0.8.1)
+
+The gym adapter wraps any [gymnasium](https://gymnasium.farama.org/) environment
+via `gymnasium.make(env_id, **kwargs)`. It requires the optional `[sim]` extra:
+
+```bash
+pip install "lerobot-coreai[sim]"
+```
+
+gymnasium is imported lazily — only when `--env.type gym` is used — so the core
+package stays free of a hard gymnasium dependency.
+
+```bash
+lerobot-coreai sim \
+  --policy.path kevinqz/EVO1-SO100-CoreAI \
+  --env.type gym \
+  --env.id PushT-v0 \
+  --runner.url http://127.0.0.1:8710 \
+  --episodes 10 \
+  --max-steps-per-episode 300 \
+  --confirm-sim-egress \
+  --output-dir runs/pusht-gym-sim
+```
+
+Optional `--env.kwargs-json` passes kwargs to `gymnasium.make()`:
+
+```bash
+  --env.kwargs-json '{"max_episode_steps": 200}'
+```
+
+**API translation.** gymnasium's `reset()` returns `(obs, info)` and `step()`
+returns the 5-tuple `(obs, reward, terminated, truncated, info)`. The adapter
+collapses `terminated or truncated` into the single `done` flag the sim loop
+expects; the original flags are preserved in `info["terminated"]` /
+`info["truncated"]`.
+
+**Observation normalization.** Gym observations are normalized to the dict
+shape the policy expects:
+- `dict` → passthrough
+- scalar / list / tuple / numpy-array-like → `{"observation.state": [...]}`
+- anything else → a clear error (provide an env adapter or observation mapping)
+
 ### Reserved environment types
 
-`gym`, `lerobot`, and `pusht` are reserved for v0.8.1 (real simulator adapters).
-In v0.8.0 they raise a clear "not yet supported" error.
+`lerobot` and `pusht` are reserved for a later release. They raise a clear
+"not yet supported" error.
 
 ## Output files
 
@@ -102,12 +144,14 @@ In v0.8.0 they raise a clear "not yet supported" error.
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `--policy.path` | yes | — | HF repo id of the CoreAI artifact |
-| `--env.type` | yes | — | `fake` or `replay` (v0.8.0) |
+| `--env.type` | yes | — | `fake`, `replay`, or `gym` |
 | `--output-dir` | yes | — | Output directory for reports/logs |
 | `--confirm-sim-egress` | yes | — | Confirm actions may be sent to the simulator |
 | `--runner.url` | no | `unix:///tmp/coreai-runner.sock` | coreai-runner URL |
 | `--robot.type` | no | from manifest | Override robot type |
 | `--env.config` | no | — | Environment config JSON (for `replay`) |
+| `--env.id` | no | — | Gymnasium env id (for `gym`, e.g. `PushT-v0`) |
+| `--env.kwargs-json` | no | — | Gymnasium `make()` kwargs as JSON (for `gym`) |
 | `--task` | no | — | Task text for each observation |
 | `--state-vector` | no | — | Comma-separated floats for observation.state |
 | `--episodes` | no | `1` | Number of episodes to run |
