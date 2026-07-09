@@ -10,8 +10,8 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **v0.4:** `eval` command reads LeRobotDataset frames and generates actions via CoreAI runner.
-> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata. `rollout --mode dry_run` with reports.
+> **Current:** `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, and `shadow` mode (motor-blocked).
+> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata.
 
 ---
 
