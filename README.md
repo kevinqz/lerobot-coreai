@@ -124,6 +124,8 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `profile-recommend` | v0.9.1 ✅ | Recommend a built-in profile from policy/actions |
 | `profile-calibrate` | v0.9.1 ✅ | Calibrate a profile from an actions log |
 | `profile-compare` | v0.9.1 ✅ | Compare two profiles over the same actions |
+| `safety-gate` | v0.9.2 ✅ | Evaluate a safety summary/run/bundle against safety quality gates |
+| `safety-regression` | v0.9.2 ✅ | Compare baseline vs candidate safety summaries for regressions |
 
 ## Safety model
 
@@ -136,6 +138,8 @@ v0.8.2 adds sim analytics: CSV exports, markdown summaries, failure taxonomy, an
 v0.8.3 adds sim quality gates and a sim-regression command to compare two sim runs for regression.
 v0.8.4 adds reproducibility bundles for simulator-only runs, including manifests, checksums, environment metadata, runner metadata, and audit-ready package outputs.
 v0.9.0 adds a runtime safety supervisor that validates, bounds, clips, blocks, and audits actions before egress. It is a software safety layer for simulator and future guarded real-mode workflows. It does not prove physical robot safety and does not enable unrestricted real-world actuation.
+v0.9.1 adds robot-family safety profiles and a calibration toolkit (software action-bound contracts; not hardware certification).
+v0.9.2 adds supervisor quality gates and a safety regression harness that can fail CI on unsafe actions or safety regressions. Software CI layer only; does not prove physical robot safety.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
@@ -170,6 +174,7 @@ v0.8.3 adds sim quality gates and the `sim-regression` command.
 v0.8.4 adds reproducibility bundles (`package-sim-run` / `verify-sim-bundle`).
 v0.9.0 adds a runtime safety supervisor (`--supervisor.mode`, `supervisor-check`).
 v0.9.1 adds robot-family safety profiles and an offline profile calibration toolkit (validate/recommend/calibrate/compare), plus fail-closed delta verification across shape changes. Profiles are software action-bound contracts — they do not certify robot safety.
+v0.9.2 turns supervisor findings into enforceable safety quality gates (`safety-gate`, `sim --safety.*`) and safety regression checks (`safety-regression`). Gates prove only that an artifact met configured software thresholds — not physical or real-world safety.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

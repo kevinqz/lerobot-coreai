@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/safety-quality-report.schema.json",
+  "title": "lerobot-coreai safety quality report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "lerobot_coreai_version", "passed", "summary", "checks", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.safety_quality_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "passed": {"type": "boolean"},
+    "source": {"type": "object"},
+    "summary": {"type": "object"},
+    "checks": {"type": "array", "items": {"type": "object"}},
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_physical_safety",
+        "proves_real_world_safety",
+        "proves_real_task_success"
+      ],
+      "properties": {
+        "proves_software_safety_quality": {"type": "boolean", "const": true},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "proves_real_task_success": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

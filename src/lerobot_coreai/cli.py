@@ -323,6 +323,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Built-in safety profile name (e.g. so100-sim-default)")
     p_sim.add_argument("--no-safety-report", dest="safety_report", action="store_false",
                        help="Do not write safety_report.jsonl/safety_summary artifacts")
+    # Safety quality gates (v0.9.2).
+    p_sim.add_argument("--safety.max-actions-blocked", dest="safety_max_actions_blocked", type=int)
+    p_sim.add_argument("--safety.max-block-rate", dest="safety_max_block_rate", type=float)
+    p_sim.add_argument("--safety.max-critical-findings", dest="safety_max_critical_findings", type=int)
+    p_sim.add_argument("--safety.max-would-block-actions", dest="safety_max_would_block_actions", type=int)
+    p_sim.add_argument("--safety.max-modification-rate", dest="safety_max_modification_rate", type=float)
+    p_sim.add_argument("--safety.fail-on-safety-quality", dest="safety_fail_on_safety_quality",
+                       action="store_true", help="Fail the run if safety gates don't pass")
     p_sim.add_argument("--json", action="store_true")
     p_sim.set_defaults(func=cmd_sim)
 
@@ -376,6 +384,13 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Where to write safety_report.jsonl / safety_summary.json")
     p_supcheck.add_argument("--fail-on-block", dest="fail_on_block", action="store_true",
                             help="Return rc 1 if any action is blocked")
+    # Safety quality gates (v0.9.2).
+    p_supcheck.add_argument("--safety.max-actions-blocked", dest="safety_max_actions_blocked", type=int)
+    p_supcheck.add_argument("--safety.max-critical-findings", dest="safety_max_critical_findings", type=int)
+    p_supcheck.add_argument("--safety.max-would-block-actions", dest="safety_max_would_block_actions", type=int)
+    p_supcheck.add_argument("--safety.max-modification-rate", dest="safety_max_modification_rate", type=float)
+    p_supcheck.add_argument("--safety.fail-on-safety-quality", dest="safety_fail_on_safety_quality",
+                            action="store_true", help="Return rc 1 if safety gates don't pass")
     p_supcheck.add_argument("--json", action="store_true")
     p_supcheck.set_defaults(func=cmd_supervisor_check)
 
@@ -427,6 +442,58 @@ def build_parser() -> argparse.ArgumentParser:
     p_pcmp.add_argument("--json", action="store_true")
     p_pcmp.set_defaults(func=cmd_profile_compare)
 
+    # --- safety-gate (v0.9.2) — safety quality gates ---
+    p_sgate = sub.add_parser("safety-gate",
+                             help="Evaluate a safety summary against safety quality gates (v0.9.2)")
+    p_sgate.add_argument("--safety-summary", dest="safety_summary")
+    p_sgate.add_argument("--sim-report", dest="sim_report")
+    p_sgate.add_argument("--profile-fit", dest="profile_fit")
+    p_sgate.add_argument("--run-dir", dest="run_dir")
+    p_sgate.add_argument("--bundle-dir", dest="bundle_dir")
+    p_sgate.add_argument("--output-dir", dest="output_dir")
+    p_sgate.add_argument("--max-actions-blocked", dest="max_actions_blocked", type=int, default=0)
+    p_sgate.add_argument("--max-block-rate", dest="max_block_rate", type=float, default=0.0)
+    p_sgate.add_argument("--max-critical-failures", dest="max_critical_failures", type=int, default=0)
+    p_sgate.add_argument("--max-critical-findings", dest="max_critical_findings", type=int, default=0)
+    p_sgate.add_argument("--max-would-block-actions", dest="max_would_block_actions", type=int, default=0)
+    p_sgate.add_argument("--max-would-block-rate", dest="max_would_block_rate", type=float, default=0.0)
+    p_sgate.add_argument("--max-actions-modified", dest="max_actions_modified", type=int)
+    p_sgate.add_argument("--max-modification-rate", dest="max_modification_rate", type=float)
+    p_sgate.add_argument("--max-clip-rate", dest="max_clip_rate", type=float)
+    p_sgate.add_argument("--max-delta-failures", dest="max_delta_failures", type=int, default=0)
+    p_sgate.add_argument("--max-shape-failures", dest="max_shape_failures", type=int, default=0)
+    p_sgate.add_argument("--max-nonfinite-failures", dest="max_nonfinite_failures", type=int, default=0)
+    p_sgate.add_argument("--min-actions-supervised", dest="min_actions_supervised", type=int)
+    p_sgate.add_argument("--allow-summary-failed", dest="allow_summary_failed", action="store_true")
+    p_sgate.add_argument("--allow-parse-errors", dest="allow_parse_errors", action="store_true")
+    p_sgate.add_argument("--fail-on-safety-quality", dest="fail_on_safety_quality", action="store_true")
+    p_sgate.add_argument("--json", action="store_true")
+    p_sgate.set_defaults(func=cmd_safety_gate)
+
+    # --- safety-regression (v0.9.2) — baseline vs candidate ---
+    p_sreg = sub.add_parser("safety-regression",
+                            help="Compare baseline vs candidate safety summaries (v0.9.2)")
+    p_sreg.add_argument("--baseline", dest="baseline")
+    p_sreg.add_argument("--candidate", dest="candidate")
+    p_sreg.add_argument("--baseline-run-dir", dest="baseline_run_dir")
+    p_sreg.add_argument("--candidate-run-dir", dest="candidate_run_dir")
+    p_sreg.add_argument("--baseline-bundle-dir", dest="baseline_bundle_dir")
+    p_sreg.add_argument("--candidate-bundle-dir", dest="candidate_bundle_dir")
+    p_sreg.add_argument("--output-dir", dest="output_dir")
+    p_sreg.add_argument("--max-blocked-increase", dest="max_blocked_increase", type=int, default=0)
+    p_sreg.add_argument("--max-block-rate-increase", dest="max_block_rate_increase", type=float, default=0.0)
+    p_sreg.add_argument("--max-critical-failures-increase", dest="max_critical_failures_increase", type=int, default=0)
+    p_sreg.add_argument("--max-critical-findings-increase", dest="max_critical_findings_increase", type=int, default=0)
+    p_sreg.add_argument("--max-would-block-increase", dest="max_would_block_increase", type=int, default=0)
+    p_sreg.add_argument("--max-would-block-rate-increase", dest="max_would_block_rate_increase", type=float, default=0.0)
+    p_sreg.add_argument("--max-modified-increase", dest="max_modified_increase", type=int)
+    p_sreg.add_argument("--max-modification-rate-increase", dest="max_modification_rate_increase", type=float)
+    p_sreg.add_argument("--require-same-profile", dest="require_same_profile", action="store_true")
+    p_sreg.add_argument("--no-require-candidate-passed", dest="require_candidate_passed", action="store_false")
+    p_sreg.add_argument("--fail-on-regression", dest="fail_on_regression", action="store_true")
+    p_sreg.add_argument("--json", action="store_true")
+    p_sreg.set_defaults(func=cmd_safety_regression)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -465,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -982,6 +1049,30 @@ def cmd_shadow(args: argparse.Namespace) -> int:
 
 # MARK: - sim (v0.8 — simulator-only action egress)
 
+def _sim_safety_quality_config(args):
+    """Build a SafetyQualityConfig for sim if any safety gate flag was given."""
+    from .safety_quality import SafetyQualityConfig
+    keys = ["safety_max_actions_blocked", "safety_max_block_rate",
+            "safety_max_critical_findings", "safety_max_would_block_actions",
+            "safety_max_modification_rate"]
+    requested = (getattr(args, "safety_fail_on_safety_quality", False)
+                 or any(getattr(args, k, None) is not None for k in keys))
+    if not requested:
+        return None
+    cfg = SafetyQualityConfig()
+    if getattr(args, "safety_max_actions_blocked", None) is not None:
+        cfg.max_actions_blocked = args.safety_max_actions_blocked
+    if getattr(args, "safety_max_block_rate", None) is not None:
+        cfg.max_block_rate = args.safety_max_block_rate
+    if getattr(args, "safety_max_critical_findings", None) is not None:
+        cfg.max_critical_findings = args.safety_max_critical_findings
+    if getattr(args, "safety_max_would_block_actions", None) is not None:
+        cfg.max_would_block_actions = args.safety_max_would_block_actions
+    if getattr(args, "safety_max_modification_rate", None) is not None:
+        cfg.max_modification_rate = args.safety_max_modification_rate
+    return cfg
+
+
 def cmd_sim(args: argparse.Namespace) -> int:
     """Run simulator-only sim mode: observe, generate actions, egress to simulator only."""
     from .errors import CoreAIPolicyError
@@ -1067,6 +1158,8 @@ def cmd_sim(args: argparse.Namespace) -> int:
         safety_profile=Path(args.safety_profile) if getattr(args, "safety_profile", None) else None,
         safety_profile_name=getattr(args, "safety_profile_name", None),
         safety_report=getattr(args, "safety_report", True),
+        safety_quality=_sim_safety_quality_config(args),
+        fail_on_safety_quality=getattr(args, "safety_fail_on_safety_quality", False),
     )
 
     if not args.json:
@@ -1145,6 +1238,15 @@ def cmd_sim(args: argparse.Namespace) -> int:
             print(f"  would block:{safety_sup.get('would_block_actions')} (report_only)")
         print(f"  modified:   {safety_sup.get('actions_modified')}")
         print(f"  passed:     {safety_sup.get('passed')}")
+
+    # v0.9.2: surface safety quality gate result.
+    safety_q = result.report.get("safety_quality")
+    if safety_q:
+        print()
+        print(f"Safety gates: {'PASSED' if safety_q.get('passed') else 'FAILED'}")
+        for c in safety_q.get("checks", []):
+            if not c.get("passed"):
+                print(f"  ✗ {c.get('name')}: value={c.get('value')} threshold={c.get('threshold')}")
 
     # v0.8.3: surface quality gate results in human mode.
     quality = result.report.get("quality")
@@ -1420,8 +1522,31 @@ def cmd_supervisor_check(args: argparse.Namespace) -> int:
         save_json(output_dir / "profile_fit.json", fit)
         (output_dir / "profile_fit.md").write_text(build_profile_fit_markdown(fit))
 
+    # v0.9.2: optional safety quality gates.
+    safety_quality_failed = False
+    sq_cfg = _sim_safety_quality_config(args)
+    if sq_cfg is not None:
+        from .safety_quality import (
+            build_safety_quality_markdown, build_safety_quality_report,
+            evaluate_safety_quality,
+        )
+        try:
+            sq_result = evaluate_safety_quality(summary, sq_cfg)
+        except CoreAIPolicyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if output_dir is not None:
+            from .reports import save_json
+            sq_report = build_safety_quality_report(
+                sq_result, source={"type": "supervisor-check", "path": str(actions_path)})
+            save_json(output_dir / "safety_quality_report.json", sq_report)
+            (output_dir / "safety_quality_report.md").write_text(
+                build_safety_quality_markdown(sq_report))
+        if getattr(args, "safety_fail_on_safety_quality", False) and not sq_result.passed:
+            safety_quality_failed = True
+
     blocked = acc.actions_blocked
-    ok = not (getattr(args, "fail_on_block", False) and blocked > 0)
+    ok = not (getattr(args, "fail_on_block", False) and blocked > 0) and not safety_quality_failed
 
     if args.json:
         print(_json.dumps({
@@ -1719,6 +1844,159 @@ def cmd_profile_compare(args: argparse.Namespace) -> int:
     print(f"A-only blocks: {bd['a_only_blocks']}  B-only blocks: {bd['b_only_blocks']}")
     print("=" * 50)
     return 0
+
+
+# MARK: - safety-gate / safety-regression (v0.9.2)
+
+def _safety_quality_config_from_args(args) -> "object":
+    from .safety_quality import SafetyQualityConfig
+    return SafetyQualityConfig(
+        max_actions_blocked=getattr(args, "max_actions_blocked", 0),
+        max_block_rate=getattr(args, "max_block_rate", 0.0),
+        max_critical_failures=getattr(args, "max_critical_failures", 0),
+        max_critical_findings=getattr(args, "max_critical_findings", 0),
+        max_would_block_actions=getattr(args, "max_would_block_actions", 0),
+        max_would_block_rate=getattr(args, "max_would_block_rate", 0.0),
+        max_actions_modified=getattr(args, "max_actions_modified", None),
+        max_modification_rate=getattr(args, "max_modification_rate", None),
+        max_clip_rate=getattr(args, "max_clip_rate", None),
+        max_delta_failures=getattr(args, "max_delta_failures", 0),
+        max_shape_failures=getattr(args, "max_shape_failures", 0),
+        max_nonfinite_failures=getattr(args, "max_nonfinite_failures", 0),
+        require_passed_summary=not getattr(args, "allow_summary_failed", False),
+        require_zero_parse_errors=not getattr(args, "allow_parse_errors", False),
+        min_actions_supervised=getattr(args, "min_actions_supervised", None),
+        fail_on_safety_quality=getattr(args, "fail_on_safety_quality", False),
+    )
+
+
+def cmd_safety_gate(args: argparse.Namespace) -> int:
+    """Evaluate a safety summary / run / bundle against safety quality gates."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .reports import save_json
+    from .safety_quality import (
+        build_safety_quality_markdown, build_safety_quality_report,
+        evaluate_safety_quality, load_safety_summary_from_path,
+    )
+
+    try:
+        summary, source = load_safety_summary_from_path(
+            safety_summary=Path(args.safety_summary) if getattr(args, "safety_summary", None) else None,
+            sim_report=Path(args.sim_report) if getattr(args, "sim_report", None) else None,
+            profile_fit=Path(args.profile_fit) if getattr(args, "profile_fit", None) else None,
+            run_dir=Path(args.run_dir) if getattr(args, "run_dir", None) else None,
+            bundle_dir=Path(args.bundle_dir) if getattr(args, "bundle_dir", None) else None,
+        )
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    config = _safety_quality_config_from_args(args)
+    try:
+        result = evaluate_safety_quality(summary, config)
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    report = build_safety_quality_report(result, source=source)
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "safety_quality_report.json", report)
+        (output_dir / "safety_quality_report.md").write_text(build_safety_quality_markdown(report))
+
+    fail = getattr(args, "fail_on_safety_quality", False)
+    rc = 0 if (result.passed or not fail) else 1
+
+    if args.json:
+        print(_json.dumps({"passed": result.passed, "summary": result.summary,
+                           "checks": [c.to_dict() for c in result.checks]}, indent=2))
+        return rc
+
+    print("lerobot-coreai safety-gate")
+    print("=" * 50)
+    print(f"Source: {source.get('type')} ({source.get('path')})")
+    print(f"Passed: {result.passed}")
+    for c in result.checks:
+        print(f"{'✓' if c.passed else '✗'} {c.name}: value={c.value} threshold={c.threshold}")
+    print("=" * 50)
+    if not result.passed and not fail:
+        print("Safety gates FAILED (report-only; pass --fail-on-safety-quality to fail CI).")
+    return rc
+
+
+def cmd_safety_regression(args: argparse.Namespace) -> int:
+    """Compare baseline vs candidate safety summaries for regressions."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .reports import save_json
+    from .safety_regression import (
+        SafetyRegressionConfig, build_safety_regression_markdown,
+        evaluate_safety_regression, load_summary_for_regression,
+    )
+
+    try:
+        baseline, b_path = load_summary_for_regression(
+            summary=Path(args.baseline) if getattr(args, "baseline", None) else None,
+            run_dir=Path(args.baseline_run_dir) if getattr(args, "baseline_run_dir", None) else None,
+            bundle_dir=Path(args.baseline_bundle_dir) if getattr(args, "baseline_bundle_dir", None) else None,
+        )
+        candidate, c_path = load_summary_for_regression(
+            summary=Path(args.candidate) if getattr(args, "candidate", None) else None,
+            run_dir=Path(args.candidate_run_dir) if getattr(args, "candidate_run_dir", None) else None,
+            bundle_dir=Path(args.candidate_bundle_dir) if getattr(args, "candidate_bundle_dir", None) else None,
+        )
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    config = SafetyRegressionConfig(
+        max_blocked_increase=getattr(args, "max_blocked_increase", 0),
+        max_block_rate_increase=getattr(args, "max_block_rate_increase", 0.0),
+        max_critical_failures_increase=getattr(args, "max_critical_failures_increase", 0),
+        max_critical_findings_increase=getattr(args, "max_critical_findings_increase", 0),
+        max_would_block_increase=getattr(args, "max_would_block_increase", 0),
+        max_would_block_rate_increase=getattr(args, "max_would_block_rate_increase", 0.0),
+        max_modified_increase=getattr(args, "max_modified_increase", None),
+        max_modification_rate_increase=getattr(args, "max_modification_rate_increase", None),
+        require_candidate_passed=getattr(args, "require_candidate_passed", True),
+        require_same_profile=getattr(args, "require_same_profile", False),
+    )
+    try:
+        result = evaluate_safety_regression(
+            baseline, candidate, config, baseline_path=b_path, candidate_path=c_path)
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "safety_regression_report.json", result.report)
+        (output_dir / "safety_regression_report.md").write_text(
+            build_safety_regression_markdown(result.report))
+
+    fail = getattr(args, "fail_on_regression", False)
+    rc = 0 if (result.passed or not fail) else 1
+
+    if args.json:
+        print(_json.dumps(result.report, indent=2))
+        return rc
+
+    print("lerobot-coreai safety-regression")
+    print("=" * 50)
+    print(f"Passed: {result.passed}")
+    for c in result.checks:
+        print(f"{'✓' if c.passed else '✗'} {c.name}: value={c.value} threshold={c.threshold}")
+    for w in result.warnings:
+        print(f"- warning: {w}")
+    print("=" * 50)
+    if not result.passed and not fail:
+        print("Safety regression FAILED (report-only; pass --fail-on-regression to fail CI).")
+    return rc
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)

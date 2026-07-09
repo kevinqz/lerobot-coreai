@@ -95,6 +95,9 @@ class SimConfig:
     safety_profile: Path | None = None
     safety_profile_name: str | None = None
     safety_report: bool = True
+    # Safety quality gates (v0.9.2).
+    safety_quality: "SafetyQualityConfig | None" = None
+    fail_on_safety_quality: bool = False
 
 
 @dataclass
@@ -296,6 +299,14 @@ def run_sim_mode(config: SimConfig) -> SimResult:
     # v0.9.0: build the runtime safety supervisor (before any egress).
     # A bad profile fails fast here with a clear error (fail-closed).
     supervisor_mode = config.supervisor_mode
+    # v0.9.2: safety gates require the supervisor to actually run. Refuse the
+    # contradictory "gate the safety, but turn the supervisor off" combination.
+    if config.safety_quality is not None and supervisor_mode == "off":
+        raise CoreAIPolicyError(
+            "Safety quality gates require the safety supervisor to be enabled. "
+            "Use --supervisor.mode enforce or report_only, or remove the safety "
+            "gate flags.\nNo robot commands were sent."
+        )
     supervisor: SafetySupervisor | None = None
     safety_profile_obj = None
     safety_acc: SafetyAccumulator | None = None
@@ -799,6 +810,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             pass  # best-effort
     # v0.9.0: write safety supervisor artifacts + build the report section.
     safety_supervisor_section: dict[str, Any] | None = None
+    safety_quality_section: dict[str, Any] | None = None
+    safety_quality_failed = False
     if supervisor is not None and safety_acc is not None:
         safety_summary = build_safety_summary(safety_acc)
         safety_files: dict[str, str] = {}
@@ -832,6 +845,45 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             "passed": safety_acc.passed,
             "files": safety_files,
         }
+
+        # v0.9.2: evaluate safety quality gates on the summary.
+        if config.safety_quality is not None:
+            from .safety_quality import (
+                build_safety_quality_markdown, build_safety_quality_report,
+                evaluate_safety_quality,
+            )
+            try:
+                sq_result = evaluate_safety_quality(safety_summary, config.safety_quality)
+            except CoreAIPolicyError as e:
+                # Fail-closed: a malformed/zero-action summary cannot pass a gate.
+                # Record it as a failed gate (never a silent pass) without
+                # discarding the rest of the sim artifacts.
+                safety_quality_section = {
+                    "passed": False, "checks": [], "error": str(e),
+                    "summary": {}, "report": None,
+                }
+                if config.fail_on_safety_quality:
+                    safety_quality_failed = True
+            else:
+                sq_report = build_safety_quality_report(
+                    sq_result, source={"type": "sim", "path": str(report_path)})
+                if config.safety_report:
+                    try:
+                        save_json(output_dir / "safety_quality_report.json", sq_report)
+                        (output_dir / "safety_quality_report.md").write_text(
+                            build_safety_quality_markdown(sq_report))
+                        files_map["safety_quality_report"] = "safety_quality_report.json"
+                        files_map["safety_quality_report_md"] = "safety_quality_report.md"
+                    except Exception:
+                        pass  # best-effort
+                safety_quality_section = {
+                    "passed": sq_result.passed,
+                    "checks": [c.to_dict() for c in sq_result.checks],
+                    "summary": sq_result.summary,
+                    "report": "safety_quality_report.json",
+                }
+                if config.fail_on_safety_quality and not sq_result.passed:
+                    safety_quality_failed = True
 
     summary_path: Path | None = None
     if config.summary_md:
@@ -877,6 +929,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             )
             if safety_supervisor_section is not None:
                 fail_report["safety_supervisor"] = safety_supervisor_section
+            if safety_quality_section is not None:
+                fail_report["safety_quality"] = safety_quality_section
             try:
                 save_json(report_path, fail_report)
                 if summary_path is not None:
@@ -887,9 +941,10 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         raise fatal_error
 
     # v0.8.3: if fail_on_quality and quality failed, mark ok=False.
+    # v0.9.2: a failed safety gate (with fail_on_safety_quality) also fails the run.
     quality_failed = (
         quality_result is not None and not quality_result.passed and config.fail_on_quality
-    )
+    ) or safety_quality_failed
 
     # Success path.
     report = build_sim_report(
@@ -911,6 +966,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
     )
     if safety_supervisor_section is not None:
         report["safety_supervisor"] = safety_supervisor_section
+    if safety_quality_section is not None:
+        report["safety_quality"] = safety_quality_section
     save_json(report_path, report)
     if summary_path is not None:
         try:

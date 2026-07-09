@@ -303,6 +303,7 @@ def _build_bundle_manifest(
         },
         "files": files_map,
         "safety_supervisor": report.get("safety_supervisor"),
+        "safety_quality": report.get("safety_quality"),
         "warnings": warnings,
     }
 
@@ -463,6 +464,11 @@ def package_sim_run(config: SimBundleConfig) -> SimBundleResult:
         ("profile_comparison_report.md", True),
         ("profile_fit.json", True),
         ("profile_fit.md", True),
+        # v0.9.2 safety quality / regression artifacts.
+        ("safety_quality_report.json", True),
+        ("safety_quality_report.md", True),
+        ("safety_regression_report.json", True),
+        ("safety_regression_report.md", True),
     ]
     for fname, enabled in optional_files:
         if not enabled:
@@ -623,18 +629,37 @@ def verify_sim_bundle(bundle_dir: Path) -> SimBundleVerificationResult:
         except json.JSONDecodeError as e:
             invariant_failures.append(f"source report unreadable: {e}")
 
-    # (6) If a safety summary is bundled, it must not overclaim.
-    safety_summary_path = bundle_dir / "source_run" / "safety_summary.json"
-    if safety_summary_path.is_file():
+    # (6) If safety artifacts are bundled, they must not overclaim.
+    for fname in ("safety_summary.json", "safety_quality_report.json",
+                  "safety_regression_report.json"):
+        p = bundle_dir / "source_run" / fname
+        if not p.is_file():
+            continue
         try:
-            ss = json.loads(safety_summary_path.read_text())
-            claims = ss.get("claims", {}) or {}
-            for key in ("proves_physical_safety", "proves_real_world_safety",
-                        "proves_real_task_success"):
-                if claims.get(key) is not False:
-                    invariant_failures.append(f"safety summary claims.{key} is not false")
+            obj = json.loads(p.read_text())
         except json.JSONDecodeError as e:
-            invariant_failures.append(f"safety summary unreadable: {e}")
+            invariant_failures.append(f"{fname} unreadable: {e}")
+            continue
+        claims = obj.get("claims", {}) or {}
+        for key in ("proves_physical_safety", "proves_real_world_safety",
+                    "proves_real_task_success"):
+            if key in claims and claims.get(key) is not False:
+                invariant_failures.append(f"{fname} claims.{key} is not false")
+        # v0.9.2: validate the report against its schema when we have one.
+        _schema_name = {
+            "safety_quality_report.json": "safety-quality-report.schema.json",
+            "safety_regression_report.json": "safety-regression-report.schema.json",
+        }.get(fname)
+        if _schema_name is not None:
+            try:
+                import jsonschema
+                from importlib.resources import files as _files
+                schema = json.loads(
+                    _files("lerobot_coreai.schemas").joinpath(_schema_name).read_text())
+                jsonschema.validate(obj, schema)
+            except Exception as e:
+                message = getattr(e, "message", str(e))
+                invariant_failures.append(f"{fname} schema invalid: {message}")
 
     result.invariant_failures = invariant_failures
     result.warnings = warnings
