@@ -52,9 +52,33 @@ def test_external_http_requires_endpoint():
 
 
 def test_external_http_loopback_only():
-    # A remote endpoint is refused in v1.0.0.
+    # A remote endpoint is refused in v1.0.x.
     with pytest.raises(CoreAIPolicyError, match="loopback"):
         build_robot_adapter("external-http", "so100", endpoint="http://10.0.0.5:8765")
     # Loopback endpoints are accepted.
     a = build_robot_adapter("external-http", "so100", endpoint="http://127.0.0.1:8765")
     assert a.name == "external-http"
+
+
+def test_external_http_no_token_no_auth_header():
+    a = build_robot_adapter("external-http", "so100", endpoint="http://127.0.0.1:8765")
+    assert "Authorization" not in a._headers()
+
+
+def test_external_http_token_sets_bearer_header():
+    a = build_robot_adapter("external-http", "so100",
+                            endpoint="http://127.0.0.1:8765", token="s3cr3t")
+    assert a._headers()["Authorization"] == "Bearer s3cr3t"
+
+
+def test_external_http_token_from_env(monkeypatch):
+    monkeypatch.setenv("LEROBOT_COREAI_ROBOT_TOKEN", "env-token")
+    a = build_robot_adapter("external-http", "so100", endpoint="http://127.0.0.1:8765")
+    assert a._headers()["Authorization"] == "Bearer env-token"
+
+
+def test_external_http_token_not_in_repr():
+    # The token must not leak through the object's repr / reports.
+    a = build_robot_adapter("external-http", "so100",
+                            endpoint="http://127.0.0.1:8765", token="s3cr3t")
+    assert "s3cr3t" not in repr(a)

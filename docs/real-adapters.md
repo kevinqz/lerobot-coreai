@@ -46,10 +46,15 @@ GET  /preflight      POST /connect     POST /disconnect
 GET  /ready          GET  /observation POST /action        POST /stop
 ```
 
-**Loopback-only (v1.0.0):** the endpoint must be `127.0.0.1` / `localhost` — a
+**Loopback-only (v1.0.x):** the endpoint must be `127.0.0.1` / `localhost` — a
 remote host is refused. Run the controller on the same machine. In guarded mode,
 the external `/preflight` is not even contacted until the operator attestations
 are present.
+
+**Optional bearer token (v1.0.1):** pass `--robot.token <t>` (or set
+`LEROBOT_COREAI_ROBOT_TOKEN`) and every request carries `Authorization: Bearer
+<t>`. The token is only ever sent as that header — it is never written to reports
+or logs.
 
 ## Native SO-100 / SO-101
 

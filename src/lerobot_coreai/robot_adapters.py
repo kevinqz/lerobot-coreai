@@ -85,28 +85,38 @@ class ExternalHttpRobotAdapter:
     # runs on the same machine, not a remote host.
     _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
-    def __init__(self, robot_type: str, endpoint: str | None = None, **_ignored: Any):
+    def __init__(self, robot_type: str, endpoint: str | None = None,
+                 token: str | None = None, **_ignored: Any):
         if not endpoint:
             raise CoreAIPolicyError(
                 "external-http adapter requires --robot.endpoint.")
+        import os
         import urllib.parse
         host = urllib.parse.urlparse(endpoint).hostname or ""
         if host.lower() not in self._LOOPBACK_HOSTS:
             raise CoreAIPolicyError(
                 f"external-http endpoint must be loopback (127.0.0.1/localhost) in "
-                f"v1.0.0; refusing remote host {host!r}. Run the controller locally."
+                f"v1.0.x; refusing remote host {host!r}. Run the controller locally."
             )
         self.robot_type = robot_type
         self.endpoint = endpoint.rstrip("/")
+        # Optional bearer token: explicit arg, else LEROBOT_COREAI_ROBOT_TOKEN.
+        # Kept out of logs/reports — it is only ever sent as an Authorization header.
+        self.token = token or os.environ.get("LEROBOT_COREAI_ROBOT_TOKEN") or None
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
     def _req(self, method: str, path: str, payload: dict | None = None) -> dict[str, Any]:
         import json
         import urllib.request
         url = f"{self.endpoint}{path}"
         data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5.0) as resp:  # noqa: S310 (operator-controlled)
+        req = urllib.request.Request(url, data=data, method=method, headers=self._headers())
+        with urllib.request.urlopen(req, timeout=5.0) as resp:  # noqa: S310 (operator-controlled, loopback)
             body = resp.read().decode()
             return json.loads(body) if body else {}
 
@@ -149,14 +159,15 @@ KNOWN_ADAPTERS = ("mock", "external-http")
 
 def build_robot_adapter(
     name: str, robot_type: str, *, endpoint: str | None = None,
-    config: Path | None = None,
+    config: Path | None = None, token: str | None = None,
 ) -> RobotAdapter:
     """Build a robot adapter by name. Fail-closed on unknown names — there is no
     hidden fallback to any robot API."""
     if name == "mock":
         return MockRobotAdapter(robot_type=robot_type)
     if name == "external-http":
-        return ExternalHttpRobotAdapter(robot_type=robot_type, endpoint=endpoint)
+        return ExternalHttpRobotAdapter(robot_type=robot_type, endpoint=endpoint,
+                                        token=token)
     raise CoreAIPolicyError(
         f"Unknown or unimplemented robot adapter: {name!r}. "
         f"Available: {', '.join(KNOWN_ADAPTERS)}. Native hardware adapters "

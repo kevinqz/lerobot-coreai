@@ -46,6 +46,7 @@ class RealModeConfig:
     output_dir: Path
     robot_config: Path | None = None
     robot_endpoint: str | None = None
+    robot_token: str | None = None
     operator: str | None = None
     max_steps: int | None = None
     duration_seconds: float | None = None
@@ -74,6 +75,7 @@ def _preflight_config(config: RealModeConfig) -> RealPreflightConfig:
         safety_profile=config.safety_profile, readiness_report=config.readiness_report,
         approval=config.approval, bundle_dir=config.bundle_dir,
         robot_config=config.robot_config, robot_endpoint=config.robot_endpoint,
+        robot_token=config.robot_token,
         operator=config.operator, max_steps=config.max_steps,
         duration_seconds=config.duration_seconds, fps=config.fps,
         attest_real_hardware=config.attest_real_hardware,
@@ -150,7 +152,8 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
     acc = SafetyAccumulator(profile=profile.name, mode="enforce")
     adapter = build_robot_adapter(
         config.robot_adapter, config.robot_type,
-        endpoint=config.robot_endpoint, config=config.robot_config)
+        endpoint=config.robot_endpoint, config=config.robot_config,
+        token=config.robot_token)
     deadman = DeadmanSwitch(timeout_s=config.deadman_timeout_s, enabled=deadman_enabled)
     rate_limiter = RateLimiter(fps=config.fps)
     trace = TraceWriter(output_dir / "real_trace.jsonl")

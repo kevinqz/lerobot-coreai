@@ -41,6 +41,7 @@ class RealPreflightConfig:
     bundle_dir: Path
     robot_config: Path | None = None
     robot_endpoint: str | None = None
+    robot_token: str | None = None
     operator: str | None = None
     max_steps: int | None = None
     duration_seconds: float | None = None
@@ -203,7 +204,8 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
     try:
         adapter = build_robot_adapter(
             config.robot_adapter, config.robot_type,
-            endpoint=config.robot_endpoint, config=config.robot_config)
+            endpoint=config.robot_endpoint, config=config.robot_config,
+            token=config.robot_token)
         _c("robot_adapter_known", True)
         if guarded and config.robot_adapter != "mock" and not guarded_attest_ok:
             _c("robot_adapter_preflight_passes", False,

@@ -552,6 +552,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_real.add_argument("--robot.type", dest="robot_type", required=True)
     p_real.add_argument("--robot.config", dest="robot_config")
     p_real.add_argument("--robot.endpoint", dest="robot_endpoint")
+    p_real.add_argument("--robot.token", dest="robot_token",
+                        help="Bearer token for external-http adapter (or "
+                             "LEROBOT_COREAI_ROBOT_TOKEN env var)")
     p_real.add_argument("--safety.profile", dest="safety_profile", required=True)
     p_real.add_argument("--readiness-report", dest="readiness_report", required=True)
     p_real.add_argument("--approval", dest="approval", required=True)
@@ -2259,6 +2262,7 @@ def cmd_real(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir),
         robot_config=Path(args.robot_config) if getattr(args, "robot_config", None) else None,
         robot_endpoint=getattr(args, "robot_endpoint", None),
+        robot_token=getattr(args, "robot_token", None),
         operator=getattr(args, "operator", None),
         max_steps=getattr(args, "max_steps", None),
         duration_seconds=getattr(args, "duration_seconds", None),
