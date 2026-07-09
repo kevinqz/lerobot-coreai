@@ -1,0 +1,519 @@
+# shadow.py — motor-blocked shadow mode runtime (v0.7).
+#
+# Shadow mode runs a CoreAI-backed LeRobot policy against streamed or replayed
+# observations, generates actions, validates them, logs them, and blocks all action
+# egress. No robot connection. No motor commands. No simulator egress.
+#
+# Pipeline:
+#   ObservationSource → make_json_safe → CoreAIPolicy.predict_action → ActionBlocker → logs
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import __version__
+from .action_blocker import ActionBlocker
+from .errors import CoreAIPolicyError
+from .observation_sources import ObservationSource, build_observation_source
+from .policy import CoreAIPolicy
+from .reports import infer_shape, now_iso, save_json
+from .serialization import make_json_safe_observation
+from .trace import TraceWriter
+from .validation import validate_robot_type
+
+
+@dataclass
+class ShadowConfig:
+    """Configuration for a shadow mode run."""
+
+    policy_path: str
+    runner_url: str = "unix:///tmp/coreai-runner.sock"
+    output_dir: Path = Path("runs/shadow")
+    observation_source: str = "folder"  # fixture | fixtures | folder | camera
+    robot_type: str | None = None
+    fixture: Path | None = None
+    fixtures_dir: Path | None = None
+    frames_dir: Path | None = None
+    camera_index: int | None = None
+    image_key: str = "observation.images.wrist"
+    state_json: Path | None = None
+    state_vector: list[float] | None = None
+    task: str | None = None
+    max_steps: int = 32
+    duration_seconds: float | None = None
+    fps: float = 10.0
+    warmup_steps: int = 0
+    strict_observation_keys: bool = False
+    fail_fast: bool = False
+    overwrite: bool = False
+    include_metadata: bool = True
+
+
+@dataclass
+class ShadowResult:
+    """Result of a shadow mode run."""
+
+    ok: bool
+    output_dir: Path
+    report_path: Path
+    trace_path: Path
+    actions_path: Path
+    observations_path: Path
+    blocked_actions_path: Path
+    report: dict[str, Any] = field(default_factory=dict)
+
+
+# MARK: - FPS helper
+
+def sleep_to_maintain_fps(step_started_at: float, fps: float) -> None:
+    """Sleep the remainder of the step interval to maintain target fps.
+
+    fps <= 0 → no sleep (run as fast as possible).
+    """
+    if fps <= 0:
+        return
+    elapsed = time.monotonic() - step_started_at
+    target = 1.0 / fps
+    remaining = target - elapsed
+    if remaining > 0:
+        time.sleep(remaining)
+
+
+# MARK: - Shadow report builder
+
+def build_shadow_report(
+    *,
+    ok: bool,
+    policy: CoreAIPolicy,
+    runner_url: str,
+    source_type: str,
+    source_meta: dict[str, Any],
+    loop: dict[str, Any],
+    metrics: dict[str, Any],
+    files: dict[str, str],
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the shadow_report.json dict.
+
+    Safety invariants are hardcoded — this function is never a place where an
+    action could leak.
+    """
+    return {
+        "schema_version": "lerobot-coreai.shadow_report.v0",
+        "lerobot_coreai_version": __version__,
+        "ok": ok,
+        "mode": "shadow",
+        "policy": {
+            "path": policy.policy_repo_id,
+            "repo_id": policy.policy_repo_id,
+            "source_repo_id": policy.manifest.policy_source_repo_id,
+            "type": policy.policy_type,
+            "runtime": "coreai",
+            "model_id": policy.manifest.model_id,
+        },
+        "runner": {
+            "url": runner_url,
+            "reachable": True,
+            "supports_action": True,
+        },
+        "observation_source": {
+            "type": source_type,
+            **source_meta,
+        },
+        "loop": loop,
+        "metrics": metrics,
+        "claims": {
+            "proves_runtime_action_generation": ok and metrics.get("actions_generated", 0) > 0,
+            "proves_task_success": False,
+            "proves_robot_safety": False,
+            "proves_real_world_safety": False,
+        },
+        "safety": {
+            "physical_actuation_possible": False,
+            "motor_commands_available": False,
+            "actuation_device_connected": False,
+            "robot_connected": False,
+            "actions_sent": 0,
+            "action_egress": "blocked",
+            "blocker": "ActionBlocker",
+            "block_reason": "shadow_mode_no_actuation",
+        },
+        "files": files,
+        "errors": errors,
+    }
+
+
+# MARK: - Main entry point
+
+def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
+    """Execute a motor-blocked shadow mode run.
+
+    Flow (spec §9):
+    1. Prepare output_dir
+    2. Create ActionBlocker + TraceWriter
+    3. Load CoreAIPolicy (with runner validation)
+    4. Validate robot type
+    5. Open ObservationSource
+    6. Loop: read obs → predict action → block → log
+    7. Close source (always)
+    8. Write shadow_report.json
+
+    Never sends robot commands. ActionBlocker.send() always raises.
+    """
+    output_dir = Path(config.output_dir)
+    report_path = output_dir / "shadow_report.json"
+    trace_path = output_dir / "shadow_trace.jsonl"
+    actions_path = output_dir / "actions.jsonl"
+    observations_path = output_dir / "observations.jsonl"
+    blocked_actions_path = output_dir / "blocked_actions.jsonl"
+    obs_dir = output_dir / "observations"
+
+    # Prepare output dir (same overwrite semantics as rollout.py).
+    if output_dir.exists() and any(output_dir.iterdir()):
+        if not config.overwrite:
+            raise CoreAIPolicyError(
+                f"Output directory not empty: {output_dir}. Use --overwrite to replace."
+            )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    trace = TraceWriter(trace_path)
+    blocker = ActionBlocker(mode="shadow")
+
+    loop_times_ms: list[float] = []
+    runner_times_ms: list[float] = []
+    metrics = {
+        "observations_read": 0,
+        "actions_generated": 0,
+        "actions_blocked": 0,
+        "actions_sent": 0,
+        "observation_errors": 0,
+        "runner_errors": 0,
+        "validation_errors": 0,
+        "loop_errors": 0,
+    }
+    errors: list[dict[str, Any]] = []
+    steps_completed = 0
+    source_opened = False
+
+    trace.write("shadow.started", {
+        "mode": "shadow",
+        "policy": config.policy_path,
+        "observation_source": config.observation_source,
+        "max_steps": config.max_steps,
+        "fps": config.fps,
+    })
+
+    stage = "init"
+    policy: CoreAIPolicy | None = None
+    source: ObservationSource | None = None
+    loop_start = time.monotonic()
+
+    try:
+        # Load policy.
+        stage = "policy.load"
+        trace.write("policy.loading")
+        policy = CoreAIPolicy.from_pretrained(
+            config.policy_path,
+            runner_url=config.runner_url,
+            validate_runner=True,
+            return_metadata=True,
+            strict_observation_keys=config.strict_observation_keys,
+        )
+        trace.write("policy.loaded", {
+            "policy_type": policy.policy_type,
+            "robot_type": policy.robot_type,
+            "model_id": policy.manifest.model_id,
+        })
+        trace.write("runner.checked", {"url": config.runner_url})
+
+        # Validate robot type.
+        stage = "robot_type.validation"
+        validate_robot_type(config.robot_type, policy.manifest)
+        trace.write("robot_type.validated", {"requested": config.robot_type})
+
+        # Build + open observation source.
+        stage = "observation_source.open"
+        trace.write("observation_source.opening", {"type": config.observation_source})
+        source = build_observation_source(
+            config.observation_source,
+            fixture=config.fixture,
+            fixtures_dir=config.fixtures_dir,
+            frames_dir=config.frames_dir,
+            image_key=config.image_key,
+            state_json=config.state_json,
+            state_vector=config.state_vector,
+            task=config.task,
+            camera_index=config.camera_index,
+        )
+        source.open()
+        source_opened = True
+        trace.write("observation_source.opened", {"type": config.observation_source})
+
+        # Warmup steps: read and discard.
+        if config.warmup_steps > 0:
+            for w in range(config.warmup_steps):
+                warmup_obs = source.read()
+                if warmup_obs is None:
+                    break
+                trace.write("warmup.step", {"index": w})
+
+        # Main loop.
+        stage = "loop"
+        trace.write("loop.started", {
+            "max_steps": config.max_steps,
+            "fps": config.fps,
+            "duration_seconds": config.duration_seconds,
+        })
+
+        for step in range(config.max_steps):
+            # Duration cap.
+            if config.duration_seconds is not None:
+                elapsed = time.monotonic() - loop_start
+                if elapsed >= config.duration_seconds:
+                    trace.write("loop.duration_reached", {"elapsed": elapsed})
+                    break
+
+            step_started = time.monotonic()
+            trace.write("step.started", {"step": step})
+
+            # Read observation.
+            try:
+                raw_obs = source.read()
+            except Exception as e:
+                metrics["observation_errors"] += 1
+                err = {"step": step, "type": type(e).__name__, "message": str(e), "stage": "observation.read"}
+                errors.append(err)
+                trace.write("step.failed", err)
+                if config.fail_fast:
+                    raise
+                continue
+
+            if raw_obs is None:
+                trace.write("loop.source_exhausted", {"step": step})
+                break
+
+            metrics["observations_read"] += 1
+            trace.write("observation.read", {"step": step, "keys": list(raw_obs.keys())})
+
+            # Save observation record.
+            _append_jsonl(observations_path, {
+                "step": step,
+                "timestamp": now_iso(),
+                "source": config.observation_source,
+                "keys": list(raw_obs.keys()),
+            })
+            # Save full observation to observations/ dir.
+            obs_file = obs_dir / f"step_{step:06d}.json"
+            try:
+                safe_obs = make_json_safe_observation(raw_obs, output_dir=output_dir, frame_index=step)
+                save_json(obs_file, safe_obs)
+                trace.write("observation.serialized", {"step": step, "path": str(obs_file)})
+            except Exception as e:
+                metrics["observation_errors"] += 1
+                err = {"step": step, "type": type(e).__name__, "message": str(e), "stage": "observation.serialize"}
+                errors.append(err)
+                trace.write("step.failed", err)
+                if config.fail_fast:
+                    raise
+                continue
+
+            # Predict action (validation happens inside policy).
+            runner_total_ms: float | None = None
+            try:
+                result = policy.predict_action(raw_obs, return_metadata=True)
+                action = result["action"]
+                meta = result.get("metadata", {})
+                timing = meta.get("timing") or {}
+                runner_total_ms = timing.get("total_ms") if isinstance(timing, dict) else None
+                if runner_total_ms is not None:
+                    runner_times_ms.append(float(runner_total_ms))
+                trace.write("action.generated", {"step": step, "shape": infer_shape(action)})
+            except Exception as e:
+                # Distinguish validation vs runner errors loosely by type name.
+                etype = type(e).__name__
+                if "Validation" in etype:
+                    metrics["validation_errors"] += 1
+                else:
+                    metrics["runner_errors"] += 1
+                err = {"step": step, "type": etype, "message": str(e), "stage": "action.generate"}
+                errors.append(err)
+                _append_jsonl(actions_path, {
+                    "step": step, "observation_index": step, "timestamp": now_iso(),
+                    "ok": False, "action": None, "action_shape": None,
+                    "blocked": False, "sent": False, "block_reason": None,
+                    "timing": {"runner_total_ms": runner_total_ms}, "error": str(e),
+                })
+                trace.write("step.failed", err)
+                if config.fail_fast:
+                    raise
+                continue
+
+            # Block the action (never send).
+            blocked = blocker.block(action)
+            metrics["actions_generated"] += 1
+            metrics["actions_blocked"] += 1
+            trace.write("action.blocked", {"step": step, "reason": blocked.reason})
+
+            # Write action + blocked records.
+            loop_total_ms = (time.monotonic() - step_started) * 1000.0
+            loop_times_ms.append(loop_total_ms)
+            action_record = {
+                "step": step,
+                "observation_index": step,
+                "timestamp": now_iso(),
+                "ok": True,
+                "action": action,
+                "action_shape": infer_shape(action),
+                "blocked": True,
+                "sent": False,
+                "block_reason": blocked.reason,
+                "timing": {
+                    "runner_total_ms": runner_total_ms,
+                    "loop_total_ms": loop_total_ms,
+                },
+                "error": None,
+            }
+            _append_jsonl(actions_path, action_record)
+            _append_jsonl(blocked_actions_path, {
+                "step": step,
+                "timestamp": now_iso(),
+                "reason": blocked.reason,
+                "sent": False,
+                "destination": "none",
+            })
+
+            steps_completed += 1
+            trace.write("step.completed", {"step": step, "loop_total_ms": loop_total_ms})
+
+            # Pace the loop.
+            sleep_to_maintain_fps(step_started, config.fps)
+
+        trace.write("loop.completed", {"steps_completed": steps_completed})
+
+    except Exception as e:
+        # Build a best-effort failure report preserving all safety invariants.
+        error_type = type(e).__name__
+        error_msg = str(e)
+        errors.append({"type": error_type, "message": error_msg, "stage": stage})
+        metrics["loop_errors"] += 1
+
+        if policy is not None:
+            loop_total_s = time.monotonic() - loop_start
+            fail_report = build_shadow_report(
+                ok=False,
+                policy=policy,
+                runner_url=config.runner_url,
+                source_type=config.observation_source,
+                source_meta={"opened": source_opened, "closed": not source_opened},
+                loop={
+                    "fps_target": config.fps,
+                    "steps_requested": config.max_steps,
+                    "steps_completed": steps_completed,
+                    "duration_seconds": loop_total_s,
+                    "warmup_steps": config.warmup_steps,
+                },
+                metrics=_finalize_metrics(metrics, loop_times_ms, runner_times_ms),
+                files={
+                    "actions": "actions.jsonl",
+                    "blocked_actions": "blocked_actions.jsonl",
+                    "observations": "observations.jsonl",
+                    "trace": "shadow_trace.jsonl",
+                    "report": "shadow_report.json",
+                },
+                errors=errors,
+            )
+            try:
+                save_json(report_path, fail_report)
+            except Exception:
+                pass  # best-effort
+
+        trace.write("shadow.failed", {"error": error_type, "message": error_msg})
+        raise
+
+    finally:
+        if source is not None:
+            try:
+                source.close()
+                trace.write("observation_source.closed")
+            except Exception:
+                pass  # best-effort
+
+    # Success path — build the report.
+    loop_total_s = time.monotonic() - loop_start
+    final_metrics = _finalize_metrics(metrics, loop_times_ms, runner_times_ms)
+    files_map = {
+        "actions": "actions.jsonl",
+        "blocked_actions": "blocked_actions.jsonl",
+        "observations": "observations.jsonl",
+        "trace": "shadow_trace.jsonl",
+        "report": "shadow_report.json",
+    }
+    report = build_shadow_report(
+        ok=True,
+        policy=policy,  # type: ignore[arg-type]
+        runner_url=config.runner_url,
+        source_type=config.observation_source,
+        source_meta={"opened": source_opened, "closed": True},
+        loop={
+            "fps_target": config.fps,
+            "steps_requested": config.max_steps,
+            "steps_completed": steps_completed,
+            "duration_seconds": loop_total_s,
+            "warmup_steps": config.warmup_steps,
+        },
+        metrics=final_metrics,
+        files=files_map,
+        errors=errors,
+    )
+    save_json(report_path, report)
+    trace.write("shadow.completed", {"ok": True, "steps": steps_completed})
+
+    return ShadowResult(
+        ok=True,
+        output_dir=output_dir,
+        report_path=report_path,
+        trace_path=trace_path,
+        actions_path=actions_path,
+        observations_path=observations_path,
+        blocked_actions_path=blocked_actions_path,
+        report=report,
+    )
+
+
+# MARK: - Helpers
+
+def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    """Append a single JSON record as a line."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _percentile(values: list[float], p: float) -> float | None:
+    """Simple percentile (p in 0-100). Returns None for empty input."""
+    if not values:
+        return None
+    s = sorted(values)
+    k = (len(s) - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    frac = k - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+def _finalize_metrics(
+    base: dict[str, Any],
+    loop_times: list[float],
+    runner_times: list[float],
+) -> dict[str, Any]:
+    """Compute timing aggregates on top of the running counters."""
+    out = dict(base)
+    out["mean_loop_ms"] = (sum(loop_times) / len(loop_times)) if loop_times else None
+    out["p95_loop_ms"] = _percentile(loop_times, 95)
+    out["mean_runner_ms"] = (sum(runner_times) / len(runner_times)) if runner_times else None
+    out["p95_runner_ms"] = _percentile(runner_times, 95)
+    return out

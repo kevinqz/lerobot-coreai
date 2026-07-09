@@ -21,6 +21,7 @@ from .rollout import DryRunRolloutConfig, run_dry_run_rollout
 from .eval import EvalConfig, run_lerobot_dataset_eval
 from .compare import CompareConfig, run_lerobot_policy_compare
 from .export import ExportConfig, run_coreai_export_pipeline
+from .shadow import ShadowConfig, run_shadow_mode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,6 +168,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_rollout.add_argument("--json", action="store_true")
     p_rollout.set_defaults(func=cmd_rollout)
 
+    # --- shadow (v0.7) — motor-blocked observation loop ---
+    p_shadow = sub.add_parser("shadow", help="Run motor-blocked shadow mode (v0.7)")
+    p_shadow.add_argument("--policy.path", dest="policy_path", required=True,
+                          help="HF repo id of the CoreAI artifact")
+    p_shadow.add_argument("--observation-source", dest="observation_source", required=True,
+                          choices=["fixture", "fixtures", "folder", "camera"],
+                          help="Where to read observations from")
+    p_shadow.add_argument("--runner.url", dest="runner_url", default="unix:///tmp/coreai-runner.sock",
+                          help="coreai-runner URL (default: unix socket)")
+    p_shadow.add_argument("--output-dir", dest="output_dir", required=True,
+                          help="Output directory for reports/logs")
+    p_shadow.add_argument("--robot.type", dest="robot_type")
+    # Observation source args.
+    p_shadow.add_argument("--fixture", dest="fixture",
+                          help="Single observation fixture JSON (for --observation-source fixture)")
+    p_shadow.add_argument("--fixtures-dir", dest="fixtures_dir",
+                          help="Directory of ordered fixture JSONs (for --observation-source fixtures)")
+    p_shadow.add_argument("--frames-dir", dest="frames_dir",
+                          help="Directory of image frames (for --observation-source folder)")
+    p_shadow.add_argument("--image-key", dest="image_key", default="observation.images.wrist",
+                          help="Observation key for image frames (default: observation.images.wrist)")
+    p_shadow.add_argument("--state-json", dest="state_json",
+                          help="JSON array file for observation.state")
+    p_shadow.add_argument("--state-vector", dest="state_vector",
+                          help="Comma-separated floats for observation.state")
+    p_shadow.add_argument("--task", dest="task", help="Task text to include in each observation")
+    # Loop args.
+    p_shadow.add_argument("--max-steps", dest="max_steps", type=int, default=32)
+    p_shadow.add_argument("--duration-seconds", dest="duration_seconds", type=float)
+    p_shadow.add_argument("--fps", dest="fps", type=float, default=10.0)
+    p_shadow.add_argument("--warmup-steps", dest="warmup_steps", type=int, default=0)
+    p_shadow.add_argument("--strict", dest="strict", action="store_true")
+    p_shadow.add_argument("--fail-fast", dest="fail_fast", action="store_true")
+    p_shadow.add_argument("--overwrite", dest="overwrite", action="store_true")
+    p_shadow.add_argument("--metadata", dest="metadata", action="store_true")
+    p_shadow.add_argument("--json", action="store_true")
+    p_shadow.set_defaults(func=cmd_shadow)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -204,8 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
-        f"'{args.command}' is not implemented in v0.6. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, eval, compare, export.",
+        f"'{args.command}' is not implemented in v0.7. "
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -594,6 +633,90 @@ def cmd_eval(args: argparse.Namespace) -> int:
     print("=" * 50)
 
     return 0 if result.ok else 1
+
+
+# MARK: - shadow (v0.7 — motor-blocked observation loop)
+
+def cmd_shadow(args: argparse.Namespace) -> int:
+    """Run motor-blocked shadow mode: observe, generate actions, block all egress."""
+    from .errors import CoreAIPolicyError
+
+    # Parse state-vector (comma-separated floats) if provided.
+    state_vector = None
+    if args.state_vector:
+        state_vector = [float(v.strip()) for v in args.state_vector.split(",")]
+
+    config = ShadowConfig(
+        policy_path=args.policy_path,
+        runner_url=args.runner_url,
+        output_dir=Path(args.output_dir),
+        observation_source=args.observation_source,
+        robot_type=args.robot_type,
+        fixture=Path(args.fixture) if args.fixture else None,
+        fixtures_dir=Path(args.fixtures_dir) if args.fixtures_dir else None,
+        frames_dir=Path(args.frames_dir) if args.frames_dir else None,
+        image_key=args.image_key,
+        state_json=Path(args.state_json) if args.state_json else None,
+        state_vector=state_vector,
+        task=args.task,
+        max_steps=args.max_steps,
+        duration_seconds=args.duration_seconds,
+        fps=args.fps,
+        warmup_steps=args.warmup_steps,
+        strict_observation_keys=args.strict,
+        fail_fast=args.fail_fast,
+        overwrite=args.overwrite,
+    )
+
+    if not args.json:
+        print(f"lerobot-coreai shadow")
+        print("=" * 50)
+        print(f"Policy: {args.policy_path}")
+        print(f"Mode: shadow")
+        print(f"Observation source: {args.observation_source}")
+        print(f"Runner: {args.runner_url}")
+        print(f"FPS target: {args.fps}")
+        print(f"Max steps: {args.max_steps}")
+
+    try:
+        result = run_shadow_mode(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Shadow failed: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        report_path = Path(args.output_dir) / "shadow_report.json"
+        if report_path.exists():
+            print(f"Failure report: {report_path}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("No robot commands were sent.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        import json
+        print(json.dumps(result.report, indent=2))
+        return 0 if result.ok else 1
+
+    m = result.report.get("metrics", {})
+    print()
+    print(f"✓ Policy loaded")
+    print(f"✓ Runner supports action")
+    print(f"✓ Observation source opened")
+    print(f"✓ {m.get('observations_read', 0)} observations read")
+    print(f"✓ {m.get('actions_generated', 0)} actions generated")
+    print(f"✓ {m.get('actions_blocked', 0)} actions blocked")
+    print(f"✓ No robot commands sent")
+    print()
+    print("Files:")
+    print(f"  actions:         {result.actions_path}")
+    print(f"  blocked actions: {result.blocked_actions_path}")
+    print(f"  observations:    {result.observations_path}")
+    print(f"  trace:           {result.trace_path}")
+    print(f"  report:          {result.report_path}")
+    print("=" * 50)
+    print("Shadow run completed successfully.")
+
+    return 0
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)

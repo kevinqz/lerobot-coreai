@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/shadow-report.schema.json",
+  "title": "lerobot-coreai shadow report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "lerobot_coreai_version",
+    "ok",
+    "mode",
+    "policy",
+    "runner",
+    "observation_source",
+    "loop",
+    "metrics",
+    "claims",
+    "safety",
+    "files",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.shadow_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "const": "shadow"},
+    "policy": {"type": "object"},
+    "runner": {"type": "object"},
+    "observation_source": {"type": "object"},
+    "loop": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": ["actions_sent"],
+      "properties": {
+        "actions_sent": {"type": "integer", "const": 0}
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_robot_safety", "proves_real_world_safety"],
+      "properties": {
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_robot_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": [
+        "physical_actuation_possible",
+        "motor_commands_available",
+        "actuation_device_connected",
+        "robot_connected",
+        "actions_sent",
+        "action_egress"
+      ],
+      "properties": {
+        "physical_actuation_possible": {"type": "boolean", "const": false},
+        "motor_commands_available": {"type": "boolean", "const": false},
+        "actuation_device_connected": {"type": "boolean", "const": false},
+        "robot_connected": {"type": "boolean", "const": false},
+        "actions_sent": {"type": "integer", "const": 0},
+        "action_egress": {"type": "string", "const": "blocked"}
+      }
+    },
+    "files": {"type": "object"},
+    "errors": {"type": "array"}
+  }
+}

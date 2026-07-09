@@ -110,11 +110,13 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `eval` | v0.4 ✅ | LeRobotDataset replay/eval; no robot actuation |
 | `compare` | v0.5 ✅ | PyTorch vs CoreAI action parity on LeRobotDataset |
 | `export` | v0.6 ✅ | Export/verify/package LeRobot policy as CoreAI artifact |
+| `shadow` | v0.7 ✅ | Motor-blocked observation loop; actions generated and logged, never sent |
 
 ## Safety model
 
-v0.6 exports and verifies artifacts only.
-It can generate actions through runner verification, dry_run, eval, and compare.
+v0.7 adds motor-blocked shadow mode.
+Shadow mode can read observations and generate actions.
+Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 It never connects to a robot and never sends motor commands.
 Export verification can prove numeric action fidelity only when compare passes.
 It cannot prove task success or physical robot safety.
@@ -122,17 +124,19 @@ It cannot prove task success or physical robot safety.
 | Mode | Status | Behavior |
 |------|--------|----------|
 | `dry_run` | v0.3 ✅ | No physical robot. Fixture-based action generation. |
-| `shadow` | v0.6 planned | Robot/cameras live, actions logged, no motor commands. |
-| `sim` | v0.6 planned | Simulation receives actions. |
+| `shadow` | v0.7 ✅ | Observations streamed/replayed, actions generated and logged, never sent. |
+| `sim` | v0.8 planned | Simulation receives actions. |
 | `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-> v0.6 implements export, dry_run, eval, and compare only.
-> shadow, sim, and real are future safety modes and are not executable yet.
-> No robot commands are sent by v0.6.
+> v0.7 implements shadow, dry_run, eval, compare, and export.
+> Shadow mode is not real mode. Shadow mode is not sim mode.
+> Shadow mode does not prove task success or physical safety.
+> Shadow mode proves runtime action generation and no-actuation logging.
+> No robot commands are sent by v0.7.
 
 ## Version policy
 
-`lerobot-coreai` 0.6.x supports LeRobot `>=0.6.0,<0.7.0`.
+`lerobot-coreai` 0.7.x supports LeRobot `>=0.6.0,<0.7.0`.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
