@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/safety-decision.schema.json",
+  "title": "lerobot-coreai safety decision",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["allowed", "action_modified", "reasons", "checks", "profile", "mode", "severity"],
+  "properties": {
+    "allowed": {"type": "boolean"},
+    "action_modified": {"type": "boolean"},
+    "reasons": {"type": "array", "items": {"type": "string"}},
+    "checks": {"type": "array", "items": {"type": "object"}},
+    "profile": {"type": "string"},
+    "mode": {"type": "string", "enum": ["off", "report_only", "enforce"]},
+    "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
+    "original_action_shape": {"type": ["array", "null"]},
+    "supervised_action_shape": {"type": ["array", "null"]}
+  }
+}

@@ -180,6 +180,19 @@ See [Sim Analytics](sim-analytics.md) for the analytics sections added in v0.8.2
 | `--no-redact-local-paths` | no | off | Keep absolute local paths in the bundle (v0.8.4; redacted by default) |
 | `--include-observations-dir` | no | off | Include the full `observations/` dir in the bundle (v0.8.4) |
 
+## Runtime safety supervisor (v0.9.0)
+
+Every action passes a fail-closed software [safety supervisor](safety-supervisor.md)
+before egress. Sim defaults to `--supervisor.mode enforce`: an action that is
+non-finite, out of the profile's shape/bounds/delta/norm, or from the wrong
+robot type is **blocked** and never reaches the simulator; the episode is
+terminated as `safety_terminated`. Use `--safety.profile-name` /
+`--safety.profile` to choose a [profile](safety-profiles.md), `report_only` to
+observe without blocking, or `off` to disable. The run writes
+`safety_report.jsonl` + `safety_summary.json/md` and a `safety_supervisor`
+section in `sim_report.json`. The supervisor is a software layer only — it does
+not prove physical robot safety.
+
 ## Reproducibility bundles (v0.8.4)
 
 A completed sim run can be packaged into an auditable, self-contained bundle

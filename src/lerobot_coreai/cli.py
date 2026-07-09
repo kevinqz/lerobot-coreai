@@ -313,6 +313,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Keep absolute local paths in the bundle (default: redacted)")
     p_sim.add_argument("--include-observations-dir", dest="include_observations_dir", action="store_true",
                        help="Include the full observations/ dir in the bundle (may be large)")
+    # Runtime safety supervisor (v0.9.0).
+    p_sim.add_argument("--supervisor.mode", dest="supervisor_mode",
+                       choices=["off", "report_only", "enforce"], default="enforce",
+                       help="Safety supervisor mode (default: enforce)")
+    p_sim.add_argument("--safety.profile", dest="safety_profile",
+                       help="Path to a safety profile JSON")
+    p_sim.add_argument("--safety.profile-name", dest="safety_profile_name",
+                       help="Built-in safety profile name (e.g. so100-sim-default)")
+    p_sim.add_argument("--no-safety-report", dest="safety_report", action="store_false",
+                       help="Do not write safety_report.jsonl/safety_summary artifacts")
     p_sim.add_argument("--json", action="store_true")
     p_sim.set_defaults(func=cmd_sim)
 
@@ -353,6 +363,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--json", action="store_true")
     p_verify.set_defaults(func=cmd_verify_sim_bundle)
 
+    # --- supervisor-check (v0.9.0) — evaluate an actions file offline ---
+    p_supcheck = sub.add_parser("supervisor-check",
+                                help="Evaluate an actions.jsonl against a safety profile (v0.9.0)")
+    p_supcheck.add_argument("--actions", dest="actions", required=True,
+                            help="Path to an actions.jsonl file")
+    p_supcheck.add_argument("--safety.profile", dest="safety_profile",
+                            help="Path to a safety profile JSON")
+    p_supcheck.add_argument("--safety.profile-name", dest="safety_profile_name",
+                            help="Built-in safety profile name")
+    p_supcheck.add_argument("--output-dir", dest="output_dir",
+                            help="Where to write safety_report.jsonl / safety_summary.json")
+    p_supcheck.add_argument("--fail-on-block", dest="fail_on_block", action="store_true",
+                            help="Return rc 1 if any action is blocked")
+    p_supcheck.add_argument("--json", action="store_true")
+    p_supcheck.set_defaults(func=cmd_supervisor_check)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -391,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -989,6 +1015,10 @@ def cmd_sim(args: argparse.Namespace) -> int:
         redact_runner_url=getattr(args, "redact_runner_url", False),
         redact_local_paths=getattr(args, "redact_local_paths", True),
         include_observations_dir=getattr(args, "include_observations_dir", False),
+        supervisor_mode=getattr(args, "supervisor_mode", "enforce"),
+        safety_profile=Path(args.safety_profile) if getattr(args, "safety_profile", None) else None,
+        safety_profile_name=getattr(args, "safety_profile_name", None),
+        safety_report=getattr(args, "safety_report", True),
     )
 
     if not args.json:
@@ -1053,6 +1083,20 @@ def cmd_sim(args: argparse.Namespace) -> int:
     if bundle:
         status = "created" if bundle.get("created") else "FAILED"
         print(f"  bundle:       {bundle.get('output_dir')} ({status})")
+
+    # v0.9.0: surface the safety supervisor summary in human mode.
+    safety_sup = result.report.get("safety_supervisor")
+    if safety_sup:
+        print()
+        print("Safety supervisor:")
+        print(f"  mode:       {safety_sup.get('mode')}")
+        print(f"  profile:    {safety_sup.get('profile')}")
+        print(f"  supervised: {safety_sup.get('actions_supervised')}")
+        print(f"  blocked:    {safety_sup.get('actions_blocked')}")
+        if safety_sup.get("would_block_actions"):
+            print(f"  would block:{safety_sup.get('would_block_actions')} (report_only)")
+        print(f"  modified:   {safety_sup.get('actions_modified')}")
+        print(f"  passed:     {safety_sup.get('passed')}")
 
     # v0.8.3: surface quality gate results in human mode.
     quality = result.report.get("quality")
@@ -1245,6 +1289,112 @@ def cmd_verify_sim_bundle(args: argparse.Namespace) -> int:
     else:
         print("Bundle verification FAILED.")
     return 0 if result.ok else 1
+
+
+# MARK: - supervisor-check (v0.9.0 — offline action supervision)
+
+def cmd_supervisor_check(args: argparse.Namespace) -> int:
+    """Evaluate an actions.jsonl file against a safety profile, offline."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .safety_profiles import resolve_safety_profile
+    from .safety_reports import (
+        SafetyAccumulator, append_safety_decision, build_safety_summary,
+        build_safety_summary_markdown,
+    )
+    from .safety_supervisor import (
+        MODE_ENFORCE, SafetyContext, SafetyDecision, SafetySupervisor, safe_evaluate,
+    )
+
+    actions_path = Path(args.actions)
+    if not actions_path.is_file():
+        print(f"Error: actions file not found: {actions_path}", file=sys.stderr)
+        return 1
+
+    try:
+        profile = resolve_safety_profile(
+            path=Path(args.safety_profile) if getattr(args, "safety_profile", None) else None,
+            name=getattr(args, "safety_profile_name", None),
+        )
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    supervisor = SafetySupervisor(profile, mode=MODE_ENFORCE)
+    acc = SafetyAccumulator(profile=profile.name, mode=MODE_ENFORCE)
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    report_path = None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "safety_report.jsonl"
+        if report_path.exists():
+            report_path.unlink()
+
+    n = 0
+    for line in actions_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = _json.loads(line)
+        except _json.JSONDecodeError:
+            # Fail-closed: an unparseable line is a critical finding, not a skip.
+            bad = SafetyDecision(
+                allowed=False, action_modified=False,
+                reasons=["unparseable_actions_line"],
+                checks=[{"name": "parse", "passed": False, "severity": "critical"}],
+                profile=profile.name, mode=MODE_ENFORCE, severity="critical",
+            )
+            acc.add(bad)
+            if report_path is not None:
+                append_safety_decision(report_path, bad,
+                                       context=SafetyContext(mode="supervisor-check", step=n))
+            n += 1
+            continue
+        action = rec.get("action") if isinstance(rec, dict) else rec
+        ctx = SafetyContext(mode="supervisor-check", step=rec.get("step") if isinstance(rec, dict) else n)
+        supervised = safe_evaluate(supervisor, action, context=ctx)
+        acc.add(supervised.decision)
+        if report_path is not None:
+            append_safety_decision(report_path, supervised.decision, context=ctx)
+        n += 1
+
+    summary = build_safety_summary(acc)
+    if output_dir is not None:
+        from .reports import save_json
+        save_json(output_dir / "safety_summary.json", summary)
+        (output_dir / "safety_summary.md").write_text(build_safety_summary_markdown(summary))
+
+    blocked = acc.actions_blocked
+    ok = not (getattr(args, "fail_on_block", False) and blocked > 0)
+
+    if args.json:
+        print(_json.dumps({
+            "ok": ok,
+            "actions_supervised": acc.actions_supervised,
+            "allowed": acc.actions_allowed,
+            "blocked": blocked,
+            "modified": acc.actions_modified,
+            "critical_failures": acc.critical_failures,
+            "profile": profile.name,
+            "report_path": str(report_path) if report_path else None,
+        }, indent=2))
+        return 0 if ok else 1
+
+    print("lerobot-coreai supervisor-check")
+    print("=" * 50)
+    print(f"✓ Loaded profile: {profile.name}")
+    print(f"✓ Actions supervised: {acc.actions_supervised}")
+    print(f"✓ Allowed: {acc.actions_allowed}")
+    mark = "✗" if blocked else "✓"
+    print(f"{mark} Blocked: {blocked}")
+    print(f"✓ Modified/clipped: {acc.actions_modified}")
+    if report_path is not None:
+        print(f"Safety report: {report_path}")
+    print("=" * 50)
+    return 0 if ok else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)

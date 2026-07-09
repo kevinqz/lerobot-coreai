@@ -33,6 +33,14 @@ from .sim_analytics import build_sim_analytics, write_episode_metrics_csv, write
 from .sim_egress import SimEgress
 from .sim_quality import SimQualityConfig, SimQualityResult, evaluate_sim_quality
 from .sim_bundle import SimBundleConfig, package_sim_run
+from .safety_profiles import resolve_safety_profile
+from .safety_supervisor import SafetyContext, SafetySupervisor, safe_evaluate
+from .safety_reports import (
+    SafetyAccumulator,
+    append_safety_decision,
+    build_safety_summary,
+    build_safety_summary_markdown,
+)
 from .sim_envs import SimEnvConfig, SimEnvironment, build_sim_environment
 from .sim_summary import build_sim_summary_markdown
 from .trace import TraceWriter
@@ -82,6 +90,11 @@ class SimConfig:
     include_observations_dir: bool = False
     redact_runner_url: bool = False
     redact_local_paths: bool = True
+    # Runtime safety supervisor (v0.9.0).
+    supervisor_mode: str = "enforce"
+    safety_profile: Path | None = None
+    safety_profile_name: str | None = None
+    safety_report: bool = True
 
 
 @dataclass
@@ -271,8 +284,30 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         "env_errors": 0,
         "validation_errors": 0,
         "loop_errors": 0,
+        # Safety supervisor (v0.9.0).
+        "actions_supervised": 0,
+        "actions_allowed_by_supervisor": 0,
+        "actions_blocked_by_supervisor": 0,
+        "actions_modified_by_supervisor": 0,
+        "safety_critical_failures": 0,
     }
     errors: list[dict[str, Any]] = []
+
+    # v0.9.0: build the runtime safety supervisor (before any egress).
+    # A bad profile fails fast here with a clear error (fail-closed).
+    supervisor_mode = config.supervisor_mode
+    supervisor: SafetySupervisor | None = None
+    safety_profile_obj = None
+    safety_acc: SafetyAccumulator | None = None
+    safety_report_path: Path | None = None
+    if supervisor_mode != "off":
+        safety_profile_obj = resolve_safety_profile(
+            path=config.safety_profile, name=config.safety_profile_name,
+        )
+        supervisor = SafetySupervisor(safety_profile_obj, mode=supervisor_mode)
+        safety_acc = SafetyAccumulator(profile=safety_profile_obj.name, mode=supervisor_mode)
+        if config.safety_report:
+            safety_report_path = output_dir / "safety_report.jsonl"
 
     live_collector = LiveMetricsCollector()
     adapter_config = ObservationAdapterConfig(
@@ -384,6 +419,7 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             episode_success = False
             episode_terminated = False
             episode_truncated = False
+            episode_safety_terminated = False
 
             for step in range(config.max_steps_per_episode):
                 step_started = time.monotonic()
@@ -477,6 +513,63 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                     if config.fail_fast:
                         raise
                     break
+
+                # v0.9.0: supervise the action before any egress. No supervised
+                # decision, no egress. The supervisor is fail-closed.
+                if supervisor is not None:
+                    ctx = SafetyContext(
+                        mode="sim", episode=episode, step=step,
+                        robot_type=policy.robot_type, policy_type=policy.policy_type,
+                        env_type=config.env_type,
+                    )
+                    supervised = safe_evaluate(supervisor, action, context=ctx)
+                    decision = supervised.decision
+                    if safety_report_path is not None:
+                        append_safety_decision(safety_report_path, decision, context=ctx)
+                    if safety_acc is not None:
+                        safety_acc.add(decision)
+                    metrics["actions_supervised"] += 1
+                    if decision.allowed:
+                        metrics["actions_allowed_by_supervisor"] += 1
+                    else:
+                        metrics["actions_blocked_by_supervisor"] += 1
+                    if decision.action_modified:
+                        metrics["actions_modified_by_supervisor"] += 1
+                    if decision.severity == "critical" and not decision.allowed:
+                        metrics["safety_critical_failures"] += 1
+
+                    if supervisor_mode == "enforce" and not decision.allowed:
+                        # Blocked: never reaches SimEgress. Terminate the episode
+                        # as safety_terminated (no invented no-op continuity).
+                        metrics["actions_generated"] += 1
+                        trace.write("safety.action_blocked", {
+                            "episode": episode, "step": step,
+                            "reasons": decision.reasons, "severity": decision.severity,
+                        })
+                        _append_jsonl(actions_path, {
+                            "episode": episode, "step": step, "timestamp": now_iso(),
+                            "ok": False, "action": None,
+                            "action_shape": decision.original_action_shape,
+                            "egress": {
+                                "sent_to_simulator": False, "sent_to_robot": False,
+                                "destination": "blocked_by_supervisor",
+                            },
+                            "reward": None, "done": True,
+                            "timing": {"runner_total_ms": runner_total_ms},
+                            "safety": {"allowed": False, "reasons": decision.reasons},
+                            "error": None,
+                        })
+                        episode_safety_terminated = True
+                        episode_terminated = True
+                        if config.fail_fast:
+                            raise CoreAIPolicyError(
+                                "Safety supervisor blocked action. No robot commands were sent."
+                            )
+                        break
+                    # Allowed (enforce): egress the supervised (possibly clipped)
+                    # action. report_only/off: egress the original action.
+                    if supervisor_mode == "enforce" and supervised.action is not None:
+                        action = supervised.action
 
                 # Egress action to the simulator (never to a robot).
                 metrics["actions_generated"] += 1
@@ -597,6 +690,9 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                 "actions_sent_to_simulator": episode_steps,
                 "actions_sent_to_robot": 0,
             }
+            if episode_safety_terminated:
+                episode_summary["terminated_by"] = "safety_supervisor"
+                episode_summary["success"] = False
             episode_summaries.append(episode_summary)
             _append_jsonl(episodes_path, episode_summary)
             trace.write("episode.completed", {"episode": episode, "summary": episode_summary})
@@ -637,6 +733,9 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         success_metric_available=success_metric_available,
         success_rate=success_rate,
     )
+    # v0.9.0: software supervision claim (never a physical-safety claim).
+    claims["proves_software_supervision"] = supervisor is not None
+    claims["proves_physical_safety"] = False
 
     final_metrics = _finalize_metrics(metrics, loop_times_ms, runner_times_ms)
     final_metrics["mean_episode_reward"] = mean_episode_reward
@@ -698,6 +797,42 @@ def run_sim_mode(config: SimConfig) -> SimResult:
             files_map["failure_taxonomy"] = "failure_taxonomy.json"
         except Exception:
             pass  # best-effort
+    # v0.9.0: write safety supervisor artifacts + build the report section.
+    safety_supervisor_section: dict[str, Any] | None = None
+    if supervisor is not None and safety_acc is not None:
+        safety_summary = build_safety_summary(safety_acc)
+        safety_files: dict[str, str] = {}
+        if config.safety_report:
+            try:
+                save_json(output_dir / "safety_summary.json", safety_summary)
+                (output_dir / "safety_summary.md").write_text(
+                    build_safety_summary_markdown(safety_summary))
+                if safety_report_path is not None and safety_report_path.exists():
+                    files_map["safety_report"] = "safety_report.jsonl"
+                    safety_files["safety_report"] = "safety_report.jsonl"
+                files_map["safety_summary"] = "safety_summary.json"
+                files_map["safety_summary_md"] = "safety_summary.md"
+                safety_files["safety_summary"] = "safety_summary.json"
+                safety_files["safety_summary_md"] = "safety_summary.md"
+            except Exception:
+                pass  # best-effort; safety artifacts are auxiliary files
+        safety_supervisor_section = {
+            "enabled": True,
+            "mode": supervisor_mode,
+            "profile": safety_acc.profile,
+            "profile_source": getattr(safety_profile_obj, "source", None),
+            "actions_supervised": safety_acc.actions_supervised,
+            "actions_allowed": safety_acc.actions_allowed,
+            "actions_blocked": safety_acc.actions_blocked,
+            "actions_modified": safety_acc.actions_modified,
+            "critical_failures": safety_acc.critical_failures,
+            "would_block_actions": safety_acc.would_block_actions,
+            "critical_findings": safety_acc.critical_findings,
+            "top_reasons": safety_acc.top_reasons(),
+            "passed": safety_acc.passed,
+            "files": safety_files,
+        }
+
     summary_path: Path | None = None
     if config.summary_md:
         summary_path = output_dir / "sim_summary.md"
@@ -740,6 +875,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                 failure_metrics=failure_analytics,
                 quality=quality_section,
             )
+            if safety_supervisor_section is not None:
+                fail_report["safety_supervisor"] = safety_supervisor_section
             try:
                 save_json(report_path, fail_report)
                 if summary_path is not None:
@@ -772,6 +909,8 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         failure_metrics=failure_analytics,
         quality=quality_section,
     )
+    if safety_supervisor_section is not None:
+        report["safety_supervisor"] = safety_supervisor_section
     save_json(report_path, report)
     if summary_path is not None:
         try:

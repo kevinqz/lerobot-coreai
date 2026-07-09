@@ -1,0 +1,21 @@
+{
+  "schema_version": "lerobot-coreai.safety_profile.v0",
+  "name": "default-sim-safe",
+  "description": "Minimal conservative software guard: finite values required (no NaN/Inf), no shape or robot-type enforcement, no numeric bounds. A safe non-restrictive default for simulator-only runs. NOT a hardware safety envelope.",
+  "robot_type": null,
+  "action_shape": null,
+  "min_action": null,
+  "max_action": null,
+  "max_abs_action": null,
+  "max_delta": null,
+  "max_l2_norm": null,
+  "allow_nan": false,
+  "allow_inf": false,
+  "allow_shape_change": true,
+  "clip_to_bounds": false,
+  "block_on_clip": false,
+  "require_finite": true,
+  "require_known_shape": false,
+  "require_robot_type_match": false,
+  "mode": "fail_closed"
+}

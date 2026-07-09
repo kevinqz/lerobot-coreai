@@ -149,3 +149,13 @@ Enforced by `shadow-report.schema.json` (Draft 2020-12 `const` invariants):
 - `claims.proves_real_world_safety` is always `false`
 
 These hold even in failure reports.
+
+## Runtime safety supervisor (v0.9.0)
+
+Shadow mode can optionally run the [safety supervisor](safety-supervisor.md) as
+a **diagnostic** (`--supervisor.mode report_only|enforce`, default `off`). It
+writes auditable `safety_report.jsonl` decisions and a `safety_supervisor`
+report section so you can calibrate [safety profiles](safety-profiles.md) with
+zero egress risk. This changes nothing about egress: the `ActionBlocker` remains
+the final, unconditional block — shadow never sends an action to a robot,
+simulator, or actuator, regardless of the supervisor's verdict.

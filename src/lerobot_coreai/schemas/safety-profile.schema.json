@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/safety-profile.schema.json",
+  "title": "lerobot-coreai safety profile",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "name", "mode"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.safety_profile.v0"},
+    "name": {"type": "string", "minLength": 1},
+    "robot_type": {"type": ["string", "null"]},
+    "action_shape": {"type": ["array", "null"], "items": {"type": "integer"}},
+    "min_action": {"type": ["number", "array", "null"]},
+    "max_action": {"type": ["number", "array", "null"]},
+    "max_abs_action": {"type": ["number", "null"]},
+    "max_delta": {"type": ["number", "null"]},
+    "max_l2_norm": {"type": ["number", "null"]},
+    "allow_nan": {"type": "boolean"},
+    "allow_inf": {"type": "boolean"},
+    "allow_shape_change": {"type": "boolean"},
+    "clip_to_bounds": {"type": "boolean"},
+    "block_on_clip": {"type": "boolean"},
+    "require_finite": {"type": "boolean"},
+    "require_known_shape": {"type": "boolean"},
+    "require_robot_type_match": {"type": "boolean"},
+    "mode": {"type": "string", "const": "fail_closed"},
+    "description": {"type": ["string", "null"]}
+  }
+}
