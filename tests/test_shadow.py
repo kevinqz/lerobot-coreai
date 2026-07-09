@@ -323,3 +323,93 @@ class TestShadowOverwrite:
             )
             with pytest.raises(CoreAIPolicyError, match="not empty"):
                 run_shadow_mode(config)
+
+
+class FakeTensor:
+    """Mimics a torch.Tensor just enough for make_json_safe_observation to convert."""
+    def __init__(self, data):
+        self._data = data
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def tolist(self):
+        return self._data
+
+
+class TestShadowJsonSafeObservation:
+    """P0 fix: the runner must receive the JSON-safe observation, not raw objects.
+
+    Sources can return tensors/PIL/arrays in observation values. The shadow loop
+    serializes them via make_json_safe_observation before calling predict_action.
+    """
+
+    def test_predict_action_receives_safe_obs_not_raw(self, tmp_path, valid_manifest_dict):
+        from lerobot_coreai.observation_sources import FixtureObservationSource
+
+        # Build a fixture whose observation.state is a FakeTensor (not a plain list).
+        # The flat fixture loader passes non-string values through as-is.
+        fixture_dir = tmp_path / "fx"
+        fixture_dir.mkdir()
+        fixture_file = fixture_dir / "000000.json"
+        fixture_file.write_text(json.dumps({
+            "observation.images.wrist": "wrist.png",
+            "observation.state": [0.0] * 7,  # JSON loads as list; we'll patch the source
+            "task": "pick up the cube",
+        }))
+
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        # Patch the source to inject a FakeTensor into the observation.
+        class TensorFixtureSource(FixtureObservationSource):
+            def read(self):
+                obs = super().read()
+                if obs is not None:
+                    obs["observation.state"] = FakeTensor([0.0] * 7)
+                return obs
+
+        real_source = FixtureObservationSource(fixture_path=fixture_file, repeat=True)
+
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy), \
+             patch("lerobot_coreai.shadow.build_observation_source", return_value=TensorFixtureSource(
+                       fixture_path=fixture_file, repeat=True)):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixture",
+                fixture=fixture_file,
+                output_dir=tmp_path / "run",
+                max_steps=1,
+                fps=0,
+            )
+            run_shadow_mode(config)
+
+        # Verify predict_action was called with a list, not a FakeTensor.
+        called_obs = mock_policy.predict_action.call_args.args[0]
+        assert called_obs["observation.state"] == [0.0] * 7
+        assert not isinstance(called_obs["observation.state"], FakeTensor)
+
+
+class TestShadowTraceClose:
+    def test_success_trace_has_completion_events(self, tmp_path, valid_manifest_dict):
+        """Trace should contain both shadow.completed and observation_source.closed."""
+        fixtures_dir = _make_fixture_dir(tmp_path / "fixtures", n=2)
+        mock_policy = _make_mock_policy(valid_manifest_dict)
+
+        with patch("lerobot_coreai.shadow.CoreAIPolicy.from_pretrained", return_value=mock_policy):
+            config = ShadowConfig(
+                policy_path="test",
+                observation_source="fixtures",
+                fixtures_dir=fixtures_dir,
+                output_dir=tmp_path / "run",
+                max_steps=2,
+                fps=0,
+            )
+            run_shadow_mode(config)
+
+        trace_text = (tmp_path / "run" / "shadow_trace.jsonl").read_text()
+        assert "shadow.completed" in trace_text
+        assert "observation_source.closed" in trace_text
+

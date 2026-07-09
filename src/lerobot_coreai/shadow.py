@@ -197,7 +197,6 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     }
     errors: list[dict[str, Any]] = []
     steps_completed = 0
-    source_opened = False
 
     trace.write("shadow.started", {
         "mode": "shadow",
@@ -210,6 +209,9 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     stage = "init"
     policy: CoreAIPolicy | None = None
     source: ObservationSource | None = None
+    source_opened = False
+    source_closed = False
+    fatal_error: Exception | None = None
     loop_start = time.monotonic()
 
     try:
@@ -252,6 +254,9 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         source.open()
         source_opened = True
         trace.write("observation_source.opened", {"type": config.observation_source})
+
+        # Create observations/ subdir for per-step observation files.
+        obs_dir.mkdir(parents=True, exist_ok=True)
 
         # Warmup steps: read and discard.
         if config.warmup_steps > 0:
@@ -321,10 +326,13 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                     raise
                 continue
 
-            # Predict action (validation happens inside policy).
+            # Predict action using the JSON-safe observation (not raw_obs).
+            # The runner receives JSON over HTTP; raw objects (tensors/PIL/arrays)
+            # from real sources would fail to serialize. This mirrors the v0.4
+            # eval hardening fix.
             runner_total_ms: float | None = None
             try:
-                result = policy.predict_action(raw_obs, return_metadata=True)
+                result = policy.predict_action(safe_obs, return_metadata=True)
                 action = result["action"]
                 meta = result.get("metadata", {})
                 timing = meta.get("timing") or {}
@@ -395,12 +403,24 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         trace.write("loop.completed", {"steps_completed": steps_completed})
 
     except Exception as e:
-        # Build a best-effort failure report preserving all safety invariants.
-        error_type = type(e).__name__
-        error_msg = str(e)
-        errors.append({"type": error_type, "message": error_msg, "stage": stage})
+        # Capture the error; the failure report is written after the finally
+        # block so that source_closed reflects the actual close status.
+        fatal_error = e
+        errors.append({"type": type(e).__name__, "message": str(e), "stage": stage})
         metrics["loop_errors"] += 1
+        trace.write("shadow.failed", {"error": type(e).__name__, "message": str(e)})
 
+    finally:
+        if source is not None:
+            try:
+                source.close()
+                source_closed = True
+                trace.write("observation_source.closed")
+            except Exception:
+                pass  # best-effort
+
+    # Failure path — write the failure report (after finally, so source_closed is correct).
+    if fatal_error is not None:
         if policy is not None:
             loop_total_s = time.monotonic() - loop_start
             fail_report = build_shadow_report(
@@ -408,7 +428,7 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 policy=policy,
                 runner_url=config.runner_url,
                 source_type=config.observation_source,
-                source_meta={"opened": source_opened, "closed": not source_opened},
+                source_meta={"opened": source_opened, "closed": source_closed},
                 loop={
                     "fps_target": config.fps,
                     "steps_requested": config.max_steps,
@@ -430,17 +450,8 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 save_json(report_path, fail_report)
             except Exception:
                 pass  # best-effort
-
-        trace.write("shadow.failed", {"error": error_type, "message": error_msg})
-        raise
-
-    finally:
-        if source is not None:
-            try:
-                source.close()
-                trace.write("observation_source.closed")
-            except Exception:
-                pass  # best-effort
+        trace.close()
+        raise fatal_error
 
     # Success path — build the report.
     loop_total_s = time.monotonic() - loop_start
@@ -457,7 +468,7 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         policy=policy,  # type: ignore[arg-type]
         runner_url=config.runner_url,
         source_type=config.observation_source,
-        source_meta={"opened": source_opened, "closed": True},
+        source_meta={"opened": source_opened, "closed": source_closed},
         loop={
             "fps_target": config.fps,
             "steps_requested": config.max_steps,
@@ -471,6 +482,7 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     )
     save_json(report_path, report)
     trace.write("shadow.completed", {"ok": True, "steps": steps_completed})
+    trace.close()
 
     return ShadowResult(
         ok=True,
