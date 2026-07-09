@@ -193,6 +193,28 @@ def _require_gymnasium():
     return gymnasium
 
 
+def _as_state_vector(value: Any) -> list[Any]:
+    """Coerce a value into a flat-ish state vector list.
+
+    Handles numpy scalars/arrays (via .tolist()) and plain scalars/lists/tuples.
+    A numpy scalar like np.float32(1.0) has a .tolist() that returns a Python
+    scalar — this must become a 1-element list, not list(scalar) (which raises
+    TypeError). Nested structures (e.g. .tolist() returning [[...]]) are
+    preserved as-is.
+    """
+    # Unwrap numpy/array-like types first (avoids a hard numpy dependency).
+    if hasattr(value, "tolist") and callable(value.tolist):
+        value = value.tolist()
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    raise CoreAIPolicyError(
+        "Gym observation could not be normalized automatically. "
+        "Provide an env adapter or observation mapping."
+    )
+
+
 def normalize_gym_observation(
     obs: Any,
     info: dict[str, Any] | None = None,
@@ -209,16 +231,13 @@ def normalize_gym_observation(
     if isinstance(obs, dict):
         return dict(obs)
 
-    # numpy array-like: prefer .tolist() to avoid a hard numpy dependency.
+    # numpy/array-like, plain scalars, lists, tuples all route through
+    # _as_state_vector, which handles the scalar-from-.tolist() edge case
+    # (e.g. np.float32(1.0).tolist() == 1.0, which must not be iterated).
     if hasattr(obs, "tolist") and callable(obs.tolist):
-        return {"observation.state": list(obs.tolist())}
-
-    if isinstance(obs, (list, tuple)):
-        return {"observation.state": list(obs)}
-
-    # Bare numbers (int/float) -> single-element state vector.
-    if isinstance(obs, (int, float)):
-        return {"observation.state": [float(obs)]}
+        return {"observation.state": _as_state_vector(obs)}
+    if isinstance(obs, (list, tuple, int, float)):
+        return {"observation.state": _as_state_vector(obs)}
 
     raise CoreAIPolicyError(
         "Gym observation could not be normalized automatically. "

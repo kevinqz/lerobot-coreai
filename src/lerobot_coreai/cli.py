@@ -857,6 +857,12 @@ def cmd_sim(args: argparse.Namespace) -> int:
             env_kwargs = json.loads(kwargs_json)
         except Exception as e:
             print(f"Error: invalid --env.kwargs-json: {e}", file=sys.stderr)
+            print("No robot commands were sent.", file=sys.stderr)
+            return 1
+        # gymnasium.make(**kwargs) requires a mapping; reject anything else early.
+        if not isinstance(env_kwargs, dict):
+            print("Error: --env.kwargs-json must be a JSON object.", file=sys.stderr)
+            print("No robot commands were sent.", file=sys.stderr)
             return 1
 
     config = SimConfig(

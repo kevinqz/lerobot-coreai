@@ -189,6 +189,23 @@ class TestCliSim:
         assert rc == 1
         err = capsys.readouterr().err
         assert "invalid --env.kwargs-json" in err
+        assert "No robot commands were sent." in err
+
+    def test_sim_gym_kwargs_json_must_be_object(self, tmp_path, capsys):
+        """--env.kwargs-json must parse to a JSON object (dict), not a list/scalar."""
+        rc = cli.main([
+            "sim",
+            "--policy.path", "test",
+            "--env.type", "gym",
+            "--env.id", "FakeEnv-v0",
+            "--env.kwargs-json", "[1,2,3]",
+            "--output-dir", str(tmp_path / "run"),
+            "--confirm-sim-egress",
+        ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "must be a JSON object" in err
+        assert "No robot commands were sent." in err
 
     def test_sim_gym_missing_gymnasium_rc1(self, tmp_path, capsys):
         """If gymnasium is not installed, the run should fail with the install hint."""

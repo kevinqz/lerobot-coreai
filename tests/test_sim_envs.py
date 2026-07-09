@@ -222,6 +222,25 @@ class TestNormalizeGymObservation:
         out = normalize_gym_observation(ArrayLike())
         assert out == {"observation.state": [1.0, 2.0]}
 
+    def test_numpy_scalar_like_to_state(self):
+        """An array-like whose .tolist() returns a scalar (e.g. np.float32)
+        must become a 1-element list, not raise TypeError from list(scalar)."""
+        class ScalarLike:
+            def tolist(self):
+                return 1.5
+
+        out = normalize_gym_observation(ScalarLike())
+        assert out == {"observation.state": [1.5]}
+
+    def test_nested_array_like_to_state(self):
+        """An array-like whose .tolist() returns a nested list is preserved."""
+        class NestedLike:
+            def tolist(self):
+                return [[1.0, 2.0], [3.0, 4.0]]
+
+        out = normalize_gym_observation(NestedLike())
+        assert out == {"observation.state": [[1.0, 2.0], [3.0, 4.0]]}
+
     def test_unsupported_raises(self):
         with pytest.raises(CoreAIPolicyError, match="could not be normalized"):
             normalize_gym_observation("a string")
