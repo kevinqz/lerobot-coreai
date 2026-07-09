@@ -31,6 +31,7 @@ from .reports import infer_shape, now_iso, save_json
 from .serialization import make_json_safe_observation
 from .sim_analytics import build_sim_analytics, write_episode_metrics_csv, write_step_metrics_csv
 from .sim_egress import SimEgress
+from .sim_quality import SimQualityConfig, SimQualityResult, evaluate_sim_quality
 from .sim_envs import SimEnvConfig, SimEnvironment, build_sim_environment
 from .sim_summary import build_sim_summary_markdown
 from .trace import TraceWriter
@@ -70,6 +71,9 @@ class SimConfig:
     export_csv: bool = False
     summary_md: bool = True
     failure_taxonomy: bool = True
+    # Quality gates (v0.8.3).
+    quality_config: SimQualityConfig | None = None
+    fail_on_quality: bool = False
 
 
 @dataclass
@@ -120,6 +124,7 @@ def build_sim_report(
     latency_metrics: dict[str, Any] | None = None,
     action_metrics: dict[str, Any] | None = None,
     failure_metrics: dict[str, Any] | None = None,
+    quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the sim_report.json dict.
 
@@ -174,6 +179,8 @@ def build_sim_report(
         report["action_metrics"] = action_metrics
     if failure_metrics is not None:
         report["failure_metrics"] = failure_metrics
+    if quality is not None:
+        report["quality"] = quality
     return report
 
 
@@ -641,6 +648,21 @@ def run_sim_mode(config: SimConfig) -> SimResult:
     action_analytics = analytics["action_metrics"]
     failure_analytics = analytics["failure_metrics"]
 
+    # v0.8.3: evaluate quality gates against the analytics.
+    quality_result: SimQualityResult | None = None
+    if config.quality_config is not None:
+        quality_result = evaluate_sim_quality(
+            analytics,
+            config.quality_config,
+            error_rate=failure_analytics.get("error_rate", 0.0),
+        )
+    quality_section: dict[str, Any] | None = None
+    if quality_result is not None:
+        quality_section = {
+            "passed": quality_result.passed,
+            "checks": quality_result.checks,
+        }
+
     files_map = {
         "actions": "actions.jsonl",
         "episodes": "episodes.jsonl",
@@ -708,6 +730,7 @@ def run_sim_mode(config: SimConfig) -> SimResult:
                 latency_metrics=latency_analytics,
                 action_metrics=action_analytics,
                 failure_metrics=failure_analytics,
+                quality=quality_section,
             )
             try:
                 save_json(report_path, fail_report)
@@ -718,9 +741,14 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         trace.close()
         raise fatal_error
 
+    # v0.8.3: if fail_on_quality and quality failed, mark ok=False.
+    quality_failed = (
+        quality_result is not None and not quality_result.passed and config.fail_on_quality
+    )
+
     # Success path.
     report = build_sim_report(
-        ok=True,
+        ok=not quality_failed,
         policy=policy,  # type: ignore[arg-type]
         runner_url=config.runner_url,
         env_meta=env_meta,
@@ -734,6 +762,7 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         latency_metrics=latency_analytics,
         action_metrics=action_analytics,
         failure_metrics=failure_analytics,
+        quality=quality_section,
     )
     save_json(report_path, report)
     if summary_path is not None:
@@ -742,14 +771,14 @@ def run_sim_mode(config: SimConfig) -> SimResult:
         except Exception:
             pass  # best-effort
     trace.write("sim.completed", {
-        "ok": True,
+        "ok": not quality_failed,
         "episodes": episodes_completed,
         "steps": metrics["steps_completed"],
     })
     trace.close()
 
     return SimResult(
-        ok=True,
+        ok=not quality_failed,
         output_dir=output_dir,
         report_path=report_path,
         trace_path=trace_path,
