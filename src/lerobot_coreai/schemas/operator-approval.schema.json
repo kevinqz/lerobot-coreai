@@ -32,9 +32,19 @@
                "guarded_real_dry_run", "guarded_real_single_session"]
     },
     "expires_at": {"type": "string"},
-    "bundle": {"type": "object"},
+    "bundle": {
+      "type": "object",
+      "required": ["manifest_sha256"],
+      "properties": {
+        "manifest_sha256": {"type": "string"},
+        "checksums_sha256": {"type": ["string", "null"]}
+      }
+    },
     "artifacts": {"type": "object"},
-    "checks": {"type": "array"},
+    "checks": {
+      "type": "array",
+      "items": {"type": "object", "required": ["name", "passed"]}
+    },
     "operator_overrides": {"type": "object"},
     "operator_attestation": {
       "type": "object",
@@ -58,5 +68,24 @@
         "authorizes_unrestricted_real_world_actuation": {"type": "boolean", "const": false}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "comment": "An approved manifest must carry an accepted attestation, a named operator, and the reviewed-evidence claim.",
+      "if": {"properties": {"approved": {"const": true}}, "required": ["approved"]},
+      "then": {
+        "properties": {
+          "approved_by": {"type": "string", "minLength": 1},
+          "operator_attestation": {
+            "properties": {"accepted": {"const": true}},
+            "required": ["accepted"]
+          },
+          "claims": {
+            "properties": {"proves_operator_reviewed_evidence": {"const": true}}
+          }
+        },
+        "required": ["approved_by"]
+      }
+    }
+  ]
 }

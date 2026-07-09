@@ -168,6 +168,18 @@ def evaluate_safety_quality(
             "Malformed safety summary: actions_supervised must be a positive integer "
             f"(got {n_raw!r})."
         )
+    # v0.9.4: every count field must be a non-negative integer (fail-closed —
+    # a malformed count must never silently default to zero and pass a gate).
+    for key in ("actions_blocked", "actions_modified", "critical_failures",
+                "critical_findings", "would_block_actions"):
+        v = summary.get(key)
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise CoreAIPolicyError(
+                f"Malformed safety summary: {key} must be a non-negative integer "
+                f"(got {v!r})."
+            )
+    if not isinstance(summary.get("passed"), bool):
+        raise CoreAIPolicyError("Malformed safety summary: passed must be a boolean.")
     n = summary.get("actions_supervised", 0) or 0
     blocked = summary.get("actions_blocked", 0) or 0
     modified = summary.get("actions_modified", 0) or 0

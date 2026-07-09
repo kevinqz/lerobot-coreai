@@ -77,6 +77,17 @@ class TestApprovalRequest:
             bundle_dir=bundle, allow_missing_regression=True, allow_warnings=True))
         assert any("regression report missing but allowed" in w for w in req.warnings)
 
+    def test_request_separates_required_and_warnings(self, sim_evidence_bundle):
+        # v0.9.4: required_checks_passed and warnings_present are distinct.
+        bundle = sim_evidence_bundle(with_regression=False)
+        req = build_approval_request(ApprovalConfig(
+            bundle_dir=bundle, allow_missing_regression=True, allow_warnings=False))
+        # Required checks pass (regression waived), but a warning is present, so
+        # ok is False while required_checks_passed is True.
+        assert req.required_checks_passed is True
+        assert req.warnings_present is True
+        assert req.ok is False
+
 
 class TestApproveBundle:
     def test_approve_writes_valid_manifest(self, sim_evidence_bundle):
