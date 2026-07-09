@@ -20,7 +20,7 @@ def _mock_policy(valid_manifest_dict, action=None):
 
 def _run_guarded(sc, tmp_path, valid_manifest_dict, action=None, max_steps=3):
     cfg = RealModeConfig(
-        mode="guarded", policy_path="test/p", runner_url="http://127.0.0.1:8710",
+        mode="guarded", policy_path="kevinqz/EVO1-SO100-CoreAI", runner_url="http://127.0.0.1:8710",
         robot_adapter="mock", robot_type=sc["robot_type"],
         safety_profile=sc["profile"], readiness_report=sc["readiness"],
         approval=sc["approval"], bundle_dir=sc["bundle_dir"],

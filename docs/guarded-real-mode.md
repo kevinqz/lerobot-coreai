@@ -29,6 +29,18 @@ paths must reference the **same** `--bundle-dir` and `--approval` you passed. Th
 safety profile must be **intended for real** (its `intended_modes` must include a
 guarded-real mode) — a sim/shadow-only profile is refused.
 
+**Evidence cross-binding (v1.0.4):** the policy and robot type you run must be
+the **same** the bundle evidence was produced for — preflight reads the bundled
+`sim_report.json` and refuses a `--policy.path` / `--robot.type` that disagrees
+with it.
+
+**Observation config (v1.0.4):** a non-mock (real) adapter must declare its
+observation config — `--obs.config <json>` or explicit `--obs.*` flags
+(`--obs.image-key`, `--obs.state-key`, `--obs.task`, `--obs.require-state`,
+`--obs.require-task`, `--obs.required-keys`, `--obs.drop-unknown-keys`).
+Real observations vary and must not fall back to defaults; the mock adapter is
+exempt.
+
 ## Modes
 
 | Mode | Behavior |

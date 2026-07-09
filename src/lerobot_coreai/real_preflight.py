@@ -49,6 +49,7 @@ class RealPreflightConfig:
     attest_real_hardware: bool = False
     attest_physical_estop: bool = False
     attest_workspace_clear: bool = False
+    has_observation_config: bool = False
 
 
 @dataclass
@@ -172,6 +173,23 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
     _c("policy_path_present", bool(config.policy_path))
     _c("runner_url_present", bool(config.runner_url))
 
+    # v1.0.4: evidence cross-binding — the policy/robot we are about to run must
+    # be the SAME one the bundle evidence was produced for.
+    sim_report_path = bundle_dir / "source_run" / "sim_report.json"
+    if sim_report_path.is_file():
+        try:
+            ev_policy = (_read_json(sim_report_path).get("policy", {}) or {})
+            ev_path = ev_policy.get("path")
+            pol_ok = ev_path is None or ev_path == config.policy_path
+            _c("policy_matches_evidence", pol_ok,
+               "" if pol_ok else f"bundle policy {ev_path} != {config.policy_path}")
+            ev_rt = ev_policy.get("robot_type")
+            rt_ok = ev_rt is None or ev_rt == config.robot_type
+            _c("robot_type_matches_evidence", rt_ok,
+               "" if rt_ok else f"bundle robot_type {ev_rt} != {config.robot_type}")
+        except json.JSONDecodeError:
+            _c("policy_matches_evidence", False, "bundle sim_report unreadable")
+
     # Safety profile.
     profile_action_shape: list[int] | None = None
     sp_path = Path(config.safety_profile) if config.safety_profile else None
@@ -246,6 +264,12 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
         if config.duration_seconds is not None:
             _c("duration_bounded", 0 < config.duration_seconds <= MAX_DURATION_S,
                f"0 < duration <= {MAX_DURATION_S}")
+        # v1.0.4: a non-mock (real) adapter must have an explicit observation
+        # config — real observations vary and must not rely on defaults.
+        if config.robot_adapter != "mock":
+            _c("observation_config_present", config.has_observation_config,
+               "" if config.has_observation_config else
+               "non-mock real mode requires --obs.config or explicit --obs.* flags")
 
     ok = all(c.passed for c in checks if c.severity == "required")
     report = {

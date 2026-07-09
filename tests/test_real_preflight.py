@@ -123,6 +123,60 @@ class TestReadinessValidation:
         assert "readiness_evidence_safety_regression_passed" in _failed(result)
 
 
+class TestEvidenceCrossBinding:
+    def test_policy_mismatch_with_evidence_fails(self, real_ready_scenario):
+        sc = real_ready_scenario()
+        result = evaluate_real_preflight(_cfg(sc, policy_path="someone/else-policy"))
+        assert not result.ok
+        assert "policy_matches_evidence" in _failed(result)
+
+    def test_matching_policy_passes(self, real_ready_scenario):
+        sc = real_ready_scenario()
+        # fixture bundle sim_report policy path is kevinqz/EVO1-SO100-CoreAI.
+        result = evaluate_real_preflight(_cfg(sc, policy_path="kevinqz/EVO1-SO100-CoreAI"))
+        assert result.ok, _failed(result)
+
+
+class TestObservationConfig:
+    def _fake_external(self, action_shape=(16, 7)):
+        from lerobot_coreai.external_http_contract import EXTERNAL_HTTP_SCHEMA_VERSION
+
+        class _Ext:
+            name = "external-http"
+            robot_type = "so100"
+            def preflight(self):
+                return {"ok": True,
+                        "controller_schema_version": EXTERNAL_HTTP_SCHEMA_VERSION,
+                        "robot_type": "so100", "action_shape": list(action_shape),
+                        "supports_stop": True, "supports_ready": True, "max_fps": 5.0}
+        return _Ext()
+
+    def test_non_mock_without_obs_config_fails(self, real_ready_scenario):
+        from unittest.mock import patch
+        sc = real_ready_scenario()
+        cfg = _cfg(sc, robot_adapter="external-http", robot_endpoint="http://127.0.0.1:8765")
+        with patch("lerobot_coreai.robot_adapters.build_robot_adapter",
+                   return_value=self._fake_external()):
+            result = evaluate_real_preflight(cfg)
+        assert not result.ok
+        assert "observation_config_present" in _failed(result)
+
+    def test_non_mock_with_obs_config_passes_that_check(self, real_ready_scenario):
+        from unittest.mock import patch
+        sc = real_ready_scenario()
+        cfg = _cfg(sc, robot_adapter="external-http", robot_endpoint="http://127.0.0.1:8765")
+        cfg.has_observation_config = True
+        with patch("lerobot_coreai.robot_adapters.build_robot_adapter",
+                   return_value=self._fake_external()):
+            result = evaluate_real_preflight(cfg)
+        assert "observation_config_present" not in _failed(result)
+
+    def test_mock_exempt_from_obs_config(self, real_ready_scenario):
+        sc = real_ready_scenario()  # mock adapter
+        result = evaluate_real_preflight(_cfg(sc))
+        assert "observation_config_present" not in {c.name for c in result.checks}
+
+
 class TestProfileIntendedForReal:
     def test_sim_only_profile_refused(self, real_ready_scenario):
         sc = real_ready_scenario()

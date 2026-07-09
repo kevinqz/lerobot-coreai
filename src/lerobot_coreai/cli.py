@@ -566,6 +566,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_real.add_argument("--deadman.timeout-s", dest="deadman_timeout_s", type=float, default=1.0)
     p_real.add_argument("--deadman.disable-for-mock-only", dest="deadman_disable_for_mock_only",
                         action="store_true")
+    # Observation config (v1.0.4). Required for non-mock adapters.
+    p_real.add_argument("--obs.config", dest="observation_config")
+    p_real.add_argument("--obs.image-key", dest="obs_image_key")
+    p_real.add_argument("--obs.state-key", dest="obs_state_key")
+    p_real.add_argument("--obs.task", dest="obs_task")
+    p_real.add_argument("--obs.require-state", dest="obs_require_state", action="store_true")
+    p_real.add_argument("--obs.require-task", dest="obs_require_task", action="store_true")
+    p_real.add_argument("--obs.required-keys", dest="obs_required_keys",
+                        help="Comma-separated required observation keys")
+    p_real.add_argument("--obs.drop-unknown-keys", dest="obs_drop_unknown_keys",
+                        action="store_true")
     p_real.add_argument("--output-dir", dest="output_dir", required=True)
     p_real.add_argument("--i-understand-this-may-move-real-hardware",
                         dest="attest_real_hardware", action="store_true")
@@ -2282,6 +2293,15 @@ def cmd_real(args: argparse.Namespace) -> int:
         attest_real_hardware=getattr(args, "attest_real_hardware", False),
         attest_physical_estop=getattr(args, "attest_physical_estop", False),
         attest_workspace_clear=getattr(args, "attest_workspace_clear", False),
+        observation_config=Path(args.observation_config) if getattr(args, "observation_config", None) else None,
+        obs_image_key=getattr(args, "obs_image_key", None),
+        obs_state_key=getattr(args, "obs_state_key", None),
+        obs_task=getattr(args, "obs_task", None),
+        obs_require_state=getattr(args, "obs_require_state", False),
+        obs_require_task=getattr(args, "obs_require_task", False),
+        obs_required_keys=([k.strip() for k in args.obs_required_keys.split(",")]
+                           if getattr(args, "obs_required_keys", None) else None),
+        obs_drop_unknown_keys=getattr(args, "obs_drop_unknown_keys", False),
     )
 
     if not args.json:

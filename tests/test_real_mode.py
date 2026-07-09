@@ -23,7 +23,7 @@ def _mock_policy(valid_manifest_dict, action=None):
 
 def _cfg(sc, tmp_path, mode="guarded", **over):
     base = dict(
-        mode=mode, policy_path="test/p", runner_url="http://127.0.0.1:8710",
+        mode=mode, policy_path="kevinqz/EVO1-SO100-CoreAI", runner_url="http://127.0.0.1:8710",
         robot_adapter="mock", robot_type=sc["robot_type"],
         safety_profile=sc["profile"], readiness_report=sc["readiness"],
         approval=sc["approval"], bundle_dir=sc["bundle_dir"],
@@ -117,6 +117,17 @@ class TestGuardedMode:
         assert result.ok
         assert result.stopped_reason == "duration_seconds_reached"
         assert result.report["limits"]["duration_seconds"] == 0.01
+
+    def test_obs_config_threaded_into_session(self, real_ready_scenario, tmp_path,
+                                              valid_manifest_dict):
+        import json
+        sc = real_ready_scenario()
+        obs = tmp_path / "obs.json"
+        obs.write_text(json.dumps({"image_key": "observation.images.top", "task": "pick"}))
+        with patch("lerobot_coreai.real_mode.CoreAIPolicy.from_pretrained",
+                   return_value=_mock_policy(valid_manifest_dict)):
+            result = run_real_mode(_cfg(sc, tmp_path, observation_config=obs))
+        assert result.ok  # mock observation is compatible with the config
 
     def test_deadman_cannot_be_disabled_for_non_mock(self, real_ready_scenario, tmp_path):
         sc = real_ready_scenario()
