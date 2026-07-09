@@ -45,11 +45,24 @@ class SafetyProfile:
     mode: str = "fail_closed"
     description: str | None = None
     source: str | None = field(default=None)
+    # v0.9.1 metadata — makes a profile an explainable, auditable artifact.
+    profile_version: str = "0.1.0"
+    profile_type: str = "software_bounds"
+    intended_modes: list[str] = field(default_factory=lambda: ["sim", "shadow"])
+    intended_envs: list[str] = field(default_factory=list)
+    intended_policy_types: list[str] = field(default_factory=list)
+    calibrated_from: str | None = None
+    calibration_method: str | None = None
+    calibration_date: str | None = None
+    notes: str | None = None
+    limitations: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": SAFETY_PROFILE_SCHEMA_VERSION,
             "name": self.name,
+            "profile_version": self.profile_version,
+            "profile_type": self.profile_type,
             "robot_type": self.robot_type,
             "action_shape": self.action_shape,
             "min_action": self.min_action,
@@ -66,7 +79,15 @@ class SafetyProfile:
             "require_known_shape": self.require_known_shape,
             "require_robot_type_match": self.require_robot_type_match,
             "mode": self.mode,
+            "intended_modes": self.intended_modes,
+            "intended_envs": self.intended_envs,
+            "intended_policy_types": self.intended_policy_types,
+            "calibrated_from": self.calibrated_from,
+            "calibration_method": self.calibration_method,
+            "calibration_date": self.calibration_date,
             "description": self.description,
+            "notes": self.notes,
+            "limitations": self.limitations,
         }
 
 
@@ -75,6 +96,9 @@ _ALLOWED_KEYS = {
     "max_abs_action", "max_delta", "max_l2_norm", "allow_nan", "allow_inf",
     "allow_shape_change", "clip_to_bounds", "block_on_clip", "require_finite",
     "require_known_shape", "require_robot_type_match", "mode", "description",
+    "profile_version", "profile_type", "intended_modes", "intended_envs",
+    "intended_policy_types", "calibrated_from", "calibration_method",
+    "calibration_date", "notes", "limitations",
 }
 
 
@@ -107,6 +131,16 @@ def load_safety_profile(path: Path) -> SafetyProfile:
         raise CoreAIPolicyError(f"Invalid safety profile JSON: {e}") from None
     _validate_profile_dict(data)
     return profile_from_dict(data, source=str(path))
+
+
+def list_builtin_profiles() -> list[str]:
+    """Return the sorted names of all built-in safety profiles."""
+    names: list[str] = []
+    for entry in files("lerobot_coreai.profiles").iterdir():
+        fname = entry.name
+        if fname.endswith(".json"):
+            names.append(fname[: -len(".json")])
+    return sorted(names)
 
 
 def load_builtin_profile(name: str) -> SafetyProfile:

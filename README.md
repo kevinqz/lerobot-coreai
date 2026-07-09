@@ -119,6 +119,11 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `package-sim-run` | v0.8.4 ✅ | Package a sim run into a reproducibility bundle |
 | `verify-sim-bundle` | v0.8.4 ✅ | Verify a sim bundle (manifest, checksums, invariants) |
 | `supervisor-check` | v0.9.0 ✅ | Evaluate an actions file against a safety profile |
+| `profile-list` / `profile-show` | v0.9.1 ✅ | List / inspect built-in safety profiles |
+| `profile-validate` | v0.9.1 ✅ | Validate a safety profile |
+| `profile-recommend` | v0.9.1 ✅ | Recommend a built-in profile from policy/actions |
+| `profile-calibrate` | v0.9.1 ✅ | Calibrate a profile from an actions log |
+| `profile-compare` | v0.9.1 ✅ | Compare two profiles over the same actions |
 
 ## Safety model
 
@@ -164,6 +169,7 @@ v0.8.2 adds sim analytics (CSV exports, markdown summaries, failure taxonomy).
 v0.8.3 adds sim quality gates and the `sim-regression` command.
 v0.8.4 adds reproducibility bundles (`package-sim-run` / `verify-sim-bundle`).
 v0.9.0 adds a runtime safety supervisor (`--supervisor.mode`, `supervisor-check`).
+v0.9.1 adds robot-family safety profiles and an offline profile calibration toolkit (validate/recommend/calibrate/compare), plus fail-closed delta verification across shape changes. Profiles are software action-bound contracts — they do not certify robot safety.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

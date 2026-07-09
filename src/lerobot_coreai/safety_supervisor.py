@@ -209,8 +209,12 @@ class SafetySupervisor:
             return {"name": "delta", "passed": True, "severity": "critical",
                     "reason": "first_action_no_previous"}
         if flat is None or len(flat) != len(self.previous_action):
-            return {"name": "delta", "passed": True, "severity": "critical",
-                    "reason": "delta_skipped_shape_changed"}
+            # v0.9.1: a max_delta constraint cannot be verified across a shape
+            # change. Fail-closed rather than silently skip — if you asked for
+            # bounded motion, an unverifiable step is unsafe (previously this
+            # passed, letting allow_shape_change bypass the delta bound).
+            return {"name": "delta", "passed": False, "severity": "critical",
+                    "reason": "delta_unverifiable_shape_changed"}
         max_d = max((abs(flat[i] - self.previous_action[i]) for i in range(len(flat))),
                     default=0.0)
         return {"name": "delta", "passed": max_d <= p.max_delta, "severity": "critical",

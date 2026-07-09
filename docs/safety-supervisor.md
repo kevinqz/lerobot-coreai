@@ -62,6 +62,13 @@ action bounds. Pass one with `--safety.profile <path>` or `--safety.profile-name
 <builtin>`. If none is given, the conservative built-in `default-sim-safe`
 (finite-only, no bounds) is used.
 
+The v0.9.1 profile toolkit lets you choose and tune profiles without touching
+hardware: `profile-list` / `profile-show` / `profile-validate`,
+[`profile-recommend`](profile-recommendation.md) to pick one from a policy or
+actions log, [`profile-calibrate`](profile-calibration.md) to fit bounds to
+observed actions, and `profile-compare` to diff two profiles over the same
+actions.
+
 ## CLI
 
 Run sim with the supervisor:

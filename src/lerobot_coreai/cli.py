@@ -379,6 +379,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_supcheck.add_argument("--json", action="store_true")
     p_supcheck.set_defaults(func=cmd_supervisor_check)
 
+    # --- profile-* (v0.9.1) — safety profile toolkit ---
+    p_plist = sub.add_parser("profile-list", help="List built-in safety profiles (v0.9.1)")
+    p_plist.add_argument("--json", action="store_true")
+    p_plist.set_defaults(func=cmd_profile_list)
+
+    p_pshow = sub.add_parser("profile-show", help="Show a safety profile's details (v0.9.1)")
+    p_pshow.add_argument("--profile", dest="profile")
+    p_pshow.add_argument("--profile-name", dest="profile_name")
+    p_pshow.add_argument("--json", action="store_true")
+    p_pshow.set_defaults(func=cmd_profile_show)
+
+    p_pval = sub.add_parser("profile-validate", help="Validate a safety profile (v0.9.1)")
+    p_pval.add_argument("--profile", dest="profile")
+    p_pval.add_argument("--profile-name", dest="profile_name")
+    p_pval.add_argument("--json", action="store_true")
+    p_pval.set_defaults(func=cmd_profile_validate)
+
+    p_prec = sub.add_parser("profile-recommend", help="Recommend a built-in safety profile (v0.9.1)")
+    p_prec.add_argument("--policy.path", dest="policy_path")
+    p_prec.add_argument("--actions", dest="actions")
+    p_prec.add_argument("--robot-type", dest="robot_type")
+    p_prec.add_argument("--env.id", dest="env_id")
+    p_prec.add_argument("--json", action="store_true")
+    p_prec.set_defaults(func=cmd_profile_recommend)
+
+    p_pcal = sub.add_parser("profile-calibrate", help="Calibrate a safety profile from actions (v0.9.1)")
+    p_pcal.add_argument("--actions", dest="actions", required=True)
+    p_pcal.add_argument("--base-profile", dest="base_profile")
+    p_pcal.add_argument("--base-profile-name", dest="base_profile_name")
+    p_pcal.add_argument("--output-profile", dest="output_profile")
+    p_pcal.add_argument("--output-dir", dest="output_dir")
+    p_pcal.add_argument("--quantile", dest="quantile", type=float, default=0.995)
+    p_pcal.add_argument("--margin", dest="margin", type=float, default=0.10)
+    p_pcal.add_argument("--min-samples", dest="min_samples", type=int, default=10)
+    p_pcal.add_argument("--conservative", dest="conservative", action="store_true")
+    p_pcal.add_argument("--json", action="store_true")
+    p_pcal.set_defaults(func=cmd_profile_calibrate)
+
+    p_pcmp = sub.add_parser("profile-compare", help="Compare two safety profiles over actions (v0.9.1)")
+    p_pcmp.add_argument("--profile-a", dest="profile_a")
+    p_pcmp.add_argument("--profile-a-name", dest="profile_a_name")
+    p_pcmp.add_argument("--profile-b", dest="profile_b")
+    p_pcmp.add_argument("--profile-b-name", dest="profile_b_name")
+    p_pcmp.add_argument("--actions", dest="actions", required=True)
+    p_pcmp.add_argument("--output-dir", dest="output_dir")
+    p_pcmp.add_argument("--json", action="store_true")
+    p_pcmp.set_defaults(func=cmd_profile_compare)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -417,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -1364,8 +1412,13 @@ def cmd_supervisor_check(args: argparse.Namespace) -> int:
     summary = build_safety_summary(acc)
     if output_dir is not None:
         from .reports import save_json
+        from .profile_reports import build_profile_fit, build_profile_fit_markdown
         save_json(output_dir / "safety_summary.json", summary)
         (output_dir / "safety_summary.md").write_text(build_safety_summary_markdown(summary))
+        # v0.9.1: profile fit report (how well the profile fits these actions).
+        fit = build_profile_fit(summary)
+        save_json(output_dir / "profile_fit.json", fit)
+        (output_dir / "profile_fit.md").write_text(build_profile_fit_markdown(fit))
 
     blocked = acc.actions_blocked
     ok = not (getattr(args, "fail_on_block", False) and blocked > 0)
@@ -1395,6 +1448,277 @@ def cmd_supervisor_check(args: argparse.Namespace) -> int:
         print(f"Safety report: {report_path}")
     print("=" * 50)
     return 0 if ok else 1
+
+
+# MARK: - profile-* (v0.9.1 — safety profile toolkit)
+
+def _resolve_profile_arg(path, name, default_builtin=None):
+    from .safety_profiles import resolve_safety_profile
+    return resolve_safety_profile(
+        path=Path(path) if path else None, name=name, default_builtin=default_builtin,
+    )
+
+
+def cmd_profile_list(args: argparse.Namespace) -> int:
+    """List built-in safety profiles."""
+    from .safety_profiles import list_builtin_profiles
+    names = list_builtin_profiles()
+    if args.json:
+        import json
+        print(json.dumps({"profiles": names}, indent=2))
+        return 0
+    print("Built-in safety profiles:")
+    for n in names:
+        print(f"- {n}")
+    return 0
+
+
+def cmd_profile_show(args: argparse.Namespace) -> int:
+    """Show a safety profile's details and limitations."""
+    from .errors import CoreAIPolicyError
+    try:
+        profile = _resolve_profile_arg(
+            getattr(args, "profile", None), getattr(args, "profile_name", None))
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+        print(json.dumps(profile.to_dict(), indent=2))
+        return 0
+    print(f"Profile: {profile.name}")
+    print(f"Version: {profile.profile_version}")
+    print(f"Type: {profile.profile_type}")
+    print(f"Robot type: {profile.robot_type}")
+    print(f"Action shape: {profile.action_shape}")
+    print(f"max_abs_action: {profile.max_abs_action}")
+    print(f"max_delta: {profile.max_delta}")
+    print(f"max_l2_norm: {profile.max_l2_norm}")
+    if profile.limitations:
+        print("Limitations:")
+        for lim in profile.limitations:
+            print(f"- {lim}")
+    return 0
+
+
+def cmd_profile_validate(args: argparse.Namespace) -> int:
+    """Validate a safety profile: schema, mode, bounds, no-overclaim."""
+    from .errors import CoreAIPolicyError
+    checks: list[dict] = []
+    try:
+        profile = _resolve_profile_arg(
+            getattr(args, "profile", None), getattr(args, "profile_name", None))
+        checks.append({"name": "schema", "passed": True})
+    except CoreAIPolicyError as e:
+        if args.json:
+            import json
+            print(json.dumps({"ok": False, "error": str(e)}, indent=2))
+        else:
+            print(f"✗ Profile invalid: {e}", file=sys.stderr)
+        return 1
+
+    def _check(name, passed):
+        checks.append({"name": name, "passed": passed})
+
+    _check("mode", profile.mode == "fail_closed")
+    _check("profile_type", profile.profile_type == "software_bounds")
+    _check("finite_required", profile.require_finite is True)
+    # Bounds consistency.
+    bounds_ok = True
+    for b in (profile.max_abs_action, profile.max_delta, profile.max_l2_norm):
+        if b is not None and b <= 0:
+            bounds_ok = False
+    if (isinstance(profile.min_action, (int, float)) and
+            isinstance(profile.max_action, (int, float)) and
+            profile.min_action > profile.max_action):
+        bounds_ok = False
+    _check("bounds", bounds_ok)
+    shape_ok = profile.action_shape is None or all(
+        isinstance(d, int) and d > 0 for d in profile.action_shape)
+    _check("action_shape", shape_ok)
+    # No-overclaim: limitations must carry an explicit disclaimer AND must not
+    # contain a physical/real-world safety claim.
+    lim_text = " ".join(profile.limitations).lower()
+    bad_phrases = [
+        "proves physical safety", "certifies physical safety",
+        "guarantees physical safety", "proves real-world safety",
+        "certified hardware safety", "certifies robot safety",
+    ]
+    no_bad_claims = not any(p in lim_text for p in bad_phrases)
+    negates = ("not prove" in lim_text or "not a hardware" in lim_text
+               or "not encode" in lim_text or "not certif" in lim_text)
+    has_disclaimer = negates and ("physical" in lim_text or "real-world" in lim_text
+                                  or "hardware" in lim_text)
+    _check("no_overclaim", bool(profile.limitations) and no_bad_claims and has_disclaimer)
+
+    ok = all(c["passed"] for c in checks)
+    if args.json:
+        import json
+        print(json.dumps({"ok": ok, "profile": profile.name, "checks": checks}, indent=2))
+        return 0 if ok else 1
+
+    print("lerobot-coreai profile-validate")
+    print("=" * 50)
+    print(f"Profile: {profile.name}")
+    print(f"Version: {profile.profile_version}")
+    print(f"Robot type: {profile.robot_type}")
+    print(f"Action shape: {profile.action_shape}")
+    for c in checks:
+        print(f"{'✓' if c['passed'] else '✗'} {c['name']}")
+    print("=" * 50)
+    print("Profile validation passed." if ok else "Profile validation FAILED.")
+    return 0 if ok else 1
+
+
+def cmd_profile_recommend(args: argparse.Namespace) -> int:
+    """Recommend a built-in safety profile from policy/actions signals."""
+    from .profile_recommendation import recommend_from_actions, recommend_profile
+
+    robot_type = getattr(args, "robot_type", None)
+    env_id = getattr(args, "env_id", None)
+    # Try to read robot_type from the policy manifest if a path was given.
+    policy_path = getattr(args, "policy_path", None)
+    if policy_path and robot_type is None:
+        try:
+            from .policy import CoreAIPolicy
+            pol = CoreAIPolicy.from_pretrained(policy_path, return_metadata=True,
+                                               validate_runner=False)
+            robot_type = pol.robot_type
+        except Exception:
+            pass  # best-effort; recommendation still works without it
+
+    actions = getattr(args, "actions", None)
+    if actions:
+        rec = recommend_from_actions(Path(actions), robot_type=robot_type, env_id=env_id)
+    else:
+        rec = recommend_profile(robot_type=robot_type, env_id=env_id)
+
+    if args.json:
+        import json
+        print(json.dumps(rec.to_dict(), indent=2))
+        return 0
+    print(f"Recommended profile: {rec.recommended_profile}")
+    print(f"Confidence: {rec.confidence}")
+    print("Reasons:")
+    for r in rec.reasons:
+        print(f"- {r}")
+    for w in rec.warnings:
+        print(f"Warning: {w}")
+    return 0
+
+
+def cmd_profile_calibrate(args: argparse.Namespace) -> int:
+    """Calibrate a safety profile from an actions log."""
+    from .errors import CoreAIPolicyError
+    from .profile_calibration import (
+        ProfileCalibrationConfig, build_calibration_markdown, calibrate_profile,
+    )
+    from .reports import save_json
+
+    actions_path = Path(args.actions)
+    if not actions_path.is_file():
+        print(f"Error: actions file not found: {actions_path}", file=sys.stderr)
+        return 1
+
+    base = None
+    if getattr(args, "base_profile", None) or getattr(args, "base_profile_name", None):
+        try:
+            base = _resolve_profile_arg(args.base_profile, args.base_profile_name)
+        except CoreAIPolicyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    config = ProfileCalibrationConfig(
+        actions_path=actions_path,
+        output_dir=output_dir or Path("."),
+        base_profile=base,
+        output_profile=Path(args.output_profile) if getattr(args, "output_profile", None) else None,
+        quantile=args.quantile, margin=args.margin, min_samples=args.min_samples,
+        conservative=getattr(args, "conservative", False),
+    )
+    try:
+        result = calibrate_profile(config)
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if config.output_profile is not None:
+        save_json(config.output_profile, result.profile.to_dict())
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "profile_calibration_report.json", result.report)
+        (output_dir / "profile_calibration_report.md").write_text(
+            build_calibration_markdown(result.report))
+        # Always keep a copy in the output dir so it travels into a bundle,
+        # even when --output-profile writes elsewhere.
+        save_json(output_dir / "calibrated_profile.json", result.profile.to_dict())
+
+    if args.json:
+        import json
+        print(json.dumps({
+            "ok": result.ok, "samples": result.samples,
+            "recommended_bounds": result.report["recommended_bounds"],
+            "warnings": result.warnings,
+            "output_profile": str(config.output_profile) if config.output_profile else None,
+        }, indent=2))
+        return 0
+
+    print("lerobot-coreai profile-calibrate")
+    print("=" * 50)
+    print(f"✓ Samples: {result.samples}")
+    print(f"✓ Dominant shape: {result.report['dominant_shape']}")
+    rb = result.report["recommended_bounds"]
+    print(f"✓ max_abs_action: {rb['max_abs_action']}")
+    print(f"✓ max_delta: {rb['max_delta']}")
+    print(f"✓ max_l2_norm: {rb['max_l2_norm']}")
+    for w in result.warnings:
+        print(f"- warning: {w}")
+    print("=" * 50)
+    print("Calibration completed.")
+    return 0
+
+
+def cmd_profile_compare(args: argparse.Namespace) -> int:
+    """Compare two safety profiles over the same actions log."""
+    from .errors import CoreAIPolicyError
+    from .profile_reports import build_comparison_markdown, compare_profiles
+    from .reports import save_json
+
+    actions_path = Path(args.actions)
+    if not actions_path.is_file():
+        print(f"Error: actions file not found: {actions_path}", file=sys.stderr)
+        return 1
+    try:
+        pa = _resolve_profile_arg(getattr(args, "profile_a", None),
+                                  getattr(args, "profile_a_name", None))
+        pb = _resolve_profile_arg(getattr(args, "profile_b", None),
+                                  getattr(args, "profile_b_name", None))
+    except CoreAIPolicyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    report = compare_profiles(pa, pb, actions_path)
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(output_dir / "profile_comparison_report.json", report)
+        (output_dir / "profile_comparison_report.md").write_text(
+            build_comparison_markdown(report))
+
+    if args.json:
+        import json
+        print(json.dumps(report, indent=2))
+        return 0
+    print("lerobot-coreai profile-compare")
+    print("=" * 50)
+    print(f"Profile A: {report['profile_a']} (blocked={report['a']['blocked']})")
+    print(f"Profile B: {report['profile_b']} (blocked={report['b']['blocked']})")
+    print(f"Agreement rate: {report['agreement_rate']}")
+    bd = report["breakdown"]
+    print(f"A-only blocks: {bd['a_only_blocks']}  B-only blocks: {bd['b_only_blocks']}")
+    print("=" * 50)
+    return 0
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
