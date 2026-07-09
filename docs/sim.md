@@ -173,6 +173,20 @@ See [Sim Analytics](sim-analytics.md) for the analytics sections added in v0.8.2
 | `--export-csv` | no | off | Write `episode_metrics.csv` and `step_metrics.csv` (v0.8.2) |
 | `--no-summary-md` | no | off | Do not write `sim_summary.md` (v0.8.2; written by default) |
 | `--no-failure-taxonomy` | no | off | Do not write `failure_taxonomy.json` (v0.8.2; written by default) |
+| `--package-run` | no | off | Package the run into a reproducibility bundle after it completes (v0.8.4) |
+| `--package-output-dir` | no | `<output-dir>/bundle` | Bundle output directory (v0.8.4) |
+| `--package-overwrite` | no | off | Overwrite a non-empty bundle output dir (v0.8.4) |
+| `--redact-runner-url` | no | off | Redact the runner URL in the bundle (v0.8.4) |
+| `--no-redact-local-paths` | no | off | Keep absolute local paths in the bundle (v0.8.4; redacted by default) |
+| `--include-observations-dir` | no | off | Include the full `observations/` dir in the bundle (v0.8.4) |
+
+## Reproducibility bundles (v0.8.4)
+
+A completed sim run can be packaged into an auditable, self-contained bundle
+(manifest + checksums + metadata + reproduction notes) with `--package-run`, or
+after the fact with `lerobot-coreai package-sim-run`. See
+[sim-bundles.md](sim-bundles.md). Packaging never alters sim results and refuses
+to bundle a report that violates the no-robot-egress invariants below.
 
 ## Safety guarantees
 

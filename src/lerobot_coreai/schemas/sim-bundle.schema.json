@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/sim-bundle.schema.json",
+  "title": "lerobot-coreai sim bundle manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "lerobot_coreai_version",
+    "created_at",
+    "bundle_type",
+    "mode",
+    "policy",
+    "environment",
+    "results",
+    "safety",
+    "claims",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.sim_bundle.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "created_at": {"type": "string"},
+    "created_by": {"type": "string"},
+    "bundle_type": {"type": "string", "const": "sim_run"},
+    "mode": {"type": "string", "const": "sim"},
+    "policy": {"type": "object"},
+    "environment": {"type": "object"},
+    "runner": {"type": "object"},
+    "results": {"type": "object"},
+    "analytics": {"type": "object", "additionalProperties": true},
+    "safety": {
+      "type": "object",
+      "required": [
+        "robot_egress_enabled",
+        "actions_sent_to_robot",
+        "action_egress",
+        "physical_actuation_possible"
+      ],
+      "properties": {
+        "robot_egress_enabled": {"type": "boolean", "const": false},
+        "actions_sent_to_robot": {"type": "integer", "const": 0},
+        "action_egress": {"type": "string", "const": "simulator_only"},
+        "physical_actuation_possible": {"type": "boolean", "const": false}
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_real_task_success",
+        "proves_robot_safety",
+        "proves_real_world_safety"
+      ],
+      "properties": {
+        "proves_real_task_success": {"type": "boolean", "const": false},
+        "proves_robot_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false}
+      }
+    },
+    "files": {"type": "object"},
+    "warnings": {"type": "array"}
+  }
+}
