@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/real-report.schema.json",
+  "title": "lerobot-coreai real report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "lerobot_coreai_version",
+    "ok",
+    "mode",
+    "session_id",
+    "robot",
+    "policy",
+    "readiness",
+    "approval",
+    "limits",
+    "safety_supervisor",
+    "egress",
+    "stop",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.real_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "enum": ["preflight", "guarded_real"]},
+    "session_id": {"type": "string"},
+    "operator": {"type": ["string", "null"]},
+    "robot": {
+      "type": "object",
+      "required": ["adapter", "type"],
+      "properties": {"adapter": {"type": ["string", "null"]},
+                     "type": {"type": ["string", "null"]}}
+    },
+    "policy": {"type": "object"},
+    "readiness": {
+      "type": "object", "required": ["ready"],
+      "properties": {"ready": {"type": ["boolean", "null"]}}
+    },
+    "approval": {
+      "type": "object", "required": ["valid"],
+      "properties": {"valid": {"type": ["boolean", "null"]}}
+    },
+    "limits": {
+      "type": "object", "required": ["max_steps", "fps"],
+      "properties": {"max_steps": {"type": ["integer", "null"]},
+                     "fps": {"type": ["number", "null"]},
+                     "duration_seconds": {"type": ["number", "null"]}}
+    },
+    "safety_supervisor": {
+      "type": "object", "required": ["mode"],
+      "properties": {"mode": {"type": "string", "const": "enforce"}}
+    },
+    "egress": {
+      "type": "object",
+      "required": ["robot_egress_enabled", "action_egress", "actions_sent_to_robot",
+                   "actions_blocked_before_robot"],
+      "properties": {
+        "robot_egress_path_enabled": {"type": "boolean"},
+        "robot_egress_enabled": {"type": "boolean"},
+        "action_egress": {"type": "string", "enum": ["none", "guarded_real"]},
+        "actions_sent_to_robot": {"type": "integer", "minimum": 0},
+        "actions_blocked_before_robot": {"type": "integer", "minimum": 0}
+      }
+    },
+    "stop": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_physical_safety",
+        "proves_real_world_safety",
+        "authorizes_unrestricted_real_world_actuation"
+      ],
+      "properties": {
+        "proves_guarded_real_session_executed": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "authorizes_unrestricted_real_world_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "comment": "preflight mode sends nothing to a robot.",
+      "if": {"properties": {"mode": {"const": "preflight"}}, "required": ["mode"]},
+      "then": {
+        "properties": {
+          "egress": {
+            "properties": {
+              "robot_egress_enabled": {"const": false},
+              "action_egress": {"const": "none"},
+              "actions_sent_to_robot": {"const": 0}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

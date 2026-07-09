@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/real-preflight.schema.json",
+  "title": "lerobot-coreai real preflight report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "mode", "checks", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.real_preflight.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "enum": ["preflight", "guarded"]},
+    "actions_sent_to_robot": {"type": "integer", "const": 0},
+    "checks": {"type": "array", "items": {"type": "object", "required": ["name", "passed"]}},
+    "claims": {
+      "type": "object",
+      "required": ["proves_physical_safety", "proves_real_world_safety"],
+      "properties": {
+        "proves_preflight_passed": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false},
+        "authorizes_unrestricted_real_world_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

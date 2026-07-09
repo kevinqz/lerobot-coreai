@@ -130,6 +130,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `approve-bundle` | v0.9.3 ✅ | Create an operator approval manifest bound to artifact hashes |
 | `verify-approval` | v0.9.3 ✅ | Verify an approval manifest against a bundle |
 | `release-readiness` | v0.9.3 ✅ | Produce a final readiness report from bundle + approval |
+| `real` | v1.0.0 ✅ | Guarded real mode: preflight or bounded guarded session |
 
 ## Safety model
 
@@ -145,11 +146,12 @@ v0.9.0 adds a runtime safety supervisor that validates, bounds, clips, blocks, a
 v0.9.1 adds robot-family safety profiles and a calibration toolkit (software action-bound contracts; not hardware certification).
 v0.9.2 adds supervisor quality gates and a safety regression harness that can fail CI on unsafe actions or safety regressions. Software CI layer only; does not prove physical robot safety.
 v0.9.3 adds an operator approval protocol and release-readiness evidence: a named operator must explicitly approve a checksummed evidence bundle (safety gates, regression, calibration) before it is marked release-ready. Approval does not prove physical safety and does not authorize real-world actuation.
+v1.0.0 adds guarded real mode: the first sanctioned real-egress path. An action reaches a robot adapter only in `real --mode guarded`, only after verified readiness, valid operator approval, enforced supervisor, a bounded session, and explicit operator attestations — and only through the fail-closed RealEgressGuard. It does not prove physical robot safety and does not authorize unrestricted real-world actuation.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 Sim mode can send actions to a simulator.
 Sim mode cannot send actions to a robot.
-Neither mode ever connects to a robot or sends motor commands.
+Sim and shadow never connect to a robot or send motor commands; only guarded real mode can, behind every gate above.
 Export verification can prove numeric action fidelity only when compare passes.
 It cannot prove task success or physical robot safety.
 
@@ -158,7 +160,7 @@ It cannot prove task success or physical robot safety.
 | `dry_run` | v0.3 ✅ | No physical robot. Fixture-based action generation. |
 | `shadow` | v0.7 ✅ | Observations streamed/replayed, actions generated and logged, never sent. |
 | `sim` | v0.8 ✅ | Actions drive a simulator; never a robot. Requires `--confirm-sim-egress`. |
-| `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
+| `real` | v1.0.0 ✅ | Guarded real egress. Requires verified readiness, valid approval, enforced supervisor, bounded session, and explicit operator attestations. |
 
 > v0.8 implements sim, shadow, dry_run, eval, compare, and export.
 > Sim mode sends actions to a simulator. Sim mode never sends actions to a robot.
@@ -182,6 +184,7 @@ v0.9.1 adds robot-family safety profiles and an offline profile calibration tool
 v0.9.2 turns supervisor findings into enforceable safety quality gates (`safety-gate`, `sim --safety.*`) and safety regression checks (`safety-regression`). Gates prove only that an artifact met configured software thresholds — not physical or real-world safety.
 v0.9.3 adds the operator approval protocol + release-readiness evidence (`approval-request`, `approve-bundle`, `verify-approval`, `release-readiness`) — the last software gate before guarded real mode. The pre-v1.0 workflow: sim → safety-gate → safety-regression → package-sim-run → verify-sim-bundle → approval-request → approve-bundle → verify-approval → release-readiness.
 v0.9.4 hardens the pre-1.0 governance layer: stricter approval/readiness schemas (conditional invariants), fail-closed type validation of safety-summary counts, explicit parseable/finite/non-finite calibration sample counts, and clearer approval-request required-vs-warnings signalling.
+v1.0.0 adds guarded real mode (`real --mode preflight|guarded`): the first real-egress path, gated on the entire pre-real-mode evidence chain. Guarded real egress for CoreAI-backed, LeRobot-shaped policies — not a native upstream LeRobot integration, and not proof of physical safety.
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

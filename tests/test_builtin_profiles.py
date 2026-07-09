@@ -9,7 +9,7 @@ import pytest
 from lerobot_coreai.safety_profiles import list_builtin_profiles, load_builtin_profile
 
 EXPECTED = {"default-sim-safe", "generic-7dof-sim-default", "so100-sim-default",
-            "so101-sim-default", "pusht-sim-default"}
+            "so101-sim-default", "pusht-sim-default", "so100-real-guarded"}
 
 
 def _schema():

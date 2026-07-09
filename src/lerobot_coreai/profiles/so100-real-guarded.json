@@ -1,0 +1,31 @@
+{
+  "schema_version": "lerobot-coreai.safety_profile.v0",
+  "name": "so100-real-guarded",
+  "profile_version": "0.1.0",
+  "profile_type": "software_bounds",
+  "robot_type": "so100",
+  "action_shape": [16, 7],
+  "min_action": null,
+  "max_action": null,
+  "max_abs_action": 1.0,
+  "max_delta": 0.2,
+  "max_l2_norm": 4.0,
+  "allow_nan": false,
+  "allow_inf": false,
+  "allow_shape_change": false,
+  "clip_to_bounds": false,
+  "block_on_clip": false,
+  "require_finite": true,
+  "require_known_shape": true,
+  "require_robot_type_match": true,
+  "mode": "fail_closed",
+  "intended_modes": ["guarded_real", "guarded_real_dry_run", "guarded_real_single_session"],
+  "intended_policy_types": ["act", "diffusion", "pi0", "pi05", "smolvla", "evo1"],
+  "description": "Tighter software action-bound profile intended for GUARDED REAL sessions on SO-100-family robots (smaller delta/L2 than the sim profile).",
+  "limitations": [
+    "Software action-bound profile for guarded real sessions.",
+    "Does not prove SO-100 physical safety.",
+    "Does not encode torque/current/thermal limits.",
+    "Not a substitute for a physical emergency stop."
+  ]
+}

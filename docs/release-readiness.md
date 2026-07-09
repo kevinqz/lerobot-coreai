@@ -58,5 +58,7 @@ sim → safety-gate → safety-regression → package-sim-run → verify-sim-bun
     → approval-request → approve-bundle → verify-approval → release-readiness
 ```
 
-The next block is **v1.0.0 — Guarded Real Mode**, gated on: no approval → no
-real-mode egress; no verified readiness report → no real-mode egress.
+A `ready=true` report is the entry ticket to **[guarded real mode](guarded-real-mode.md)**
+(v1.0.0): `real --mode guarded` requires this readiness report plus a valid
+approval, an enforced supervisor, a bounded session, and explicit operator
+attestations. No verified readiness report → no real-mode egress.

@@ -180,3 +180,44 @@ def sim_evidence_bundle(tmp_path):
         return bundle
 
     return _make
+
+
+@pytest.fixture
+def real_ready_scenario(tmp_path, sim_evidence_bundle):
+    """Build a fully real-ready scenario: verified bundle + valid approval +
+    ready release-readiness report + a matching safety profile on disk.
+
+    Returns a dict with bundle_dir, approval, readiness, profile paths.
+    """
+    from lerobot_coreai.operator_approval import ApprovalConfig, approve_bundle
+    from lerobot_coreai.release_readiness import evaluate_release_readiness
+    from lerobot_coreai.safety_profiles import load_builtin_profile
+
+    def _make(name="ready", robot_type="so100", ready=True):
+        bundle = sim_evidence_bundle(name=name)
+        # Approval bound to the bundle.
+        manifest = approve_bundle(ApprovalConfig(
+            bundle_dir=bundle, operator="Kevin Saltarelli",
+            attest_not_physical_safety=True, attest_not_unrestricted_actuation=True))
+        approval = tmp_path / f"approval_{name}.json"
+        approval.write_text(json.dumps(manifest))
+        # Release readiness report.
+        rr = evaluate_release_readiness(bundle, approval)
+        readiness = tmp_path / f"readiness_{name}.json"
+        # Optionally force ready=false for negative tests.
+        report = rr.report
+        if not ready:
+            report = dict(report)
+            report["ready"] = False
+            report["claims"] = dict(report["claims"])
+            report["claims"]["proves_release_readiness_for_scope"] = False
+        readiness.write_text(json.dumps(report))
+        # Safety profile on disk — a guarded-real-intended profile (robot_type matches).
+        prof = load_builtin_profile("so100-real-guarded").to_dict()
+        prof["robot_type"] = robot_type
+        profile = tmp_path / f"profile_{name}.json"
+        profile.write_text(json.dumps(prof))
+        return {"bundle_dir": bundle, "approval": approval, "readiness": readiness,
+                "profile": profile, "robot_type": robot_type}
+
+    return _make

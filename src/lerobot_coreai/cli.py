@@ -543,6 +543,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_rr.add_argument("--json", action="store_true")
     p_rr.set_defaults(func=cmd_release_readiness)
 
+    # --- real (v1.0.0) — guarded real mode ---
+    p_real = sub.add_parser("real", help="Guarded real mode: preflight or bounded guarded session (v1.0.0)")
+    p_real.add_argument("--mode", dest="mode", choices=["preflight", "guarded"], default="preflight")
+    p_real.add_argument("--policy.path", dest="policy_path", required=True)
+    p_real.add_argument("--runner.url", dest="runner_url", required=True)
+    p_real.add_argument("--robot.adapter", dest="robot_adapter", default="mock")
+    p_real.add_argument("--robot.type", dest="robot_type", required=True)
+    p_real.add_argument("--robot.config", dest="robot_config")
+    p_real.add_argument("--robot.endpoint", dest="robot_endpoint")
+    p_real.add_argument("--safety.profile", dest="safety_profile", required=True)
+    p_real.add_argument("--readiness-report", dest="readiness_report", required=True)
+    p_real.add_argument("--approval", dest="approval", required=True)
+    p_real.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_real.add_argument("--operator", dest="operator")
+    p_real.add_argument("--max-steps", dest="max_steps", type=int)
+    p_real.add_argument("--duration-seconds", dest="duration_seconds", type=float)
+    p_real.add_argument("--fps", dest="fps", type=float, default=2.0)
+    p_real.add_argument("--deadman.timeout-s", dest="deadman_timeout_s", type=float, default=1.0)
+    p_real.add_argument("--deadman.disable-for-mock-only", dest="deadman_disable_for_mock_only",
+                        action="store_true")
+    p_real.add_argument("--output-dir", dest="output_dir", required=True)
+    p_real.add_argument("--i-understand-this-may-move-real-hardware",
+                        dest="attest_real_hardware", action="store_true")
+    p_real.add_argument("--i-have-physical-emergency-stop-ready",
+                        dest="attest_physical_estop", action="store_true")
+    p_real.add_argument("--i-confirm-robot-workspace-is-clear",
+                        dest="attest_workspace_clear", action="store_true")
+    p_real.add_argument("--json", action="store_true")
+    p_real.set_defaults(func=cmd_real)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -581,7 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2205,6 +2235,76 @@ def cmd_release_readiness(args: argparse.Namespace) -> int:
     print("Release-ready for the declared software evidence scope." if result.ready
           else "NOT release-ready.")
     return 0 if result.ready else 1
+
+
+# MARK: - real (v1.0.0 — guarded real mode)
+
+def cmd_real(args: argparse.Namespace) -> int:
+    """Guarded real mode: preflight-only or a bounded guarded real session."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .real_mode import RealModeConfig, run_real_mode
+
+    config = RealModeConfig(
+        mode=args.mode,
+        policy_path=args.policy_path,
+        runner_url=args.runner_url,
+        robot_adapter=args.robot_adapter,
+        robot_type=args.robot_type,
+        safety_profile=Path(args.safety_profile),
+        readiness_report=Path(args.readiness_report),
+        approval=Path(args.approval),
+        bundle_dir=Path(args.bundle_dir),
+        output_dir=Path(args.output_dir),
+        robot_config=Path(args.robot_config) if getattr(args, "robot_config", None) else None,
+        robot_endpoint=getattr(args, "robot_endpoint", None),
+        operator=getattr(args, "operator", None),
+        max_steps=getattr(args, "max_steps", None),
+        duration_seconds=getattr(args, "duration_seconds", None),
+        fps=getattr(args, "fps", 2.0),
+        deadman_timeout_s=getattr(args, "deadman_timeout_s", 1.0),
+        deadman_disable_for_mock_only=getattr(args, "deadman_disable_for_mock_only", False),
+        attest_real_hardware=getattr(args, "attest_real_hardware", False),
+        attest_physical_estop=getattr(args, "attest_physical_estop", False),
+        attest_workspace_clear=getattr(args, "attest_workspace_clear", False),
+    )
+
+    if not args.json:
+        print("lerobot-coreai real")
+        print("=" * 50)
+        print(f"Mode: {args.mode}")
+        print(f"Robot adapter: {args.robot_adapter} ({args.robot_type})")
+        print("No readiness, no real egress. No approval, no real egress.")
+
+    try:
+        result = run_real_mode(config)
+    except CoreAIPolicyError as e:
+        print(f"\n✗ Real mode refused: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(_json.dumps(result.report, indent=2))
+        return 0 if result.ok else 1
+
+    eg = result.report.get("egress", {})
+    print()
+    print(f"OK: {result.ok}")
+    print(f"Stop reason: {result.stopped_reason}")
+    print(f"Actions sent to robot: {eg.get('actions_sent_to_robot')}")
+    print(f"Robot egress enabled: {eg.get('robot_egress_enabled')}")
+    print(f"Supervisor blocked: {result.actions_blocked_by_supervisor}")
+    print("=" * 50)
+    if args.mode == "preflight":
+        print("Preflight passed. No actions were sent." if result.ok
+              else "Preflight FAILED. No actions were sent.")
+    else:
+        print("Guarded real session completed." if result.ok
+              else "Guarded real session did not complete cleanly.")
+    return 0 if result.ok else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
