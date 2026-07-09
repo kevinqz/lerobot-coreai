@@ -577,6 +577,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Comma-separated required observation keys")
     p_real.add_argument("--obs.drop-unknown-keys", dest="obs_drop_unknown_keys",
                         action="store_true")
+    # Redaction (v1.0.5).
+    p_real.add_argument("--redact-paths", dest="redact_paths", action="store_true")
+    p_real.add_argument("--redact-runner-url", dest="redact_runner_url", action="store_true")
+    p_real.add_argument("--redact-robot-endpoint", dest="redact_robot_endpoint", action="store_true")
+    p_real.add_argument("--redact-operator", dest="redact_operator", action="store_true")
     p_real.add_argument("--output-dir", dest="output_dir", required=True)
     p_real.add_argument("--i-understand-this-may-move-real-hardware",
                         dest="attest_real_hardware", action="store_true")
@@ -2302,6 +2307,10 @@ def cmd_real(args: argparse.Namespace) -> int:
         obs_required_keys=([k.strip() for k in args.obs_required_keys.split(",")]
                            if getattr(args, "obs_required_keys", None) else None),
         obs_drop_unknown_keys=getattr(args, "obs_drop_unknown_keys", False),
+        redact_paths=getattr(args, "redact_paths", False),
+        redact_runner_url=getattr(args, "redact_runner_url", False),
+        redact_robot_endpoint=getattr(args, "redact_robot_endpoint", False),
+        redact_operator=getattr(args, "redact_operator", False),
     )
 
     if not args.json:
