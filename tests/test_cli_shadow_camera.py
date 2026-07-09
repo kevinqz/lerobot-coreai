@@ -47,10 +47,9 @@ class TestCLIShadowCamera:
         assert config.camera_fps == 30.0
         assert config.observation_source == "camera"
 
-    def test_no_save_camera_frames_flag(self, tmp_path):
-        """--no-save-camera-frames should set save_camera_frames=False."""
-        mock_result = _mock_shadow_result(tmp_path)
-        with patch("lerobot_coreai.cli.run_shadow_mode", return_value=mock_result) as mock_run:
+    def test_no_save_camera_frames_flag_removed(self, tmp_path, capsys):
+        """--no-save-camera-frames is no longer accepted (frames always saved)."""
+        with pytest.raises(SystemExit):
             cli.main([
                 "shadow",
                 "--policy.path", "test",
@@ -58,21 +57,8 @@ class TestCLIShadowCamera:
                 "--no-save-camera-frames",
                 "--output-dir", str(tmp_path / "run"),
             ])
-        config = mock_run.call_args[0][0]
-        assert config.save_camera_frames is False
-
-    def test_save_camera_frames_default_true(self, tmp_path):
-        """By default, save_camera_frames should be True."""
-        mock_result = _mock_shadow_result(tmp_path)
-        with patch("lerobot_coreai.cli.run_shadow_mode", return_value=mock_result) as mock_run:
-            cli.main([
-                "shadow",
-                "--policy.path", "test",
-                "--observation-source", "camera",
-                "--output-dir", str(tmp_path / "run"),
-            ])
-        config = mock_run.call_args[0][0]
-        assert config.save_camera_frames is True
+        err = capsys.readouterr().err
+        assert "unrecognized arguments" in err or "unknown" in err.lower()
 
     def test_camera_index_default_zero(self, tmp_path):
         """Default camera index should be 0."""

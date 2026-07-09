@@ -92,8 +92,9 @@ lerobot-coreai shadow \
   --output-dir runs/evo1-camera-shadow
 ```
 
-Camera frames are saved to `frames/step_NNNNNN.png`. The observation points to the saved
-frame path, not a raw array. Use `--no-save-camera-frames` to skip saving.
+Camera frames are always saved to `frames/step_NNNNNN.png`. The observation points to the
+saved frame path, not a raw array. Frame persistence is mandatory in v0.7.1+ — the runner
+uses frame paths for prediction, and saved frames are part of the shadow-mode audit trail.
 
 Camera source is observation-only. Actions are still blocked by `ActionBlocker`.
 

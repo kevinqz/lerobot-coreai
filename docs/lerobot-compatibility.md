@@ -29,7 +29,8 @@
 - **v0.5**: PyTorch vs CoreAI action parity compare
 - **v0.6**: export/verify/package pipeline
 - **v0.7**: motor-blocked shadow mode
-- **v0.7.1** (current): optional camera observation source (`[camera]` extra)
+- **v0.7.1**: optional camera observation source (`[camera]` extra)
+- **v0.7.2** (current): observation adapters, live metrics, run quality diagnostics
 - **v0.8**: sim mode (action egress to simulator only)
 
 ## Hardware

@@ -64,6 +64,21 @@
       }
     },
     "files": {"type": "object"},
-    "errors": {"type": "array"}
+    "errors": {"type": "array"},
+    "live_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional per-run timing/action diagnostics (v0.7.2)"
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional quality gate results (v0.7.2)"
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional observation adapter metadata (v0.7.2)"
+    }
   }
 }

@@ -218,6 +218,10 @@ class CameraObservationSource:
     Opens a cv2.VideoCapture, captures frames, saves them to disk, and returns
     an observation with the image key pointing to the saved frame path.
 
+    Frames are always saved to ``output_dir/frames/step_NNNNNN.png``. The runner
+    receives frame paths (not raw arrays), and saved frames are part of the
+    shadow-mode audit trail. Disabling frame persistence is not supported.
+
     This is observation-only. It does not connect to a robot or actuator.
     cv2 is imported lazily at open() time, so the core package works without it.
     """
@@ -230,7 +234,6 @@ class CameraObservationSource:
     camera_fps: float | None = None
     task: str | None = None
     state_vector: list[float] | None = None
-    save_frames: bool = True
     _cv2: Any = None
     _cap: Any = None
     _frame_index: int = 0
@@ -251,7 +254,7 @@ class CameraObservationSource:
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         if self.camera_fps:
             self._cap.set(cv2.CAP_PROP_FPS, self.camera_fps)
-        if self.save_frames and self.output_dir is not None:
+        if self.output_dir is not None:
             (Path(self.output_dir) / "frames").mkdir(parents=True, exist_ok=True)
         self._frame_index = 0
 
@@ -283,14 +286,17 @@ class CameraObservationSource:
         return "camera"
 
     def _save_frame(self, frame: Any) -> Path:
-        """Save a frame to disk. Returns the path."""
-        if not self.save_frames or self.output_dir is None:
-            # If not saving, we still need a path for the observation.
-            # Use a temp-style name in output_dir/frames.
-            path = Path(self.output_dir) / "frames" / f"step_{self._frame_index:06d}.png"
-            Path(self.output_dir, "frames").mkdir(parents=True, exist_ok=True)
-        else:
-            path = Path(self.output_dir) / "frames" / f"step_{self._frame_index:06d}.png"
+        """Save a frame to disk. Returns the path.
+
+        Frames are always saved — the runner observation uses the file path, and
+        saved frames are part of the shadow-mode audit trail.
+        """
+        if self.output_dir is None:
+            raise CoreAIPolicyError(
+                "CameraObservationSource requires output_dir to save frames. "
+                "Camera frame persistence is mandatory in shadow mode."
+            )
+        path = Path(self.output_dir) / "frames" / f"step_{self._frame_index:06d}.png"
 
         assert self._cv2 is not None  # open() guarantees cv2 is loaded
         success = self._cv2.imwrite(str(path), frame)
@@ -318,7 +324,6 @@ def build_observation_source(
     camera_height: int | None = None,
     camera_fps: float | None = None,
     output_dir: Path | None = None,
-    save_camera_frames: bool = True,
     repeat_fixture: bool = True,
 ) -> ObservationSource:
     """Dispatch to the right observation source by type name.
@@ -367,7 +372,6 @@ def build_observation_source(
             camera_fps=camera_fps,
             task=task,
             state_vector=state_vector,
-            save_frames=save_camera_frames,
         )
 
     raise CoreAIPolicyError(

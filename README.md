@@ -116,6 +116,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 
 v0.7 adds motor-blocked shadow mode.
 v0.7.1 adds optional local camera observation source for shadow mode.
+v0.7.2 adds observation adapters, live metrics, and run quality diagnostics.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
 It never connects to a robot and never sends motor commands.

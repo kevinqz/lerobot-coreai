@@ -110,7 +110,10 @@ Camera args:
 - `--camera.width` — requested frame width
 - `--camera.height` — requested frame height
 - `--camera.fps` — requested capture FPS
-- `--no-save-camera-frames` — don't save frames to disk (default: frames saved to `frames/`)
+
+Camera frames are always saved to `frames/step_NNNNNN.png`. Frame persistence is
+mandatory — the runner uses frame paths for prediction, and saved frames are part
+of the shadow-mode audit trail. There is no option to disable frame saving.
 
 Camera source is **observation-only**. It does not connect to a robot or actuator.
 All actions generated during a camera shadow run are blocked by `ActionBlocker`.

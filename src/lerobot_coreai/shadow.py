@@ -18,10 +18,13 @@ from typing import Any
 from . import __version__
 from .action_blocker import ActionBlocker
 from .errors import CoreAIPolicyError
+from .live_metrics import LiveMetricSample, LiveMetricsCollector, summarize_action
+from .observation_adapters import ObservationAdapterConfig, adapt_observation
 from .observation_sources import ObservationSource, build_observation_source
 from .policy import CoreAIPolicy
 from .reports import infer_shape, now_iso, save_json
 from .serialization import make_json_safe_observation
+from .shadow_quality import ShadowQualityConfig, ShadowQualityResult, evaluate_shadow_quality
 from .trace import TraceWriter
 from .validation import validate_robot_type
 
@@ -55,7 +58,17 @@ class ShadowConfig:
     camera_width: int | None = None
     camera_height: int | None = None
     camera_fps: float | None = None
-    save_camera_frames: bool = True
+    # Observation adapter options (v0.7.2).
+    adapter_image_keys: dict[str, str] | None = None
+    require_task: bool = False
+    require_state: bool = False
+    required_keys: list[str] | None = None
+    drop_unknown_keys: bool = False
+    # Live metrics / quality options (v0.7.2).
+    live: bool = False
+    live_every: int = 1
+    quality_config: ShadowQualityConfig | None = None
+    fail_on_quality: bool = False
 
 
 @dataclass
@@ -101,13 +114,16 @@ def build_shadow_report(
     metrics: dict[str, Any],
     files: dict[str, str],
     errors: list[dict[str, Any]],
+    live_metrics: dict[str, Any] | None = None,
+    quality: dict[str, Any] | None = None,
+    adapter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the shadow_report.json dict.
 
     Safety invariants are hardcoded — this function is never a place where an
     action could leak.
     """
-    return {
+    report = {
         "schema_version": "lerobot-coreai.shadow_report.v0",
         "lerobot_coreai_version": __version__,
         "ok": ok,
@@ -150,6 +166,14 @@ def build_shadow_report(
         "files": files,
         "errors": errors,
     }
+    # Optional v0.7.2 sections (only included when present, for backward compat).
+    if live_metrics is not None:
+        report["live_metrics"] = live_metrics
+    if quality is not None:
+        report["quality"] = quality
+    if adapter is not None:
+        report["adapter"] = adapter
+    return report
 
 
 # MARK: - Main entry point
@@ -202,6 +226,21 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
     }
     errors: list[dict[str, Any]] = []
     steps_completed = 0
+
+    # v0.7.2: live metrics collector + adapter config.
+    live_collector = LiveMetricsCollector()
+    adapter_config = ObservationAdapterConfig(
+        image_key=config.image_key,
+        image_keys=config.adapter_image_keys,
+        state_vector=config.state_vector,
+        state_json=config.state_json,
+        task=config.task,
+        require_task=config.require_task,
+        require_state=config.require_state,
+        required_keys=config.required_keys or [],
+        drop_unknown_keys=config.drop_unknown_keys,
+    )
+    adapter_warnings: list[str] = []
 
     trace.write("shadow.started", {
         "mode": "shadow",
@@ -259,7 +298,6 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
             camera_height=config.camera_height,
             camera_fps=config.camera_fps,
             output_dir=output_dir,
-            save_camera_frames=config.save_camera_frames,
         )
         source.open()
         source_opened = True
@@ -313,6 +351,21 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
 
             metrics["observations_read"] += 1
             trace.write("observation.read", {"step": step, "keys": list(raw_obs.keys())})
+
+            # v0.7.2: adapt observation (inject task/state, map keys, check required).
+            try:
+                adapted = adapt_observation(raw_obs, adapter_config, manifest=policy.manifest)
+                raw_obs = adapted.observation
+                if adapted.warnings:
+                    adapter_warnings.extend(adapted.warnings)
+            except Exception as e:
+                metrics["observation_errors"] += 1
+                err = {"step": step, "type": type(e).__name__, "message": str(e), "stage": "observation.adapt"}
+                errors.append(err)
+                trace.write("step.failed", err)
+                if config.fail_fast:
+                    raise
+                continue
 
             # Save observation record.
             _append_jsonl(observations_path, {
@@ -379,6 +432,8 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
             # Write action + blocked records.
             loop_total_ms = (time.monotonic() - step_started) * 1000.0
             loop_times_ms.append(loop_total_ms)
+            # v0.7.2: action diagnostics.
+            action_diag = summarize_action(action)
             action_record = {
                 "step": step,
                 "observation_index": step,
@@ -393,6 +448,12 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                     "runner_total_ms": runner_total_ms,
                     "loop_total_ms": loop_total_ms,
                 },
+                "diagnostics": {
+                    "mean_abs": action_diag["mean_abs"],
+                    "max_abs": action_diag["max_abs"],
+                    "nan_count": action_diag["nan_count"],
+                    "inf_count": action_diag["inf_count"],
+                },
                 "error": None,
             }
             _append_jsonl(actions_path, action_record)
@@ -403,6 +464,29 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 "sent": False,
                 "destination": "none",
             })
+
+            # v0.7.2: collect live metric sample.
+            live_collector.add(LiveMetricSample(
+                step=step,
+                ts=now_iso(),
+                loop_ms=loop_total_ms,
+                runner_ms=runner_total_ms,
+                action_shape=action_diag["shape"],
+                action_mean_abs=action_diag["mean_abs"],
+                action_max_abs=action_diag["max_abs"],
+                action_nan_count=action_diag["nan_count"],
+                action_inf_count=action_diag["inf_count"],
+                ok=True,
+            ))
+
+            # v0.7.2: optional live console output.
+            if config.live and (step % config.live_every == 0):
+                fps_est = 1000.0 / loop_total_ms if loop_total_ms > 0 else 0
+                print(
+                    f"[shadow] step={step} obs=ok action=ok blocked=yes "
+                    f"loop={loop_total_ms:.1f}ms runner={runner_total_ms or 0:.1f}ms "
+                    f"fps={fps_est:.1f} shape={action_diag['shape']}"
+                )
 
             steps_completed += 1
             trace.write("step.completed", {"step": step, "loop_total_ms": loop_total_ms})
@@ -428,6 +512,28 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 trace.write("observation_source.closed")
             except Exception:
                 pass  # best-effort
+
+    # v0.7.2: compute live metrics summary + quality evaluation for the report.
+    live_summary = live_collector.summary()
+    total_steps_attempted = steps_completed + metrics["observation_errors"] + metrics["runner_errors"] + metrics["validation_errors"]
+    error_rate = 0.0
+    if total_steps_attempted > 0:
+        error_rate = (metrics["observation_errors"] + metrics["runner_errors"] + metrics["validation_errors"]) / total_steps_attempted
+    quality_result: ShadowQualityResult | None = None
+    if config.quality_config is not None:
+        quality_result = evaluate_shadow_quality(live_summary, config.quality_config, error_rate=error_rate)
+
+    adapter_section = {
+        "image_key": config.image_key,
+        "required_keys": config.required_keys or [],
+        "warnings": adapter_warnings,
+    }
+    quality_section = None
+    if quality_result is not None:
+        quality_section = {
+            "passed": quality_result.passed,
+            "checks": quality_result.checks,
+        }
 
     # Failure path — write the failure report (after finally, so source_closed is correct).
     if fatal_error is not None:
@@ -455,6 +561,9 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                     "report": "shadow_report.json",
                 },
                 errors=errors,
+                live_metrics=live_summary,
+                quality=quality_section,
+                adapter=adapter_section,
             )
             try:
                 save_json(report_path, fail_report)
@@ -462,6 +571,9 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
                 pass  # best-effort
         trace.close()
         raise fatal_error
+
+    # v0.7.2: if fail_on_quality and quality failed, mark ok=False.
+    quality_failed = quality_result is not None and not quality_result.passed and config.fail_on_quality
 
     # Success path — build the report.
     loop_total_s = time.monotonic() - loop_start
@@ -474,7 +586,7 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         "report": "shadow_report.json",
     }
     report = build_shadow_report(
-        ok=True,
+        ok=not quality_failed,
         policy=policy,  # type: ignore[arg-type]
         runner_url=config.runner_url,
         source_type=config.observation_source,
@@ -489,13 +601,16 @@ def run_shadow_mode(config: ShadowConfig) -> ShadowResult:
         metrics=final_metrics,
         files=files_map,
         errors=errors,
+        live_metrics=live_summary,
+        quality=quality_section,
+        adapter=adapter_section,
     )
     save_json(report_path, report)
-    trace.write("shadow.completed", {"ok": True, "steps": steps_completed})
+    trace.write("shadow.completed", {"ok": not quality_failed, "steps": steps_completed})
     trace.close()
 
     return ShadowResult(
-        ok=True,
+        ok=not quality_failed,
         output_dir=output_dir,
         report_path=report_path,
         trace_path=trace_path,

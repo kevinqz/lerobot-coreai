@@ -203,9 +203,6 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Requested camera frame height")
     p_shadow.add_argument("--camera.fps", dest="camera_fps", type=float,
                           help="Requested camera FPS")
-    p_shadow.add_argument("--no-save-camera-frames", dest="save_camera_frames",
-                          action="store_false", default=True,
-                          help="Do not save camera frames to disk (default: frames are saved)")
     # Loop args.
     p_shadow.add_argument("--max-steps", dest="max_steps", type=int, default=32)
     p_shadow.add_argument("--duration-seconds", dest="duration_seconds", type=float)
@@ -215,6 +212,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_shadow.add_argument("--fail-fast", dest="fail_fast", action="store_true")
     p_shadow.add_argument("--overwrite", dest="overwrite", action="store_true")
     p_shadow.add_argument("--metadata", dest="metadata", action="store_true")
+    # Adapter args (v0.7.2).
+    p_shadow.add_argument("--adapter.image-key", dest="adapter_image_key",
+                          help="Override image observation key for adapter")
+    p_shadow.add_argument("--adapter.image-map", dest="adapter_image_map",
+                          help="Image alias mapping: alias1=key1,alias2=key2")
+    p_shadow.add_argument("--adapter.require-task", dest="adapter_require_task",
+                          action="store_true", help="Require task key in observations")
+    p_shadow.add_argument("--adapter.require-state", dest="adapter_require_state",
+                          action="store_true", help="Require observation.state in observations")
+    p_shadow.add_argument("--adapter.required-keys", dest="adapter_required_keys",
+                          help="Comma-separated required observation keys")
+    p_shadow.add_argument("--adapter.drop-unknown-keys", dest="adapter_drop_unknown_keys",
+                          action="store_true", help="Drop keys not in manifest")
+    # Live metrics / quality args (v0.7.2).
+    p_shadow.add_argument("--live", dest="live", action="store_true",
+                          help="Print live metrics per step")
+    p_shadow.add_argument("--live-every", dest="live_every", type=int, default=1,
+                          help="Print live metrics every N steps (default: 1)")
+    p_shadow.add_argument("--quality.max-runner-p95-ms", dest="quality_max_runner_p95_ms", type=float)
+    p_shadow.add_argument("--quality.max-loop-p95-ms", dest="quality_max_loop_p95_ms", type=float)
+    p_shadow.add_argument("--quality.max-error-rate", dest="quality_max_error_rate", type=float, default=0.0)
+    p_shadow.add_argument("--quality.min-effective-fps", dest="quality_min_effective_fps", type=float)
+    p_shadow.add_argument("--quality.fail-on-quality", dest="quality_fail_on_quality", action="store_true",
+                          help="Fail the run if quality gates don't pass")
     p_shadow.add_argument("--json", action="store_true")
     p_shadow.set_defaults(func=cmd_shadow)
 
@@ -652,11 +673,38 @@ def cmd_eval(args: argparse.Namespace) -> int:
 def cmd_shadow(args: argparse.Namespace) -> int:
     """Run motor-blocked shadow mode: observe, generate actions, block all egress."""
     from .errors import CoreAIPolicyError
+    from .shadow_quality import ShadowQualityConfig
 
     # Parse state-vector (comma-separated floats) if provided.
     state_vector = None
     if args.state_vector:
         state_vector = [float(v.strip()) for v in args.state_vector.split(",")]
+
+    # Parse adapter image map (alias1=key1,alias2=key2).
+    adapter_image_keys = None
+    if getattr(args, "adapter_image_map", None):
+        adapter_image_keys = {}
+        for pair in args.adapter_image_map.split(","):
+            if "=" in pair:
+                alias, key = pair.split("=", 1)
+                adapter_image_keys[alias.strip()] = key.strip()
+
+    # Parse adapter required keys.
+    required_keys = None
+    if getattr(args, "adapter_required_keys", None):
+        required_keys = [k.strip() for k in args.adapter_required_keys.split(",")]
+
+    # Build quality config if any quality args provided.
+    quality_config = None
+    if any(getattr(args, attr) is not None for attr in [
+        "quality_max_runner_p95_ms", "quality_max_loop_p95_ms", "quality_min_effective_fps"
+    ]) or getattr(args, "quality_max_error_rate", 0.0) != 0.0:
+        quality_config = ShadowQualityConfig(
+            max_runner_p95_ms=args.quality_max_runner_p95_ms,
+            max_loop_p95_ms=args.quality_max_loop_p95_ms,
+            max_error_rate=args.quality_max_error_rate,
+            min_effective_fps=args.quality_min_effective_fps,
+        )
 
     config = ShadowConfig(
         policy_path=args.policy_path,
@@ -675,7 +723,6 @@ def cmd_shadow(args: argparse.Namespace) -> int:
         camera_width=args.camera_width,
         camera_height=args.camera_height,
         camera_fps=args.camera_fps,
-        save_camera_frames=args.save_camera_frames,
         max_steps=args.max_steps,
         duration_seconds=args.duration_seconds,
         fps=args.fps,
@@ -683,6 +730,15 @@ def cmd_shadow(args: argparse.Namespace) -> int:
         strict_observation_keys=args.strict,
         fail_fast=args.fail_fast,
         overwrite=args.overwrite,
+        adapter_image_keys=adapter_image_keys,
+        require_task=getattr(args, "adapter_require_task", False),
+        require_state=getattr(args, "adapter_require_state", False),
+        required_keys=required_keys,
+        drop_unknown_keys=getattr(args, "adapter_drop_unknown_keys", False),
+        live=getattr(args, "live", False),
+        live_every=getattr(args, "live_every", 1),
+        quality_config=quality_config,
+        fail_on_quality=getattr(args, "quality_fail_on_quality", False),
     )
 
     if not args.json:

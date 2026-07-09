@@ -122,7 +122,7 @@ class TestCameraSourceOpen:
         assert cap.props_set[FakeCV2.CAP_PROP_FPS] == 30.0
 
     def test_open_creates_frames_dir(self, tmp_path, fake_cv2):
-        src = CameraObservationSource(camera_index=0, output_dir=tmp_path, save_frames=True)
+        src = CameraObservationSource(camera_index=0, output_dir=tmp_path)
         src.open()
         assert (tmp_path / "frames").is_dir()
 
@@ -191,6 +191,27 @@ class TestCameraSourceRead:
         src.open()
         src.close()
         assert src.read() is None
+
+
+class TestCameraSourceAlwaysSavesFrames:
+    """Camera frames are always saved — persistence is mandatory for auditability."""
+
+    def test_frames_always_saved(self, tmp_path, fake_cv2):
+        """Even without any save flag, frames must be written to disk."""
+        src = CameraObservationSource(camera_index=0, output_dir=tmp_path)
+        src.open()
+        src.read()
+        src.read()
+        assert len(fake_cv2.frames_written) == 2
+        for path in fake_cv2.frames_written:
+            assert Path(path).exists()
+
+    def test_save_without_output_dir_raises(self, fake_cv2):
+        """Without output_dir, saving cannot proceed — frames are mandatory."""
+        src = CameraObservationSource(camera_index=0, output_dir=None)
+        src.open()
+        with pytest.raises(CoreAIPolicyError, match="output_dir"):
+            src.read()
 
 
 class TestCameraSourceClose:
