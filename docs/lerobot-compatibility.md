@@ -1,5 +1,36 @@
 # LeRobot Compatibility
 
+`lerobot-coreai` is compatible with the shape and main inference/eval workflows of
+LeRobot 0.6.x, but is **not yet** a complete native integration inside the upstream
+LeRobot registry/factory. Train with LeRobot; run with CoreAI.
+
+## Compatibility levels
+
+| Layer | Status | Notes |
+|-------|--------|-------|
+| Core package without LeRobot | ✅ | Python >=3.10, no torch/LeRobot imports |
+| LeRobot 0.6.x dependency range | ✅ | `[lerobot]` extra installs `lerobot>=0.6.0,<0.7.0` on Python 3.12+ |
+| `select_action(batch)` raw action | ✅ | Matches LeRobot 0.6 semantics |
+| `LeRobotDataset` eval | ✅ | Uses public dataset constructor (since v0.4) |
+| PyTorch/CoreAI compare | ⚠️ | Experimental source policy loader (since v0.5) |
+| Native LeRobot policy registry | ❌ | Not yet registered as upstream policy type |
+| Training | ❌ | Train with LeRobot; run with CoreAI |
+| Robot hardware | ❌ until v1.0 | No real robot egress yet |
+
+## Implemented
+
+- LeRobot-style `select_action(batch)` raw action semantics
+- `LeRobotDataset`-based eval/replay
+- PyTorch vs CoreAI action parity compare, experimental policy loader
+- LeRobot 0.6.x dependency range under `[lerobot]` extra
+
+## Not yet native
+
+- No upstream LeRobot registry/factory `policy_type="coreai"`
+- No training integration
+- No teleop/robot control integration
+- No native LeRobot CLI replacement
+
 ## Core package (no LeRobot required)
 
 - Supports Python 3.10+
@@ -11,7 +42,7 @@
 
 - Requires Python 3.12+ (LeRobot 0.6.0 requirement)
 - Installs `lerobot>=0.6.0,<0.7.0` (which pins torch, torchvision, numpy)
-- Future: LeRobotDataset-based eval, LeRobotCoreAIPolicy wrapper
+- Enables `eval` (LeRobotDataset replay) and `compare` (PyTorch source policy loader)
 
 ## API alignment with LeRobot 0.6.0
 
@@ -30,12 +61,13 @@
 - **v0.6**: export/verify/package pipeline
 - **v0.7**: motor-blocked shadow mode
 - **v0.7.1**: optional camera observation source (`[camera]` extra)
-- **v0.7.2** (current): observation adapters, live metrics, run quality diagnostics
-- **v0.8**: sim mode (action egress to simulator only)
+- **v0.7.2**: observation adapters, live metrics, run quality diagnostics
+- **v0.8** (current): sim mode (action egress to simulator only)
 
 ## Hardware
 
-- v0.7 has **zero** code paths for sending robot commands
+- v0.8 has **zero** code paths for sending robot commands
 - Shadow mode blocks all action egress via `ActionBlocker`
+- Sim mode sends actions to a simulator via `SimEgress`; robot egress always raises
 - No serial, dynamixel, feetech, motor bus, or teleop imports
-- Verified by automated tests (`test_no_hardware_actuation.py`, `test_shadow_no_actuation.py`)
+- Verified by automated tests (`test_no_hardware_actuation.py`, `test_shadow_no_actuation.py`, `test_sim_no_robot_actuation.py`)

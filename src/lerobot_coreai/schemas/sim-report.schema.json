@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/sim-report.schema.json",
+  "title": "lerobot-coreai sim report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "lerobot_coreai_version",
+    "ok",
+    "mode",
+    "policy",
+    "runner",
+    "environment",
+    "loop",
+    "metrics",
+    "claims",
+    "safety",
+    "files",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.sim_report.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "mode": {"type": "string", "const": "sim"},
+    "policy": {"type": "object"},
+    "runner": {"type": "object"},
+    "environment": {
+      "type": "object",
+      "required": ["simulator_egress_enabled"],
+      "properties": {
+        "simulator_egress_enabled": {"type": "boolean", "const": true}
+      }
+    },
+    "loop": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": ["actions_sent_to_robot"],
+      "properties": {
+        "actions_sent_to_robot": {"type": "integer", "const": 0},
+        "actions_sent_to_simulator": {"type": "integer"}
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "proves_sim_task_success",
+        "proves_real_task_success",
+        "proves_robot_safety",
+        "proves_real_world_safety"
+      ],
+      "properties": {
+        "proves_sim_task_success": {"type": "boolean"},
+        "proves_real_task_success": {"type": "boolean", "const": false},
+        "proves_robot_safety": {"type": "boolean", "const": false},
+        "proves_real_world_safety": {"type": "boolean", "const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": [
+        "simulator_egress_enabled",
+        "robot_egress_enabled",
+        "physical_actuation_possible",
+        "motor_commands_available",
+        "robot_connected",
+        "actions_sent_to_robot",
+        "action_egress"
+      ],
+      "properties": {
+        "simulator_egress_enabled": {"type": "boolean", "const": true},
+        "robot_egress_enabled": {"type": "boolean", "const": false},
+        "physical_actuation_possible": {"type": "boolean", "const": false},
+        "motor_commands_available": {"type": "boolean", "const": false},
+        "robot_connected": {"type": "boolean", "const": false},
+        "actions_sent_to_robot": {"type": "integer", "const": 0},
+        "action_egress": {"type": "string", "const": "simulator_only"}
+      }
+    },
+    "files": {"type": "object"},
+    "errors": {"type": "array"},
+    "live_metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional per-run timing/action diagnostics"
+    }
+  }
+}

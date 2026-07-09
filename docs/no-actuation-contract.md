@@ -36,6 +36,23 @@ The v0.7.1 camera source reads frames from a local camera and passes them as obs
 This is an observation device, not an actuation device. The report may show
 `observation_device_connected: true`, but `actuation_device_connected` remains `false`.
 
+## Sim mode: simulator egress, never robot egress (v0.8)
+
+Sim mode is the first mode that **egresses actions** — but only to a simulator.
+`SimEgress.send_to_simulator()` forwards an action to a `SimEnvironment.step()`.
+`SimEgress.send_to_robot()` unconditionally raises `SafetyError`, exactly like
+`ActionBlocker.send()`.
+
+Sim mode can send actions to a simulator.
+Sim mode cannot send actions to a robot.
+Sim task success is not real-world task success.
+Sim mode does not prove physical robot safety.
+
+There is no code path in `sim.py`, `sim_egress.py`, or `sim_envs.py` that forwards
+an action to a robot, motor, serial device, or actuator. `sim-report.schema.json`
+enforces `actions_sent_to_robot = 0`, `robot_egress_enabled = false`, and
+`action_egress = "simulator_only"` as `const` invariants.
+
 ## Enforcement mechanisms
 
 ### 1. `ActionBlocker` (runtime)
@@ -94,3 +111,6 @@ v1.0 allows guarded robot actuation.
 
 **The v0.7 win is not movement. The win is auditable runtime action generation under a
 hard no-actuation contract.**
+
+**The v0.8 win is not real actuation. The win is auditable action egress to a simulator
+under a hard no-robot-egress contract.**

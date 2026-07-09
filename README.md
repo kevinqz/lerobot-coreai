@@ -10,8 +10,8 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **v0.4:** `eval` command reads LeRobotDataset frames and generates actions via CoreAI runner.
-> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata. `rollout --mode dry_run` with reports.
+> **Current:** `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, and `shadow` mode (motor-blocked).
+> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata.
 
 ---
 
@@ -111,15 +111,19 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `compare` | v0.5 ✅ | PyTorch vs CoreAI action parity on LeRobotDataset |
 | `export` | v0.6 ✅ | Export/verify/package LeRobot policy as CoreAI artifact |
 | `shadow` | v0.7 ✅ | Motor-blocked observation loop; actions generated and logged, never sent |
+| `sim` | v0.8 ✅ | Simulator-only action egress; actions drive a simulator, never a robot |
 
 ## Safety model
 
 v0.7 adds motor-blocked shadow mode.
 v0.7.1 adds optional local camera observation source for shadow mode.
 v0.7.2 adds observation adapters, live metrics, and run quality diagnostics.
+v0.8 adds simulator-only sim mode: actions drive a simulator, never a robot.
 Shadow mode can read observations and generate actions.
 Shadow mode cannot send actions to a robot, motor, simulator, or actuator.
-It never connects to a robot and never sends motor commands.
+Sim mode can send actions to a simulator.
+Sim mode cannot send actions to a robot.
+Neither mode ever connects to a robot or sends motor commands.
 Export verification can prove numeric action fidelity only when compare passes.
 It cannot prove task success or physical robot safety.
 
@@ -127,19 +131,22 @@ It cannot prove task success or physical robot safety.
 |------|--------|----------|
 | `dry_run` | v0.3 ✅ | No physical robot. Fixture-based action generation. |
 | `shadow` | v0.7 ✅ | Observations streamed/replayed, actions generated and logged, never sent. |
-| `sim` | v0.8 planned | Simulation receives actions. |
+| `sim` | v0.8 ✅ | Actions drive a simulator; never a robot. Requires `--confirm-sim-egress`. |
 | `real` | v1.0 planned | Physical robot actuation. Requires explicit confirmation. |
 
-> v0.7 implements shadow, dry_run, eval, compare, and export.
+> v0.8 implements sim, shadow, dry_run, eval, compare, and export.
+> Sim mode sends actions to a simulator. Sim mode never sends actions to a robot.
+> Sim task success is not real-world task success.
 > Shadow mode is not real mode. Shadow mode is not sim mode.
 > Shadow mode does not prove task success or physical safety.
 > Shadow mode proves runtime action generation and no-actuation logging.
-> No robot commands are sent by v0.7.
+> No robot commands are sent by v0.8.
 
 ## Version policy
 
-`lerobot-coreai` 0.7.x supports LeRobot `>=0.6.0,<0.7.0`.
+`lerobot-coreai` 0.8.x supports LeRobot `>=0.6.0,<0.7.0`.
 v0.7.1 adds optional `[camera]` extra (OpenCV) for shadow mode camera source.
+v0.8 adds simulator-only sim mode (`fake` and `replay` environments).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

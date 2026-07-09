@@ -15,13 +15,14 @@ class TestSuccessReport:
         assert r["schema_version"] == "lerobot-coreai.rollout_report.v0"
 
     def test_report_has_version(self):
+        from lerobot_coreai import __version__
         r = build_success_report(
             policy_path="test", source_repo_id="s", policy_type="act",
             model_id="act-so100", robot_type="so100", runner_url="http://x",
             runner_timing={}, parity_passed=True, fixture_source="f.json",
             observation_keys=[], action=[[0.0]*7]*16, files={},
         )
-        assert r["lerobot_coreai_version"] == "0.7.2"
+        assert r["lerobot_coreai_version"] == __version__
 
     def test_report_actions_sent_zero(self):
         r = build_success_report(
