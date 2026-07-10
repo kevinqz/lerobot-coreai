@@ -104,7 +104,9 @@ def test_verify_passes_and_writes_report_outside(tmp_path):
     assert res.claims["integrity_verified"] is True
     assert res.claims["authenticity_verified"] is False   # unsigned
     assert res.claims["processor_contract_verified"] is True
-    assert res.claims["semantics_verified"] is True
+    # consistency true (nothing failed); completeness false (dtype/etc not_verified).
+    assert res.claims["semantic_consistency_verified"] is True
+    assert res.claims["semantic_completeness_verified"] is False
     assert res.claims["official_eval_certified"] is False
     # report is OUTSIDE the sealed artifact.
     assert (rdir / "plugin_artifact_verification_report.json").exists()

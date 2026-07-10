@@ -57,17 +57,21 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self.coreai_policy = coreai_policy
         self.dataset_stats = dataset_stats
         self.dataset_meta = dataset_meta
-        self._queue: deque = deque()
+        self._queue: deque = deque()          # deque[Tensor[B, A]] (temporal)
+        self._active_batch_size: int | None = None
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
+        self.last_batch_mode: str | None = None
         self._action_contract = None
+        self._batch_contract = None
         self._protocol = None
+        self._capabilities = None
         if coreai_policy is not None:
             self._bind_action_contract(coreai_policy)
         self.register_buffer("_sentinel", torch.zeros(1), persistent=False)
 
     def _bind_action_contract(self, coreai_policy: Any) -> None:
-        """Parse the manifest action contract, fail-closed (v1.3.5).
+        """Parse the manifest action + batch contracts, fail-closed (v1.3.5/1.3.9).
 
         A malformed contract must not silently degrade to chunk/no-horizon
         validation; it is a binding error.
@@ -77,12 +81,14 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             # No manifest bound (local/test path): nothing to fail closed on.
             self._action_contract = None
             return
-        from lerobot_coreai.action_contract import parse_action_contract_from_manifest
+        from lerobot_coreai.action_contract import (
+            parse_action_contract_from_manifest, parse_batch_contract_from_manifest)
         try:
             self._action_contract = parse_action_contract_from_manifest(manifest)
+            self._batch_contract = parse_batch_contract_from_manifest(manifest)
         except Exception as exc:
             raise PluginBindingError(
-                f"invalid CoreAI action contract: {exc}") from exc
+                f"invalid CoreAI action/batch contract: {exc}") from exc
 
     def _resolve_protocol(self):
         """Negotiate the runner protocol once, honoring runtime_binding_mode (v1.3.6).
@@ -120,6 +126,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 "runtime_binding_mode='in_memory' must not be used with a bound "
                 "runner; use 'strict' (or 'legacy') for a real wire.")
         caps = runner.capabilities()  # propagate failures — no silent legacy
+        self._capabilities = caps      # cached for the batch-execution decision
         self._protocol = negotiate_runner_protocol(
             requested_encoding=self.config.observation_encoding,
             capabilities=caps,
@@ -265,76 +272,133 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
 
     def reset(self) -> None:
         self._queue.clear()
-        # Invalidate the negotiated protocol: a runner may restart with different
-        # capabilities, so re-negotiate on the next inference (v1.3.5).
+        self._active_batch_size = None
+        # Invalidate the negotiated protocol + cached caps: a runner may restart
+        # with different capabilities, so re-negotiate on the next inference.
         self._protocol = None
+        self._capabilities = None
         if self.coreai_policy is not None and hasattr(self.coreai_policy, "reset"):
             self.coreai_policy.reset()
 
-    def _require_single_batch(self, batch: dict[str, Any]) -> None:
-        b = _infer_batch_size(batch)
-        if b > 1 and self.config.batch_mode == "single_only":
-            raise PluginBindingError(
-                f"coreai_bridge supports only batch_size=1 (got {b}); "
-                "batched evaluation lands in v1.3.8.")
-
-    def _tensor(self, action: Any) -> torch.Tensor:
-        t = torch.as_tensor(action, dtype=torch.float32, device=self._sentinel.device)
-        if t.ndim == 1:
-            t = t.unsqueeze(0)  # (action_dim,) -> (1, action_dim)
-        return t
-
-    def _coreai_observation(self, batch: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        """Bridge a LeRobot batch to a single JSON-safe CoreAI observation."""
-        from .transport import prepare_single_coreai_observation
+    def _batch_size(self, batch: dict[str, Any]) -> int:
+        from .transport import infer_and_validate_batch_size
         manifest = getattr(self.coreai_policy, "manifest", None)
-        audit: dict[str, Any] = {}
-        proto = self._resolve_protocol()
-        obs, sha = prepare_single_coreai_observation(
-            batch, manifest, encoding=proto.observation_encoding, audit=audit)
-        self.last_observation_sha256 = sha
-        self.last_observation_audit = audit
-        return obs, sha
+        return infer_and_validate_batch_size(batch, manifest)
 
-    def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
-        if self.coreai_policy is None:
-            raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
-        self._require_single_batch(batch)
-        obs, sha = self._coreai_observation(batch)
-        proto = self._resolve_protocol()
-        runner_options = {
-            # The negotiated protocol/encoding — never a hardcoded constant.
+    def _contract_shapes(self) -> tuple[str, int | None, int | None]:
+        c = self._action_contract
+        rep = c.representation if c is not None else "chunk"
+        horizon = c.horizon if (c is not None and c.representation == "chunk") else None
+        dim = self.config.expected_action_dim or (c.action_dim if c is not None else None)
+        return rep, horizon, dim
+
+    def _runner_options(self, proto, sha: str, *, batch_size: int | None = None) -> dict:
+        opts = {
             "protocol_version": proto.protocol_version,
             "observation_encoding": proto.observation_encoding,
             "observation_schema_version": "coreai-observation.v1",
             "observation_sha256": sha,
         }
-        # No TypeError fallback (v1.3.5): the companion requires
-        # lerobot-coreai>=1.3.5, whose predict_action_chunk accepts runner_options.
-        # A TypeError raised inside inference must not be mistaken for a signature
-        # mismatch and silently re-run (which could double-advance a stateful runner).
-        raw = self.coreai_policy.predict_action_chunk(obs, runner_options=runner_options)
+        if batch_size is not None:
+            opts["batch_size"] = batch_size
+        return opts
 
-        # Strict normalization + validation, using the manifest action contract
-        # for representation and horizon when known.
+    def _predict_single_chunk(self, batch, proto) -> torch.Tensor:
         from .action_validation import normalize_and_validate_action_chunk
-        c = self._action_contract
-        rep = c.representation if c is not None else "chunk"
-        horizon = c.horizon if (c is not None and c.representation == "chunk") else None
-        dim = self.config.expected_action_dim or (c.action_dim if c is not None else None)
+        from .transport import prepare_single_coreai_observation
+        manifest = getattr(self.coreai_policy, "manifest", None)
+        audit: dict[str, Any] = {}
+        obs, sha = prepare_single_coreai_observation(
+            batch, manifest, encoding=proto.observation_encoding, audit=audit)
+        self.last_observation_sha256 = sha
+        self.last_observation_audit = audit
+        raw = self.coreai_policy.predict_action_chunk(
+            obs, runner_options=self._runner_options(proto, sha))
+        rep, horizon, dim = self._contract_shapes()
         return normalize_and_validate_action_chunk(
-            raw, representation=rep, expected_batch_size=1,
-            expected_horizon=horizon, expected_action_dim=dim,
-            device=self._sentinel.device)
+            raw, representation=rep, expected_batch_size=1, expected_horizon=horizon,
+            expected_action_dim=dim, device=self._sentinel.device)
+
+    def _predict_native_chunk(self, batch, proto, b: int) -> torch.Tensor:
+        from .action_validation import normalize_and_validate_batched_action_chunk
+        from .transport import prepare_batched_coreai_observation
+        manifest = getattr(self.coreai_policy, "manifest", None)
+        audit: dict[str, Any] = {}
+        payload, batch_sha, sample_shas = prepare_batched_coreai_observation(
+            batch, manifest, batch_size=b, encoding=proto.observation_encoding,
+            audit=audit)
+        self.last_observation_sha256 = batch_sha
+        self.last_observation_audit = {"batch_size": b, "sample_sha256": sample_shas,
+                                       **audit}
+        raw = self.coreai_policy.predict_action_batch(
+            payload, batch_size=b,
+            runner_options=self._runner_options(proto, batch_sha, batch_size=b))
+        rep, horizon, dim = self._contract_shapes()
+        return normalize_and_validate_batched_action_chunk(
+            raw, representation=rep, expected_batch_size=b, expected_horizon=horizon,
+            expected_action_dim=dim, device=self._sentinel.device)
+
+    def _predict_split_chunk(self, batch, proto, b: int) -> torch.Tensor:
+        # Split-and-stack (stateless/request-scoped only): B independent requests,
+        # validate EVERY sample before committing anything (atomic).
+        from .action_validation import normalize_and_validate_action_chunk
+        from .transport import split_coreai_observations
+        manifest = getattr(self.coreai_policy, "manifest", None)
+        samples = split_coreai_observations(
+            batch, manifest, batch_size=b, encoding=proto.observation_encoding)
+        rep, horizon, dim = self._contract_shapes()
+        chunks: list[torch.Tensor] = []
+        sample_shas: list[str] = []
+        for i, (obs, sha) in enumerate(samples):
+            try:
+                raw = self.coreai_policy.predict_action_chunk(
+                    obs, runner_options=self._runner_options(proto, sha))
+                chunk = normalize_and_validate_action_chunk(
+                    raw, representation=rep, expected_batch_size=1,
+                    expected_horizon=horizon, expected_action_dim=dim,
+                    device=self._sentinel.device)      # [1, H, A]
+            except Exception as exc:  # noqa: BLE001
+                raise PluginBindingError(
+                    f"split-and-stack failed at sample index {i}: {exc}") from exc
+            chunks.append(chunk[0])                     # [H, A]
+            sample_shas.append(sha)
+        stacked = torch.stack(chunks, dim=0)            # [B, H, A]
+        self.last_observation_sha256 = sample_shas[0] if sample_shas else None
+        self.last_observation_audit = {"batch_size": b, "sample_sha256": sample_shas}
+        return stacked
+
+    def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
+        if self.coreai_policy is None:
+            raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
+        from .batch_protocol import (
+            MODE_NATIVE, MODE_SINGLE, select_batch_execution_mode,
+        )
+        b = self._batch_size(batch)
+        proto = self._resolve_protocol()  # also caches self._capabilities
+        decision = select_batch_execution_mode(
+            self.config, self._batch_contract, self._capabilities, b)
+        self.last_batch_mode = decision.mode
+        if decision.mode == MODE_SINGLE:
+            return self._predict_single_chunk(batch, proto)          # [1, H, A]
+        if decision.mode == MODE_NATIVE:
+            return self._predict_native_chunk(batch, proto, b)       # [B, H, A]
+        return self._predict_split_chunk(batch, proto, b)            # [B, H, A]
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
-        # Single boundary: select_action ALWAYS goes through predict_action_chunk.
+        # Temporal queue in the LeRobot chunked-policy style: a chunk [B, H, A] is
+        # transposed to a deque of per-timestep [B, A] tensors; each call pops one.
+        b = self._batch_size(batch)
+        if self._queue and self._active_batch_size is not None and b != self._active_batch_size:
+            raise PluginBindingError(
+                f"batch size changed ({self._active_batch_size} -> {b}) while the "
+                "action queue is non-empty; drain or reset() first.")
         if not self._queue:
-            chunk = self.predict_action_chunk(batch, **kwargs)  # (B, H, A), B=1
-            for row in chunk[0]:  # enqueue each timestep [A]
-                self._queue.append(row)
-        return self._tensor(self._queue.popleft())
+            chunk = self.predict_action_chunk(batch, **kwargs)       # [B, H, A]
+            self._active_batch_size = int(chunk.shape[0])
+            for timestep in chunk.transpose(0, 1):                   # each [B, A]
+                self._queue.append(timestep)
+        return self._queue.popleft()                                 # [B, A]
 
     # MARK: - Training boundary (runtime-only)
 

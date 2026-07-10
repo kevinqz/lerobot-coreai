@@ -238,6 +238,27 @@ class CoreAIPolicy:
         return self.predict_action(batch, return_metadata=False,
                                    runner_options=runner_options)["action"]
 
+    def predict_action_batch(
+        self, batch: dict[str, Any], *, batch_size: int,
+        runner_options: dict[str, Any] | None = None,
+    ) -> Any:
+        """Native batched inference (v1.3.9): ONE runner request for a [B, ...] obs.
+
+        The observation is already a batched, manifest-shaped payload prepared by
+        the caller (the plugin's batched transport), so the single-observation
+        validator is intentionally bypassed — the caller owns batched input
+        validation and its strict batched normalizer validates the output. Sends
+        exactly one POST. No robot actuation.
+        """
+        self._ensure_runner()
+        opts = dict(runner_options) if runner_options else {}
+        opts.setdefault("batch_size", int(batch_size))
+        request = ActionPredictRequest(
+            model_id=self._manifest.model_id, observation=batch, options=opts)
+        assert self._runner_client is not None  # _ensure_runner guarantees this
+        response = self._runner_client.predict_action(request)
+        return response.action
+
     def select_next_action(self, batch: dict[str, Any], **kwargs: Any) -> Any:
         """Return ONE per-timestep action ``[A]`` (LeRobot-correct semantics).
 

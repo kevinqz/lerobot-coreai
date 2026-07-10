@@ -228,7 +228,7 @@ made structurally, semantically, and (partly) cryptographically trustworthy:
   absolute paths, and symlinks are rejected **before** any file is opened.
 - **Integrity ≠ authenticity** — the verifier reports `integrity_verified`
   (unsigned checksum consistency) separately from `authenticity_verified`, which
-  stays **false** until a trusted signature is issued (signing lands in v1.3.9).
+  stays **false** until a trusted signature is issued (signing lands in v1.3.10).
 - **Strict JSON schemas** (`artifact_schemas.py`, `additionalProperties:false`)
   for the plugin manifest, inventory, processor contract, and verification report.
 - **Processor contract v2** — step-empty (identity) processors are permitted
@@ -252,7 +252,7 @@ made structurally, semantically, and (partly) cryptographically trustworthy:
 - **Evidence report** — `verify … --report` writes
   `plugin_artifact_verification_report.json/md` (schema-valid), separating
   integrity/authenticity/processor-contract claims; `factory_b1_certified` stays
-  `false` (promoted only by the signed certificate, v1.3.9).
+  `false` (promoted only by the signed certificate, v1.3.10).
 
 ## v1.3.8 — artifact semantic closure + batch protocol foundation
 
@@ -293,10 +293,46 @@ Before batching multiplies the artifact, its **contracts** are cross-bound and i
   forbids split**; unknown scope fails). No batched inference is implemented — this
   stabilizes the contract so v1.3.9 batching is mechanical and cannot mix sessions.
 
+## v1.3.9 — stateless batched runtime + atomic temporal queue
+
+Batching arrives, restricted to runners that can prove requests don't mix state
+(`stateless` / `request_scoped`); `session_scoped` and `global` fail closed.
+
+- **Decision engine** — `select_batch_execution_mode(config, artifact_batch_contract,
+  capabilities, requested_batch_size)`: B=1 always single; for B>1 a **missing or
+  unknown** `inference_state.scope` fails (never assume stateless), `global` and
+  `session_scoped` fail (session batching deferred), native requires
+  `state_isolation ∈ {stateless, request_scoped}`, and B is capped by the
+  **effective max** = `min(artifact, config, runner)`. Capabilities gain
+  `action_batching.state_isolation`; a `BatchContract` v2 (`policy_supports_batch`,
+  `supported_client_modes`, `queue_layout`, `requires_atomic_commit`) is parsed and
+  strictly validated.
+- **Strict batch-size boundary** — `infer_and_validate_batch_size` requires every
+  manifest observation feature's leading dim AND the `task` length to be exactly
+  equal (a ragged `state=4/task=2` batch fails).
+- **Native** — `prepare_batched_coreai_observation` → `CoreAIPolicy.predict_action_batch`
+  (**one** request) → `normalize_and_validate_batched_action_chunk` → `Tensor[B,H,A]`;
+  wire carries `[B,…]` features, a `task` list of length B, `batch_size`, and per-sample
+  hashes; no label leakage.
+- **Split-and-stack** (stateless/request-scoped only) — B independent single
+  requests, **every** sample validated before anything commits; on sample *i*
+  failure the queue is untouched and the error names `sample index i` (atomic).
+- **LeRobot-style temporal queue** — a chunk `[B,H,A]` is `transpose(0,1)`'d into a
+  `deque[Tensor[B,A]]`; `select_action` returns `Tensor[B,A]`; the active batch size
+  is tracked and a size change while the queue is non-empty fails; `reset()` clears
+  the queue, active size, protocol, and caches. B=1 stays backward-compatible.
+- **Evidence honesty** — the verifier now reports `semantic_consistency_verified`
+  (nothing failed) separately from `semantic_completeness_verified` (everything
+  passed); `not_verified` aspects keep completeness false without failing consistency.
+- **E2E, no mocks** (`tests/test_e2e_batched.py`) — native B=2/B=4 (one request each)
+  and split B=2/B=4 (B requests) through `make_policy`/`make_pre_post_processors`
+  against a real batch-capable HTTP runner, on 0.6.0 + 0.6.1-dev.
+
 ## Not yet
 
-- Batched runtime **B=2/B=4** (native + split-and-stack, per the v1.3.8 state
-  contract) — v1.3.9.
+- **Session-scoped / global batching** — requires a per-slot session lifecycle
+  (create / session-ids / reset / close) + transaction/rollback protocol; deferred
+  until that contract exists. Only stateless/request-scoped B>1 is supported.
 - Signed **compatibility certificate v2** that promotes `plugin_compat` levels
   (`policy_factory` / `processor_pipeline`) from hash-bound, signed evidence —
   v1.3.10. `authenticity_verified` stays `false` until then.
