@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/policy-card-report.schema.json",
+  "title": "lerobot-coreai policy card report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "source_verified", "source_mode",
+               "sections_written", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.policy_card_report.v0"},
+    "ok": {"type": "boolean"},
+    "artifact_id": {"type": ["string", "null"]},
+    "source_verified": {"type": "boolean"},
+    "source_mode": {"type": "string", "enum": ["artifact_index", "direct"]},
+    "policy_path": {"type": ["string", "null"]},
+    "dataset_repo_id": {"type": ["string", "null"]},
+    "lerobot_coreai_version": {"type": "string"},
+    "sections_written": {"type": "array", "items": {"type": "string"}},
+    "input_reports": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_physical_safety", "authorizes_robot_actuation",
+                   "supports_training", "native_upstream_registry"],
+      "properties": {
+        "proves_policy_card_generated_from_verified_evidence": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false},
+        "supports_training": {"type": "boolean", "const": false},
+        "native_upstream_registry": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
