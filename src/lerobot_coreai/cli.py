@@ -679,6 +679,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_obc.add_argument("--json", action="store_true")
     p_obc.set_defaults(func=cmd_obs_bridge_check)
 
+    # --- hf-metadata (v1.1.6) — emit + validate honest HF-style metadata ---
+    p_hfm = sub.add_parser("hf-metadata",
+                           help="Emit + validate honest HF-style CoreAI artifact metadata (v1.1.6)")
+    p_hfm.add_argument("--policy.path", dest="policy_path", default=None)
+    p_hfm.add_argument("--robot.type", dest="robot_type", default=None)
+    p_hfm.add_argument("--output-dir", dest="output_dir", default=None)
+    p_hfm.add_argument("--json", action="store_true")
+    p_hfm.set_defaults(func=cmd_hf_metadata)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -717,7 +726,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2701,6 +2710,43 @@ def cmd_obs_bridge_check(args: argparse.Namespace) -> int:
           else "Observation mapping FAILED.")
     print("Proves this sample's mapping only — not task success or physical safety.")
     return 0 if report["ok"] else 1
+
+
+# MARK: - hf-metadata (v1.1.6 — honest HF-style artifact metadata)
+
+def cmd_hf_metadata(args: argparse.Namespace) -> int:
+    """Emit and validate honest HF-style CoreAI metadata. Fails closed on overclaim."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .hf_metadata import (
+        build_hf_metadata, build_hf_metadata_markdown, validate_hf_metadata,
+    )
+
+    metadata = build_hf_metadata(
+        policy_path=getattr(args, "policy_path", None),
+        robot_type=getattr(args, "robot_type", None))
+    try:
+        validate_hf_metadata(metadata)
+    except CoreAIPolicyError as e:
+        print(f"error: {e}")
+        return 1
+
+    if getattr(args, "output_dir", None):
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "lerobot_coreai_metadata.json", "w") as f:
+            _json.dump(metadata, f, indent=2)
+        (out / "lerobot_coreai_metadata.md").write_text(build_hf_metadata_markdown(metadata))
+
+    if args.json:
+        print(_json.dumps(metadata, indent=2))
+        return 0
+
+    print("lerobot-coreai hf-metadata")
+    print("=" * 50)
+    print(build_hf_metadata_markdown(metadata))
+    return 0
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
