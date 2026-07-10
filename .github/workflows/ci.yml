@@ -32,8 +32,6 @@ jobs:
           cache: pip
       - run: pip install -e ".[test,signing]"
       - run: pip install "lerobot==0.6.0"
-      # datasets: required by lerobot.scripts.lerobot_eval (official rollout E2E, v1.3.11)
-      - run: pip install datasets
       - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: LeRobot shape certificate (strict, v0)
         run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-stable
@@ -70,8 +68,6 @@ jobs:
           cache: pip
       - run: pip install -e ".[test,signing]"
       - run: pip install "git+https://github.com/huggingface/lerobot.git@${LEROBOT_DEV_REF}"
-      # datasets: required by lerobot.scripts.lerobot_eval (official rollout E2E, v1.3.11)
-      - run: pip install datasets
       - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: LeRobot contract report (dev, v1 levels)
         run: lerobot-coreai lerobot-compat-check --contract --output-dir reports/lerobot-dev
