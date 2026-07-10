@@ -438,19 +438,47 @@ typed, and batching is proven **multimodal** with processors actually executed.
   image `[.,C,H,W]` shapes; the report marks `fixture_feature_semantics_verified`
   true and `universal_feature_contract_verified` **false** (honest).
 
+## v1.3.14 — independently verifiable rollout evidence
+
+Evidence becomes **self-sufficient and third-party verifiable offline** — the
+producer is no longer trusted.
+
+- **Offline verifier** — `lerobot-coreai verify-official-rollout-evidence --bundle …
+  --require-complete-matrix` (base package, no lerobot) recomputes every checksum,
+  validates report/bundle/matrix schemas, recomputes bundle + matrix roots, requires
+  the full 5-case matrix, and **refuses** any promoted/forbidden claim or secret.
+  Detects report tamper, missing cases, and root mismatches.
+- **Exact environment identity** — the report binds LeRobot version/source/commit,
+  Python/Torch/NumPy/platform, core + companion versions, repo head SHA, workflow
+  run id + job, and target (from env + `importlib.metadata`).
+- **Request AND response/action hashes** — ordered request + response hashes, plus
+  `final_action_sha256` and `done_mask_sha256`; the evaluator derives
+  `response_action_chain_valid`.
+- **Canonical hashing** — `canonical-json-sha256.v1` (JSON types only; non-finite /
+  non-JSON rejected) replaces `json.dumps(default=str)`.
+- **Derived checks, no fallbacks** — `fixture_feature_semantics_verified` is derived
+  from measured request shapes (not caller-supplied); missing negotiated
+  capabilities raise `EvidenceBindingError` (no synthetic hash); artifact hashes are
+  bound only after `verify_plugin_artifact(deep).ok`.
+- **Closed schemas** — the readiness report's `checks` are a required, closed set
+  and forbidden claims are `const:false`.
+- **Time/slot fixture** — observations depend on timestep + slot, so ordered request
+  hashes are genuinely distinct (`distinct_request_hashes`); reorder/tamper change
+  the roots.
+- **Bundle + matrix + failure evidence** — per-case `bundle_manifest.json` +
+  `checksums.json`, an aggregate `official_rollout_matrix_manifest.json` with a
+  recomputable root, and `write_failure_evidence` for stage exceptions. Both CI
+  rollout jobs generate, **verify offline**, and upload the bundle.
+
 ## Not yet
 
 - **Processor-stage vocabulary as a typed enum** (`ObservationStage`/`ActionStage`)
-  replacing the last `raw_lerobot_observation` string — v1.3.14 (churny naming
-  refactor across every manifest + processor-ownership string; isolated to reduce
-  regression surface).
-- **Single canonical BatchContract v3 schema file** shared verbatim across
-  `lerobot-coreai.schema.json` / `action-contract.schema.json` / plugin — the
-  runtime parser + plugin artifact schema are strict and the public schema matches
-  native isolation; unifying into one file is v1.3.14.
+  replacing the last `raw_lerobot_observation` string, and a **single canonical
+  BatchContract v3 schema file** shared verbatim across all consumers — churny
+  naming/schema refactors, isolated to reduce regression surface — v1.3.15.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** so
-  `semantic_completeness_verified`/`universal_feature_contract_verified` can be
-  true — v1.3.14.
+  `universal_feature_contract_verified` can be true — v1.3.15.
+- **Queue-refill event instrumentation** (vs. the request-count proxy) — v1.3.15.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

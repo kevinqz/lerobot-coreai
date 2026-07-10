@@ -928,11 +928,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify_plugin.add_argument("--json", action="store_true")
     p_verify_plugin.set_defaults(func=cmd_verify_lerobot_plugin_artifact)
 
+    # --- verify-official-rollout-evidence (v1.3.14) — offline bundle verifier ---
+    p_vre = sub.add_parser(
+        "verify-official-rollout-evidence",
+        help="Independently verify a rollout evidence bundle offline (v1.3.14)")
+    p_vre.add_argument("--bundle", dest="bundle", required=True)
+    p_vre.add_argument("--require-complete-matrix", dest="require_complete_matrix",
+                       action="store_true")
+    p_vre.add_argument("--json", action="store_true")
+    p_vre.set_defaults(func=cmd_verify_official_rollout_evidence)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_verify_official_rollout_evidence(args: argparse.Namespace) -> int:
+    """Offline, independent verification of a rollout evidence bundle."""
+    import json as _json
+
+    from .rollout_verify import verify_official_rollout_evidence
+    result = verify_official_rollout_evidence(
+        args.bundle, require_complete_matrix=args.require_complete_matrix)
+    if args.json:
+        print(_json.dumps(result.to_dict(), indent=2))
+    else:
+        for name, status in result.checks.items():
+            print(f"  {'✓' if status == 'passed' else '✗'} {name}: {status}")
+        print(f"Evidence {'VERIFIED' if result.ok else 'FAILED verification'}.")
+    return 0 if result.ok else 1
 
 
 def cmd_package_lerobot_plugin_artifact(args: argparse.Namespace) -> int:

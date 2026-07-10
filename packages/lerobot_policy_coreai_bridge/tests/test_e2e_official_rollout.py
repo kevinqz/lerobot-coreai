@@ -1,15 +1,10 @@
-# test_e2e_official_rollout.py — official LeRobot rollout, hardened (v1.3.12).
+# test_e2e_official_rollout.py — verifiable official-rollout evidence (v1.3.14).
 #
-# Drives the REAL lerobot.scripts.lerobot_eval.rollout over a deterministic
-# gym.vector.SyncVectorEnv with a COMMON _max_episode_steps and staggered
-# terminate_at, HORIZON=3 so the temporal queue drains and refills. Asserts exact
-# request counts, cumulative done masks, staggered termination, and the wire
-# payload (batched obs, both cameras, no label leakage). Emits a schema-valid
-# readiness report. Nothing patched. Not eval/task-success/safety.
-#
-# Runs where the full LeRobot media stack is present (locally + the dedicated CI
-# rollout job). COREAI_REQUIRE_ROLLOUT=1 turns a missing dependency into a FAILURE
-# (the mandatory gate) instead of a skip.
+# Drives the REAL lerobot_eval.rollout, captures request AND response/action data,
+# binds exact environment identity + deep-verified artifact hashes, writes a per-case
+# evidence bundle + an aggregate matrix, and re-proves the whole thing with the
+# OFFLINE verifier (tamper/reorder/missing-case detection). Time/slot-dependent
+# fixture so ordered request hashes are genuinely distinct. Nothing patched.
 
 import json
 import math
@@ -35,15 +30,16 @@ from lerobot.processor import (  # noqa: E402
 )
 from lerobot.utils.import_utils import register_third_party_plugins  # noqa: E402
 
+from lerobot_coreai.rollout_verify import verify_official_rollout_evidence  # noqa: E402
 from lerobot_coreai.runner import capabilities_sha256  # noqa: E402
-from lerobot_policy_coreai_bridge import build_plugin_artifact  # noqa: E402
-from lerobot_policy_coreai_bridge.rollout_evidence import (  # noqa: E402
-    RolloutMeasurements, _sha256_file, build_rollout_readiness_report,
-    evaluate_rollout_measurements, write_evidence_bundle,
+from lerobot_policy_coreai_bridge import (  # noqa: E402
+    build_plugin_artifact, verify_plugin_artifact,
 )
-
-_REQUIRED_OBS = ("observation.state", "observation.images.front",
-                 "observation.images.wrist")
+from lerobot_policy_coreai_bridge.rollout_evidence import (  # noqa: E402
+    EvidenceBindingError, RolloutMeasurements, _sha256_file,
+    build_rollout_readiness_report, capture_environment_identity,
+    evaluate_rollout_measurements, write_evidence_bundle, write_matrix_manifest,
+)
 
 _REQUIRE = os.environ.get("COREAI_REQUIRE_ROLLOUT") == "1"
 try:
@@ -51,14 +47,12 @@ try:
 except ImportError as _exc:  # pragma: no cover
     if _REQUIRE:
         raise
-    pytest.skip(f"lerobot_eval unavailable ({_exc}); set COREAI_REQUIRE_ROLLOUT=1 "
-                "in the dedicated CI job to make this mandatory",
-                allow_module_level=True)
+    pytest.skip(f"lerobot_eval unavailable ({_exc})", allow_module_level=True)
 
 HORIZON, A, C, H, W = 3, 7, 3, 8, 8
 MAX_STEPS = 8
-_LEAK_KEYS = ("action", "reward", "done", "success", "index", "episode_index",
-              "frame_index", "timestamp")
+_FIXTURE = {"observation.state": [A], "observation.images.front": [C, H, W],
+            "observation.images.wrist": [C, H, W]}
 
 
 def _manifest():
@@ -105,25 +99,25 @@ def _manifest():
 
 
 class _Env(gym.Env):
-    def __init__(self, terminate_at):
-        self.terminate_at = terminate_at
-        self.t = 0
-        self._max_episode_steps = MAX_STEPS      # common max across envs (P1.2)
+    def __init__(self, terminate_at, slot):
+        self.terminate_at, self.slot, self.t = terminate_at, slot, 0
+        self._max_episode_steps = MAX_STEPS
         self.observation_space = spaces.Dict({
-            "agent_pos": spaces.Box(-1, 1, (A,), np.float32),
+            "agent_pos": spaces.Box(-1e9, 1e9, (A,), np.float32),
             "pixels": spaces.Dict({
                 "front": spaces.Box(0, 255, (H, W, C), np.uint8),
                 "wrist": spaces.Box(0, 255, (H, W, C), np.uint8)})})
         self.action_space = spaces.Box(-1, 1, (A,), np.float32)
 
     def _obs(self):
-        return {"agent_pos": np.zeros(A, np.float32),
-                "pixels": {"front": np.zeros((H, W, C), np.uint8),
-                           "wrist": np.zeros((H, W, C), np.uint8)}}
+        # time- and slot-dependent so consecutive/parallel requests differ (P1.10)
+        st = np.zeros(A, np.float32); st[0] = float(self.t); st[1] = float(self.slot)
+        fr = np.zeros((H, W, C), np.uint8); fr[0, 0, 0] = self.t % 256
+        wr = np.zeros((H, W, C), np.uint8); wr[0, 0, 0] = self.slot % 256
+        return {"agent_pos": st, "pixels": {"front": fr, "wrist": wr}}
 
     def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed)
-        self.t = 0
+        super().reset(seed=seed); self.t = 0
         return self._obs(), {}
 
     def step(self, action):
@@ -138,9 +132,8 @@ class _Env(gym.Env):
 
 class _State:
     def __init__(self, native):
-        self.native = native
-        self.n = 0
-        self.bodies = []
+        self.native, self.n = native, 0
+        self.bodies, self.responses = [], []
 
 
 def _handler(state):
@@ -185,7 +178,9 @@ def _handler(state):
                 action = [[[0.0] * A for _ in range(HORIZON)] for _ in range(b)]
             else:
                 action = [[0.0] * A for _ in range(HORIZON)]
-            return self._j(200, {"action": action})
+            resp = {"action": action}
+            state.responses.append(resp)
+            return self._j(200, resp)
     return Hd
 
 
@@ -199,8 +194,7 @@ class _Server:
         return self
 
     def __exit__(self, *a):
-        self._srv.shutdown()
-        self._srv.server_close()
+        self._srv.shutdown(); self._srv.server_close()
 
     @property
     def url(self):
@@ -224,8 +218,7 @@ def _env_pipeline(name):
 
 
 def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
-    src = tmp_path / "coreai"
-    src.mkdir()
+    src = tmp_path / "coreai"; src.mkdir(exist_ok=True)
     (src / "lerobot-coreai.json").write_text(json.dumps(_manifest()))
     art = tmp_path / "plugin"
     build_plugin_artifact(str(src), str(art), runner_url_env="COREAI_RUNNER_URL")
@@ -234,118 +227,128 @@ def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
     monkeypatch.setenv("COREAI_RUNNER_URL", server.url)
     register_third_party_plugins()
     cfg = PreTrainedConfig.from_pretrained(str(art))
-    cfg.pretrained_path = str(art)
-    cfg.batch_mode = batch_mode
+    cfg.pretrained_path = str(art); cfg.batch_mode = batch_mode
     policy = make_policy(cfg, ds_meta=_ds_meta())
     pre, post = make_pre_post_processors(cfg, pretrained_path=str(art))
-    venv = gym.vector.SyncVectorEnv([lambda t=t: _Env(t) for t in terminate_ats])
+    venv = gym.vector.SyncVectorEnv(
+        [lambda t=t, s=s: _Env(t, s) for s, t in enumerate(terminate_ats)])
     return policy, pre, post, venv, state, server, art
 
 
-def _run(policy, pre, post, venv):
-    return rollout(venv, policy, _env_pipeline("env_pre"), _env_pipeline("env_post"),
-                   pre, post, seeds=list(range(venv.num_envs)))
-
-
-def _assert_done_mask(done, terminate_ats):
-    d = done.int()
-    for i, ta in enumerate(terminate_ats):
-        fd = ta - 1
-        assert not d[i, :fd].any(), f"env {i} done before terminate_at"
-        assert d[i, fd:].all(), f"env {i} done not cumulative from {fd}"
-
-
-def _assert_wire(bodies, native, B):
-    assert bodies, "runner received no requests"
-    for body in bodies:
-        obs = body["observation"]
-        assert set(obs.keys()) == {"observation.state", "observation.images.front",
-                                   "observation.images.wrist", "task"}
-        for leak in _LEAK_KEYS:
-            assert leak not in obs, f"label {leak!r} leaked to the runner"
-        if native and B > 1:
-            assert body["options"]["batch_size"] == B
-            assert len(obs["observation.state"]) == B and len(obs["observation.state"][0]) == A
-            # images are [B, C, H, W] (fixture feature semantics, P1.9)
-            fr = obs["observation.images.front"]
-            assert len(fr) == B and len(fr[0]) == C and len(fr[0][0]) == H \
-                and len(fr[0][0][0]) == W
-            assert isinstance(obs["task"], list) and len(obs["task"]) == B
-        else:
-            assert "batch_size" not in body.get("options", {}) or B == 1
-            assert len(obs["observation.state"]) == A          # single sample
-            fr = obs["observation.images.front"]
-            assert len(fr) == C and len(fr[0]) == H and len(fr[0][0]) == W
-            assert isinstance(obs["task"], str)
-
-
-def _evidence(tmp_path, out, state, art, policy, B, mode, terminate_ats):
-    """Build measurements -> evaluate -> real-hash report -> persisted bundle."""
-    seq = out["action"].shape[1]
+def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
+    if policy._capabilities is None:                      # P1.2: no fallback
+        raise EvidenceBindingError("evidence requires negotiated Runner capabilities")
+    verified = verify_plugin_artifact(str(art), deep=True)   # P1.3: recompute
+    assert verified.ok, verified.checks
     inv = json.loads((art / "plugin_artifact_inventory.json").read_text())
     pm = json.loads((art / "plugin_artifact_manifest.json").read_text())
-    caps_sha = (capabilities_sha256(policy._capabilities)
-                if policy._capabilities is not None else "sha256:" + "e" * 64)
     m = RolloutMeasurements(
-        batch_size=B, mode=mode, sequence_length=seq, horizon=HORIZON,
+        batch_size=B, mode=mode, sequence_length=out["action"].shape[1], horizon=HORIZON,
         terminate_at=tuple(terminate_ats), request_bodies=tuple(state.bodies),
-        done_mask=tuple(tuple(int(x) for x in row) for row in out["done"].int().tolist()),
-        required_obs_keys=_REQUIRED_OBS)
-    ev = evaluate_rollout_measurements(m)
+        response_bodies=tuple(state.responses),
+        done_mask=tuple(tuple(int(x) for x in r) for r in out["done"].int().tolist()),
+        final_action=out["action"].to("cpu").tolist(), required_obs_keys=tuple(_FIXTURE),
+        fixture_contract=_FIXTURE)
+    ev = evaluate_rollout_measurements(m, action_dim=A)
     report = build_rollout_readiness_report(
-        ev, m, environment={"lerobot": "0.6.x"},
+        ev, m, environment=capture_environment_identity("stable"),
         artifact_root_sha256=inv["artifact_root_sha256"],
         batch_contract_sha256=pm["batch_contract_sha256"],
-        runner_capabilities_sha256=caps_sha,
+        runner_capabilities_sha256=capabilities_sha256(policy._capabilities),
         preprocessor_sha256=_sha256_file(art / "policy_preprocessor.json"),
-        postprocessor_sha256=_sha256_file(art / "policy_postprocessor.json"))
-    base = os.environ.get("COREAI_ROLLOUT_EVIDENCE_DIR") or str(tmp_path / "evidence")
-    bundle = Path(base) / f"{mode}-b{B}"
-    write_evidence_bundle(str(bundle), report, m)
-    assert (bundle / "official_rollout_readiness_report.json").exists()
-    assert (bundle / "checksums.json").exists()
-    return ev, report
+        postprocessor_sha256=_sha256_file(art / "policy_postprocessor.json"),
+        artifact_integrity_verified=verified.ok)
+    case = f"{mode}-b{B}"
+    root = write_evidence_bundle(str(Path(evidence_dir) / case), report, m)
+    return ev, report, root
 
+
+# --- granular ---
 
 @pytest.mark.parametrize("B,terminate_ats", [(1, [8]), (2, [3, 8]), (4, [2, 4, 6, 8])])
-def test_official_rollout_native(tmp_path, monkeypatch, B, terminate_ats):
+def test_native(tmp_path, monkeypatch, B, terminate_ats):
     mode = "auto" if B == 1 else "native_batch"
     policy, pre, post, venv, state, server, art = _setup(
-        tmp_path, monkeypatch, native=True, batch_mode=mode, terminate_ats=terminate_ats)
+        tmp_path, monkeypatch, True, mode, terminate_ats)
     try:
-        out = _run(policy, pre, post, venv)
-        seq = out["action"].shape[1]
-        assert out["action"].shape[0] == B and out["action"].shape[-1] == A
-        assert seq == MAX_STEPS
-        _assert_done_mask(out["done"], terminate_ats)
-        assert state.n == math.ceil(seq / HORIZON)          # native: one per refill
-        _assert_wire(state.bodies, native=True, B=B)
-        eff_mode = "single_only" if B == 1 else "native_batch"
-        ev, report = _evidence(tmp_path, out, state, art, policy, B, eff_mode,
-                               terminate_ats)
+        out = rollout(venv, policy, _env_pipeline("ep"), _env_pipeline("eo"), pre, post,
+                      seeds=list(range(B)))
+        assert state.n == math.ceil(out["action"].shape[1] / HORIZON)
+        ev, report, _ = _evidence(tmp_path / "ev", out, state, art, policy, B,
+                                  "single_only" if B == 1 else "native_batch", terminate_ats)
         assert ev.passed, (ev.failed_stage, ev.errors)
-        assert report["claims"]["official_rollout_pipeline_smoke_passed"] is True
-        assert report["claims"]["official_eval_certified"] is False
+        assert report["observation"]["distinct_request_hashes"] is True
+        assert report["contracts"]["artifact_integrity_verified"] is True
     finally:
-        server.__exit__()
-        venv.close()
+        server.__exit__(); venv.close()
 
 
 @pytest.mark.parametrize("B,terminate_ats", [(2, [3, 8]), (4, [2, 4, 6, 8])])
-def test_official_rollout_split(tmp_path, monkeypatch, B, terminate_ats):
+def test_split(tmp_path, monkeypatch, B, terminate_ats):
     policy, pre, post, venv, state, server, art = _setup(
-        tmp_path, monkeypatch, native=False, batch_mode="split_and_stack",
-        terminate_ats=terminate_ats)
+        tmp_path, monkeypatch, False, "split_and_stack", terminate_ats)
     try:
-        out = _run(policy, pre, post, venv)
-        seq = out["action"].shape[1]
-        assert out["action"].shape[0] == B
-        _assert_done_mask(out["done"], terminate_ats)
-        assert state.n == B * math.ceil(seq / HORIZON)      # split: B per refill
-        _assert_wire(state.bodies, native=False, B=B)
-        ev, report = _evidence(tmp_path, out, state, art, policy, B,
-                               "split_and_stack", terminate_ats)
+        out = rollout(venv, policy, _env_pipeline("ep"), _env_pipeline("eo"), pre, post,
+                      seeds=list(range(B)))
+        assert state.n == B * math.ceil(out["action"].shape[1] / HORIZON)
+        ev, _, _ = _evidence(tmp_path / "ev", out, state, art, policy, B,
+                             "split_and_stack", terminate_ats)
         assert ev.passed, (ev.failed_stage, ev.errors)
     finally:
-        server.__exit__()
-        venv.close()
+        server.__exit__(); venv.close()
+
+
+# --- full matrix + OFFLINE independent verification ---
+
+def test_matrix_and_offline_verify(tmp_path, monkeypatch):
+    # CI points COREAI_ROLLOUT_EVIDENCE_DIR here so the matrix bundle is uploaded.
+    ev_dir = Path(os.environ.get("COREAI_ROLLOUT_EVIDENCE_DIR") or (tmp_path / "matrix"))
+    cases_meta: dict[str, dict] = {}
+    configs = [(True, "auto", [8], 1, "single_only-b1"),
+               (True, "native_batch", [3, 8], 2, "native_batch-b2"),
+               (True, "native_batch", [2, 4, 6, 8], 4, "native_batch-b4"),
+               (False, "split_and_stack", [3, 8], 2, "split_and_stack-b2"),
+               (False, "split_and_stack", [2, 4, 6, 8], 4, "split_and_stack-b4")]
+    for native, mode, tats, B, case in configs:
+        wd = tmp_path / f"work-{case}"; wd.mkdir()
+        policy, pre, post, venv, state, server, art = _setup(
+            wd, monkeypatch, native, mode, tats)
+        try:
+            out = rollout(venv, policy, _env_pipeline("ep"), _env_pipeline("eo"),
+                          pre, post, seeds=list(range(B)))
+            report_mode = "single_only" if B == 1 else mode
+            ev, _, root = _evidence(ev_dir, out, state, art, policy, B, report_mode, tats)
+            cases_meta[case] = {"passed": ev.passed, "bundle_root_sha256": root}
+        finally:
+            server.__exit__(); venv.close()
+    write_matrix_manifest(str(ev_dir), "stable", cases_meta)
+
+    res = verify_official_rollout_evidence(str(ev_dir), require_complete_matrix=True)
+    assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
+
+    # tamper on a COPY (leave the real bundle clean for CI upload + re-verify).
+    import shutil
+    tampered = tmp_path / "tampered"
+    shutil.copytree(ev_dir, tampered)
+    rp = tampered / "native_batch-b2" / "official_rollout_readiness_report.json"
+    d = json.loads(rp.read_text()); d["execution"]["request_count"] = 999
+    rp.write_text(json.dumps(d))
+    assert not verify_official_rollout_evidence(str(tampered)).ok
+
+
+def test_missing_case_fails_verify(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "m"
+    wd = tmp_path / "w"; wd.mkdir()
+    policy, pre, post, venv, state, server, art = _setup(
+        wd, monkeypatch, True, "native_batch", [3, 8])
+    try:
+        out = rollout(venv, policy, _env_pipeline("ep"), _env_pipeline("eo"), pre, post,
+                      seeds=[0, 1])
+        _, _, root = _evidence(ev_dir, out, state, art, policy, 2, "native_batch", [3, 8])
+    finally:
+        server.__exit__(); venv.close()
+    write_matrix_manifest(str(ev_dir), "stable",
+                          {"native_batch-b2": {"passed": True, "bundle_root_sha256": root}})
+    # only one case present -> incomplete matrix fails.
+    assert not verify_official_rollout_evidence(str(ev_dir),
+                                                require_complete_matrix=True).ok
