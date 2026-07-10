@@ -621,6 +621,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_lbc.add_argument("--json", action="store_true")
     p_lbc.set_defaults(func=cmd_lerobot_bridge_check)
 
+    # --- lerobot-compat-check (v1.1.2) — tested LeRobot 0.6.x certificate ---
+    p_lcc = sub.add_parser("lerobot-compat-check",
+                           help="Emit a tested LeRobot 0.6.x compatibility certificate (v1.1.2)")
+    p_lcc.add_argument("--strict", action="store_true",
+                       help="Require LeRobot installed + in range (used by the compat CI job)")
+    p_lcc.add_argument("--output-dir", dest="output_dir", default=None)
+    p_lcc.add_argument("--json", action="store_true")
+    p_lcc.set_defaults(func=cmd_lerobot_compat_check)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -659,7 +668,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2448,6 +2457,40 @@ def cmd_lerobot_bridge_check(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Local LeRobot bridge OK." if report["ok"] else "LeRobot bridge check FAILED.")
     print("Local bridge only — not upstream-native LeRobot integration.")
+    return 0 if report["ok"] else 1
+
+
+# MARK: - lerobot-compat-check (v1.1.2 — tested LeRobot 0.6.x certificate)
+
+def cmd_lerobot_compat_check(args: argparse.Namespace) -> int:
+    """Emit a tested LeRobot compatibility certificate. Imports no hardware."""
+    import json as _json
+
+    from .lerobot_compat import build_compat_markdown, evaluate_lerobot_compat
+
+    report = evaluate_lerobot_compat(strict=getattr(args, "strict", False))
+
+    if getattr(args, "output_dir", None):
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "lerobot_compatibility_report.json", "w") as f:
+            _json.dump(report, f, indent=2)
+        (out / "lerobot_compatibility_report.md").write_text(build_compat_markdown(report))
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    print("lerobot-coreai lerobot-compat-check")
+    print("=" * 50)
+    for c in report["checks"]:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']} ({c['severity']}){detail}")
+    print("=" * 50)
+    print("LeRobot 0.6.x shape-compatible." if report["ok"]
+          else "LeRobot compatibility check FAILED.")
+    print("Local runtime-only bridge — not upstream-native LeRobot integration.")
     return 0 if report["ok"] else 1
 
 

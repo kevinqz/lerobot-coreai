@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/lerobot-compatibility-report.schema.json",
+  "title": "lerobot-coreai LeRobot compatibility report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "python_version", "checks", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.lerobot_compat.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "python_version": {"type": "string"},
+    "lerobot_version": {"type": ["string", "null"]},
+    "ok": {"type": "boolean"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed", "severity"],
+        "properties": {
+          "name": {"type": "string"},
+          "passed": {"type": "boolean"},
+          "severity": {"type": "string", "enum": ["required", "info"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "native_upstream_registry",
+        "supports_training",
+        "supports_physical_safety"
+      ],
+      "properties": {
+        "compatible_with_lerobot_0_6_x_shape": {"type": "boolean"},
+        "native_upstream_registry": {"type": "boolean", "const": false},
+        "supports_training": {"type": "boolean", "const": false},
+        "supports_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
