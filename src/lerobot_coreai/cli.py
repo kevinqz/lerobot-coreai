@@ -802,6 +802,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_ai_verify.add_argument("--json", action="store_true")
     p_ai_verify.set_defaults(func=cmd_artifact_index_verify)
 
+    # --- policy-card (v1.2.3) — honest policy card from verified evidence ---
+    p_pc = sub.add_parser("policy-card",
+                          help="Generate an honest policy card from verified evidence (v1.2.3)")
+    p_pc.add_argument("--artifact-index", dest="artifact_index", default=None)
+    p_pc.add_argument("--artifact-id", dest="artifact_id", default=None)
+    p_pc.add_argument("--benchmark-bundle", dest="benchmark_bundle", default=None)
+    p_pc.add_argument("--compat-report", dest="compat_report", default=None)
+    p_pc.add_argument("--bridge-report", dest="bridge_report", default=None)
+    p_pc.add_argument("--registry-report", dest="registry_report", default=None)
+    p_pc.add_argument("--eval-v2-report", dest="eval_v2_report", default=None)
+    p_pc.add_argument("--obs-bridge-report", dest="obs_bridge_report", default=None)
+    p_pc.add_argument("--provenance", dest="provenance", default=None)
+    p_pc.add_argument("--signature", dest="signature", default=None)
+    p_pc.add_argument("--release-check", dest="release_check", default=None)
+    p_pc.add_argument("--release-channel", dest="release_channel", default=None)
+    p_pc.add_argument("--output", dest="output", default=None)
+    p_pc.add_argument("--output-report", dest="output_report", default=None)
+    p_pc.add_argument("--json", action="store_true")
+    p_pc.set_defaults(func=cmd_policy_card)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -840,7 +860,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -3178,6 +3198,52 @@ def cmd_artifact_index_verify(args: argparse.Namespace) -> int:
         return 0 if result.ok else 1
     print(format_verify(result.checks, result.ok))
     return 0 if result.ok else 1
+
+
+# MARK: - policy-card (v1.2.3 — honest policy card from verified evidence)
+
+def cmd_policy_card(args: argparse.Namespace) -> int:
+    """Generate a deterministic policy card from verified evidence. Fail-closed."""
+    import json as _json
+
+    from .policy_card import PolicyCardError, PolicyCardInputs, generate_policy_card
+    from .policy_card_reports import write_policy_card_report
+
+    inputs = PolicyCardInputs(
+        benchmark_bundle=Path(args.benchmark_bundle) if getattr(args, "benchmark_bundle", None) else None,
+        compat_report=Path(args.compat_report) if getattr(args, "compat_report", None) else None,
+        bridge_report=Path(args.bridge_report) if getattr(args, "bridge_report", None) else None,
+        registry_report=Path(args.registry_report) if getattr(args, "registry_report", None) else None,
+        eval_v2_report=Path(args.eval_v2_report) if getattr(args, "eval_v2_report", None) else None,
+        obs_bridge_report=Path(args.obs_bridge_report) if getattr(args, "obs_bridge_report", None) else None,
+        provenance=Path(args.provenance) if getattr(args, "provenance", None) else None,
+        signature=Path(args.signature) if getattr(args, "signature", None) else None,
+        release_check=Path(args.release_check) if getattr(args, "release_check", None) else None,
+        release_channel=getattr(args, "release_channel", None),
+        artifact_index=Path(args.artifact_index) if getattr(args, "artifact_index", None) else None,
+        artifact_id=getattr(args, "artifact_id", None),
+    )
+    try:
+        card, report = generate_policy_card(inputs)
+    except PolicyCardError as e:
+        print(f"error: {e}")
+        return 1
+
+    if getattr(args, "output", None):
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(card)
+    if getattr(args, "output_report", None):
+        write_policy_card_report(Path(args.output_report), report)
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0
+    if not getattr(args, "output", None):
+        print(card)
+    else:
+        print(f"Policy card written to {args.output}")
+    return 0
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
