@@ -1,15 +1,19 @@
-# test_e2e_official_rollout.py — official LeRobot rollout readiness, no mocks (v1.3.11).
+# test_e2e_official_rollout.py — official LeRobot rollout, hardened (v1.3.12).
 #
 # Drives the REAL lerobot.scripts.lerobot_eval.rollout over a deterministic
-# gym.vector.SyncVectorEnv (state + front/wrist cameras + task_description), with
-# staggered episode termination, through the official chain:
-#   preprocess_observation -> env_preprocessor -> policy_preprocessor ->
-#   CoreAIBridgePolicy.select_action -> policy_postprocessor -> env_postprocessor.
-# Native and split modes. Nothing is patched. Proves the official rollout PIPELINE
-# completes and yields Tensor[B, seq, A] — NOT task success, safety, or lerobot-eval
-# certification.
+# gym.vector.SyncVectorEnv with a COMMON _max_episode_steps and staggered
+# terminate_at, HORIZON=3 so the temporal queue drains and refills. Asserts exact
+# request counts, cumulative done masks, staggered termination, and the wire
+# payload (batched obs, both cameras, no label leakage). Emits a schema-valid
+# readiness report. Nothing patched. Not eval/task-success/safety.
+#
+# Runs where the full LeRobot media stack is present (locally + the dedicated CI
+# rollout job). COREAI_REQUIRE_ROLLOUT=1 turns a missing dependency into a FAILURE
+# (the mandatory gate) instead of a skip.
 
 import json
+import math
+import os
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,19 +34,25 @@ from lerobot.processor import (  # noqa: E402
 )
 from lerobot.utils.import_utils import register_third_party_plugins  # noqa: E402
 
-# lerobot_eval imports `datasets`/`av` at module load; those pull the heavy media
-# stack. Skip the whole module cleanly when they're absent (importorskip re-raises
-# on a mismatched-name ImportError under pytest 8, so skip explicitly). This E2E
-# runs where the full LeRobot stack is present (locally); CI gating of it lands
-# with the deliberate media-stack addition in v1.3.12.
+from lerobot_policy_coreai_bridge import build_plugin_artifact  # noqa: E402
+from lerobot_policy_coreai_bridge.rollout_evidence import (  # noqa: E402
+    build_rollout_readiness_report,
+)
+
+_REQUIRE = os.environ.get("COREAI_REQUIRE_ROLLOUT") == "1"
 try:
     from lerobot.scripts.lerobot_eval import rollout  # noqa: E402
 except ImportError as _exc:  # pragma: no cover
-    pytest.skip(f"lerobot_eval unavailable ({_exc})", allow_module_level=True)
-
-from lerobot_policy_coreai_bridge import build_plugin_artifact  # noqa: E402
+    if _REQUIRE:
+        raise
+    pytest.skip(f"lerobot_eval unavailable ({_exc}); set COREAI_REQUIRE_ROLLOUT=1 "
+                "in the dedicated CI job to make this mandatory",
+                allow_module_level=True)
 
 HORIZON, A, C, H, W = 3, 7, 3, 8, 8
+MAX_STEPS = 8
+_LEAK_KEYS = ("action", "reward", "done", "success", "index", "episode_index",
+              "frame_index", "timestamp")
 
 
 def _manifest():
@@ -89,10 +99,10 @@ def _manifest():
 
 
 class _Env(gym.Env):
-    def __init__(self, ttl):
-        self.ttl = ttl
+    def __init__(self, terminate_at):
+        self.terminate_at = terminate_at
         self.t = 0
-        self._max_episode_steps = ttl
+        self._max_episode_steps = MAX_STEPS      # common max across envs (P1.2)
         self.observation_space = spaces.Dict({
             "agent_pos": spaces.Box(-1, 1, (A,), np.float32),
             "pixels": spaces.Dict({
@@ -112,7 +122,7 @@ class _Env(gym.Env):
 
     def step(self, action):
         self.t += 1
-        return self._obs(), 0.0, self.t >= self.ttl, False, {}
+        return self._obs(), 0.0, self.t >= self.terminate_at, False, {}
 
     def task_description(self):
         return "push the T"
@@ -124,6 +134,7 @@ class _State:
     def __init__(self, native):
         self.native = native
         self.n = 0
+        self.bodies = []
 
 
 def _handler(state):
@@ -160,6 +171,7 @@ def _handler(state):
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
+            state.bodies.append(body)
             state.n += 1
             opts = body.get("options", {})
             if "batch_size" in opts:
@@ -205,7 +217,7 @@ def _env_pipeline(name):
                                    to_output=transition_to_batch)
 
 
-def _setup(tmp_path, monkeypatch, native, batch_mode, ttls):
+def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
     src = tmp_path / "coreai"
     src.mkdir()
     (src / "lerobot-coreai.json").write_text(json.dumps(_manifest()))
@@ -220,41 +232,85 @@ def _setup(tmp_path, monkeypatch, native, batch_mode, ttls):
     cfg.batch_mode = batch_mode
     policy = make_policy(cfg, ds_meta=_ds_meta())
     pre, post = make_pre_post_processors(cfg, pretrained_path=str(art))
-    venv = gym.vector.SyncVectorEnv([lambda t=t: _Env(t) for t in ttls])
-    return policy, pre, post, venv, state, server
+    venv = gym.vector.SyncVectorEnv([lambda t=t: _Env(t) for t in terminate_ats])
+    return policy, pre, post, venv, state, server, art
 
 
 def _run(policy, pre, post, venv):
-    out = rollout(venv, policy, _env_pipeline("env_pre"), _env_pipeline("env_post"),
-                  pre, post, seeds=list(range(venv.num_envs)))
-    return out
+    return rollout(venv, policy, _env_pipeline("env_pre"), _env_pipeline("env_post"),
+                   pre, post, seeds=list(range(venv.num_envs)))
 
 
-@pytest.mark.parametrize("B", [1, 2, 4])
-def test_official_rollout_native(tmp_path, monkeypatch, B):
-    ttls = tuple(range(2, 2 + B))          # staggered termination
-    policy, pre, post, venv, state, server = _setup(
-        tmp_path, monkeypatch, native=True, batch_mode="auto", ttls=ttls)
+def _assert_done_mask(done, terminate_ats):
+    d = done.int()
+    for i, ta in enumerate(terminate_ats):
+        fd = ta - 1
+        assert not d[i, :fd].any(), f"env {i} done before terminate_at"
+        assert d[i, fd:].all(), f"env {i} done not cumulative from {fd}"
+
+
+def _assert_wire(bodies, native, B):
+    assert bodies, "runner received no requests"
+    for body in bodies:
+        obs = body["observation"]
+        assert set(obs.keys()) == {"observation.state", "observation.images.front",
+                                   "observation.images.wrist", "task"}
+        for leak in _LEAK_KEYS:
+            assert leak not in obs, f"label {leak!r} leaked to the runner"
+        if native and B > 1:
+            assert body["options"]["batch_size"] == B
+            assert len(obs["observation.state"]) == B
+            assert isinstance(obs["task"], list) and len(obs["task"]) == B
+        else:
+            assert "batch_size" not in body.get("options", {}) or B == 1
+            assert len(obs["observation.state"]) == A          # single sample
+            assert isinstance(obs["task"], str)
+
+
+@pytest.mark.parametrize("B,terminate_ats", [(1, [8]), (2, [3, 8]), (4, [2, 4, 6, 8])])
+def test_official_rollout_native(tmp_path, monkeypatch, B, terminate_ats):
+    mode = "auto" if B == 1 else "native_batch"
+    policy, pre, post, venv, state, server, art = _setup(
+        tmp_path, monkeypatch, native=True, batch_mode=mode, terminate_ats=terminate_ats)
     try:
         out = _run(policy, pre, post, venv)
-        assert set(out) >= {"action", "reward", "success", "done"}
-        act = out["action"]
-        assert act.ndim == 3 and act.shape[0] == B and act.shape[-1] == A
-        assert state.n >= 1                 # the runner was actually driven
+        seq = out["action"].shape[1]
+        assert out["action"].shape[0] == B and out["action"].shape[-1] == A
+        assert seq == MAX_STEPS
+        _assert_done_mask(out["done"], terminate_ats)
+        expected_requests = math.ceil(seq / HORIZON)        # native: one per refill
+        assert state.n == expected_requests, (state.n, expected_requests)
+        _assert_wire(state.bodies, native=True, B=B)
+        report = build_rollout_readiness_report(
+            lerobot_version="0.6.x", lerobot_commit=None, batch_size=B,
+            mode=("single_only" if B == 1 else "native_batch"), sequence_length=seq,
+            horizon=HORIZON, request_count=state.n,
+            artifact_root_sha256="sha256:" + "0" * 64,
+            batch_contract_sha256="sha256:" + "0" * 64,
+            runner_capabilities_sha256="sha256:" + "0" * 64,
+            checks={"official_rollout_called": True,
+                    "all_environments_reached_done": True,
+                    "done_mask_cumulative": True, "queue_refilled": seq > HORIZON,
+                    "wire_payload_valid": True, "request_count_exact": True})
+        assert report["claims"]["official_rollout_pipeline_smoke_passed"] is True
+        assert report["claims"]["official_eval_certified"] is False
     finally:
         server.__exit__()
         venv.close()
 
 
-@pytest.mark.parametrize("B", [2, 4])
-def test_official_rollout_split(tmp_path, monkeypatch, B):
-    ttls = tuple(range(2, 2 + B))
-    policy, pre, post, venv, state, server = _setup(
-        tmp_path, monkeypatch, native=False, batch_mode="split_and_stack", ttls=ttls)
+@pytest.mark.parametrize("B,terminate_ats", [(2, [3, 8]), (4, [2, 4, 6, 8])])
+def test_official_rollout_split(tmp_path, monkeypatch, B, terminate_ats):
+    policy, pre, post, venv, state, server, art = _setup(
+        tmp_path, monkeypatch, native=False, batch_mode="split_and_stack",
+        terminate_ats=terminate_ats)
     try:
         out = _run(policy, pre, post, venv)
-        assert out["action"].shape[0] == B and out["action"].shape[-1] == A
-        assert state.n >= B                 # split issues >= B requests
+        seq = out["action"].shape[1]
+        assert out["action"].shape[0] == B
+        _assert_done_mask(out["done"], terminate_ats)
+        assert state.n == B * math.ceil(seq / HORIZON)      # split: B per refill
+        _assert_wire(state.bodies, native=False, B=B)
     finally:
         server.__exit__()
         venv.close()

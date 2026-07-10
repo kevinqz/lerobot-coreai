@@ -104,8 +104,8 @@ def extract_observation(item: dict[str, Any], manifest: Any = None) -> dict[str,
         for k in features:
             if k in item:
                 obs[k] = item[k]
-        if "task" in item:
-            obs["task"] = item["task"]
+        # v1.3.12: keep task ONLY when the manifest declares it — an undeclared
+        # task must not be forwarded to the runner.
         return obs
     for k, v in item.items():
         if k in _NON_OBSERVATION_KEYS:

@@ -31,11 +31,11 @@ def _require_declared_features(obs: dict[str, Any], manifest: Any) -> None:
     if not expected:
         return
     for name, spec in expected.items():
-        if name == "task":
-            continue
         required = getattr(spec, "required", None)
         if required is None and isinstance(spec, dict):
             required = spec.get("required", True)
+        # v1.3.12: task requiredness is enforced like any declared feature — a
+        # required task that is absent fails; an optional one may be absent.
         if required and name not in obs:
             raise CoreAIPolicyError(
                 f"required observation feature {name!r} is missing from the runtime "

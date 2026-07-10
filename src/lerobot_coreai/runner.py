@@ -45,6 +45,13 @@ def _strict_bool(value: Any, field: str) -> bool:
         f"{value!r}.")
 
 
+def _enum(field: str, value: Any, allowed: tuple) -> None:
+    """Reject an unknown enum value (None = not announced, allowed)."""
+    if value is not None and value not in allowed:
+        raise RunnerProtocolError(
+            f"capability {field!r}={value!r} not in {allowed}.")
+
+
 def capabilities_sha256(caps: "RunnerCapabilities") -> str:
     """A canonical, order-stable fingerprint of a runner's announced capabilities."""
     import hashlib as _hashlib
@@ -122,8 +129,29 @@ class RunnerClient:
                     f"action_batching.supported=true but max_batch_size is invalid: "
                     f"{max_bs!r} (must be an int >= 1).")
         # slot_isolation (v1.3.10) is separate from inference_state.scope; accept the
-        # legacy "state_isolation" key as an alias.
-        slot_isolation = batching.get("slot_isolation") or batching.get("state_isolation")
+        # legacy "state_isolation" key as an alias. v1.3.12: conflicting aliases fail,
+        # and enums are validated at the parse boundary.
+        _slot = batching.get("slot_isolation")
+        _state = batching.get("state_isolation")
+        if _slot is not None and _state is not None and _slot != _state:
+            raise RunnerProtocolError(
+                f"conflicting slot_isolation aliases: slot_isolation={_slot!r} != "
+                f"state_isolation={_state!r}.")
+        slot_isolation = _slot if _slot is not None else _state
+        _enum("action_batching.semantics", batching.get("semantics"),
+              ("native", "split_and_stack"))
+        _enum("action_batching.slot_isolation", slot_isolation,
+              ("independent", "shared", "unknown"))
+        _enum("inference_state.scope", inference.get("scope"),
+              ("stateless", "request_scoped", "session_scoped", "global"))
+        _enum("inference_state.reset_scope", inference.get("reset_scope"),
+              ("none", "request", "session", "all_sessions", "global"))
+        if not isinstance(encodings, (list, tuple)):
+            raise RunnerProtocolError(
+                f"observation_encodings must be a list, got {type(encodings).__name__}.")
+        for enc in encodings:
+            if not isinstance(enc, str):
+                raise RunnerProtocolError("observation_encodings must be list[str].")
 
         return RunnerCapabilities(
             runtime=data.get("runtime", "coreai-runner"),

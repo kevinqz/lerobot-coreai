@@ -21,7 +21,8 @@ class _Feat:
 
 class _Manifest:
     observation_features = {"observation.state": _Feat([7]),
-                            "observation.images.wrist": _Feat([3, 2, 2])}
+                            "observation.images.wrist": _Feat([3, 2, 2]),
+                            "task": _Feat(None)}   # declared -> forwarded (v1.3.12)
 
 
 def test_b1_batch_stripped_task_unwrapped_nested_json_default():
@@ -122,3 +123,27 @@ def test_canonical_batch_hash_is_order_sensitive():
     assert a != b                                   # order matters
     assert a != "sha256:aa"                          # not just the first sample
     assert a == canonical_batch_sha256(2, ["sha256:aa", "sha256:bb"], "split_and_stack")
+
+
+# --- v1.3.12: task requiredness + undeclared-task drop ---
+
+class _TaskReqManifest:
+    observation_features = {"observation.state": _ReqFeat([7], required=True),
+                            "task": _ReqFeat(None, required=True)}
+
+
+class _NoTaskManifest:
+    observation_features = {"observation.state": _ReqFeat([7], required=True)}
+
+
+def test_required_task_absent_fails():
+    with pytest.raises(CoreAIPolicyError):
+        prepare_single_coreai_observation(
+            {"observation.state": torch.zeros(1, 7)}, _TaskReqManifest())
+
+
+def test_undeclared_task_is_dropped():
+    obs, _ = prepare_single_coreai_observation(
+        {"observation.state": torch.zeros(1, 7), "task": ["ignored"]},
+        _NoTaskManifest())
+    assert "task" not in obs           # manifest does not declare task -> dropped
