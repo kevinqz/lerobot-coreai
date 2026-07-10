@@ -58,6 +58,8 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self.dataset_stats = dataset_stats
         self.dataset_meta = dataset_meta
         self._queue: deque = deque()
+        self.last_observation_sha256: str | None = None
+        self.last_observation_audit: dict[str, Any] = {}
         self.register_buffer("_sentinel", torch.zeros(1), persistent=False)
 
     # MARK: - Official runtime binding
@@ -114,11 +116,15 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 f"action_horizon mismatch: manifest {contract.horizon} != expected "
                 f"{config.expected_action_horizon}.")
         rt = getattr(coreai_policy, "robot_type", None)
-        if config.expected_robot_type is not None and rt is not None and \
-                rt != config.expected_robot_type:
-            raise PluginBindingError(
-                f"robot_type mismatch: manifest {rt} != expected "
-                f"{config.expected_robot_type}.")
+        if config.expected_robot_type is not None:
+            if rt is None:
+                raise PluginBindingError(
+                    "expected_robot_type declared but the manifest declares no "
+                    "robot type; refusing to bind.")
+            if rt != config.expected_robot_type:
+                raise PluginBindingError(
+                    f"robot_type mismatch: manifest {rt} != expected "
+                    f"{config.expected_robot_type}.")
 
     # MARK: - Inference (LeRobot contract)
 
@@ -144,7 +150,13 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         """Bridge a LeRobot batch to a single JSON-safe CoreAI observation."""
         from .transport import prepare_single_coreai_observation
         manifest = getattr(self.coreai_policy, "manifest", None)
-        obs, _sha = prepare_single_coreai_observation(batch, manifest)
+        audit: dict[str, Any] = {}
+        obs, sha = prepare_single_coreai_observation(
+            batch, manifest, encoding=self.config.observation_encoding_or_default(),
+            audit=audit)
+        # Persist the last observation hash + shape audit for trace/evidence.
+        self.last_observation_sha256 = sha
+        self.last_observation_audit = audit
         return obs
 
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
@@ -152,12 +164,15 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
         self._require_single_batch(batch)
         obs = self._coreai_observation(batch)
-        chunk = self.coreai_policy.predict_action_chunk(obs)
-        t = torch.as_tensor(chunk, dtype=torch.float32, device=self._sentinel.device)
-        # Normalize to (B, H, A): a [H, A] chunk becomes batch 1.
-        if t.ndim == 2:
-            t = t.unsqueeze(0)
-        return t
+        raw = self.coreai_policy.predict_action_chunk(obs)
+        # Strictly normalize + validate the Runner output — never silently reshape.
+        # predict_action_chunk always yields a chunk ([H,A] or [1,H,A]); a
+        # single-action policy returns H=1.
+        from .action_validation import normalize_and_validate_action_chunk
+        return normalize_and_validate_action_chunk(
+            raw, representation="chunk", expected_batch_size=1,
+            expected_action_dim=self.config.expected_action_dim,
+            device=self._sentinel.device)
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:

@@ -18,6 +18,14 @@ from lerobot_coreai.coreai_observation_serialization import (
 )
 from lerobot_coreai.errors import CoreAIPolicyError
 
+# Observation transport encodings the plugin can emit. nested_json_v1 sends the
+# model plain nested JSON arrays (the default, safe for a runner that expects
+# JSON); typed_array_envelope_v1 sends {"__array__",dtype,shape} and may ONLY be
+# used when the runner announces it.
+NESTED_JSON_V1 = "nested_json_v1"
+TYPED_ARRAY_ENVELOPE_V1 = "typed_array_envelope_v1"
+VALID_ENCODINGS = (NESTED_JSON_V1, TYPED_ARRAY_ENVELOPE_V1)
+
 
 def infer_batch_size(batch: dict[str, Any]) -> int:
     sizes: set[int] = set()
@@ -48,27 +56,62 @@ def _strip_leading_batch(value: Any) -> Any:
     return value
 
 
+def _plain_and_shape(value: Any) -> tuple[Any, tuple[int, ...] | None]:
+    """Return (plain nested list / scalar, shape) for a tensor/ndarray/list/scalar."""
+    tolist = getattr(value, "tolist", None)
+    shape = getattr(value, "shape", None)
+    if tolist is not None and shape is not None:
+        try:
+            return tolist(), tuple(int(s) for s in shape)
+        except Exception:
+            pass
+    if isinstance(value, (list, tuple)):
+        v = list(value)
+        return v, (len(v),) if (not v or not isinstance(v[0], (list, tuple))) else None
+    return value, ()
+
+
 def prepare_single_coreai_observation(
     batch: dict[str, Any], manifest: Any, *, require_single: bool = True,
+    encoding: str = NESTED_JSON_V1, audit: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Convert a LeRobot B=1 batch into a JSON-safe CoreAI observation + hash.
 
-    Fail-closed: B>1 is rejected (v1.3.3), unknown values are refused by the
-    serializer, and only manifest-declared observation features (plus task) pass.
+    Fail-closed: B>1 is rejected (batched transport = v1.3.4), unknown values are
+    refused, and only manifest-declared observation features (plus task) pass.
+    Shape is validated (recorded in ``audit``) BEFORE encoding, so the envelope
+    can never mask a shape mismatch. ``encoding`` selects the wire format:
+    ``nested_json_v1`` (plain lists, default) or ``typed_array_envelope_v1``.
     """
+    if encoding not in VALID_ENCODINGS:
+        raise CoreAIPolicyError(f"unknown observation encoding {encoding!r}.")
     b = infer_batch_size(batch)
     if require_single and b > 1:
         raise CoreAIPolicyError(
             f"coreai_bridge transport supports only batch_size=1 (got {b}); "
-            "batched transport lands in v1.3.3.")
+            "batched transport lands in v1.3.4.")
 
     # Keep only declared observation inputs (+ task) — never the ground-truth action.
     obs = extract_observation(dict(batch), manifest)
+    expected = getattr(manifest, "observation_features", None) if manifest else None
 
     single: dict[str, Any] = {}
     for k, v in obs.items():
         if k == "task":
             single[k] = v[0] if isinstance(v, (list, tuple)) and v else v
             continue
-        single[k] = serialize_value(_strip_leading_batch(v))
+        stripped = _strip_leading_batch(v)
+        values, shape = _plain_and_shape(stripped)
+        # Validate shape against the manifest BEFORE encoding.
+        if expected and k in expected:
+            want = getattr(expected[k], "shape", None)
+            if want is not None and shape is not None and list(shape) != list(want):
+                raise CoreAIPolicyError(
+                    f"observation {k!r} shape {list(shape)} != manifest {list(want)}.")
+        if audit is not None:
+            audit[k] = {"shape": list(shape) if shape is not None else None}
+        if encoding == NESTED_JSON_V1:
+            single[k] = values          # plain nested JSON — no typed envelope
+        else:
+            single[k] = serialize_value(stripped)  # typed_array_envelope_v1
     return single, observation_sha256(single)
