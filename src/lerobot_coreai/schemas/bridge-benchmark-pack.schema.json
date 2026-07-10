@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/bridge-benchmark-pack.schema.json",
+  "title": "lerobot-coreai bridge benchmark pack manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "bundle_type", "reports", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.bridge_benchmark_pack.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "bundle_type": {"type": "string", "const": "bridge_benchmark"},
+    "policy_path": {"type": ["string", "null"]},
+    "dataset_repo_id": {"type": ["string", "null"]},
+    "reports": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string"}
+    },
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety",
+                   "authorizes_robot_actuation"],
+      "properties": {
+        "proves_bridge_benchmark_reproducibility": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

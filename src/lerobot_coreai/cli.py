@@ -688,6 +688,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_hfm.add_argument("--json", action="store_true")
     p_hfm.set_defaults(func=cmd_hf_metadata)
 
+    # --- package-bridge-benchmark (v1.1.7) — reproducible bridge benchmark pack ---
+    p_pbb = sub.add_parser("package-bridge-benchmark",
+                           help="Bundle bridge/compat/eval-v2/obs reports into a pack (v1.1.7)")
+    p_pbb.add_argument("--compat-report", dest="compat_report", default=None)
+    p_pbb.add_argument("--bridge-report", dest="bridge_report", default=None)
+    p_pbb.add_argument("--registry-report", dest="registry_report", default=None)
+    p_pbb.add_argument("--obs-bridge-report", dest="obs_bridge_report", default=None)
+    p_pbb.add_argument("--eval-v2-dir", dest="eval_v2_dir", default=None,
+                       help="Dir with lerobot_eval_v2_report.json + lerobot_feature_mapping.json")
+    p_pbb.add_argument("--policy.path", dest="policy_path", default=None)
+    p_pbb.add_argument("--dataset.repo_id", dest="dataset_repo_id", default=None)
+    p_pbb.add_argument("--output-dir", dest="output_dir", required=True)
+    p_pbb.add_argument("--json", action="store_true")
+    p_pbb.set_defaults(func=cmd_package_bridge_benchmark)
+
+    # --- verify-bridge-benchmark (v1.1.7) ---
+    p_vbb = sub.add_parser("verify-bridge-benchmark",
+                           help="Verify a bridge benchmark pack: checksums, tamper, claims (v1.1.7)")
+    p_vbb.add_argument("--bundle-dir", dest="bundle_dir", required=True)
+    p_vbb.add_argument("--json", action="store_true")
+    p_vbb.set_defaults(func=cmd_verify_bridge_benchmark)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -726,7 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2747,6 +2769,73 @@ def cmd_hf_metadata(args: argparse.Namespace) -> int:
     print("=" * 50)
     print(build_hf_metadata_markdown(metadata))
     return 0
+
+
+# MARK: - package-bridge-benchmark / verify-bridge-benchmark (v1.1.7)
+
+def cmd_package_bridge_benchmark(args: argparse.Namespace) -> int:
+    """Assemble a reproducible bridge benchmark pack. Fails closed on overclaim."""
+    import json as _json
+
+    from .benchmark_pack import (
+        BenchmarkError, BenchmarkInputs, package_bridge_benchmark,
+    )
+
+    ev2_dir = getattr(args, "eval_v2_dir", None)
+    feature_mapping = eval_v2 = None
+    if ev2_dir:
+        fm = Path(ev2_dir) / "lerobot_feature_mapping.json"
+        ev = Path(ev2_dir) / "lerobot_eval_v2_report.json"
+        feature_mapping = fm if fm.is_file() else None
+        eval_v2 = ev if ev.is_file() else None
+
+    inputs = BenchmarkInputs(
+        compat=Path(args.compat_report) if getattr(args, "compat_report", None) else None,
+        bridge=Path(args.bridge_report) if getattr(args, "bridge_report", None) else None,
+        registry=Path(args.registry_report) if getattr(args, "registry_report", None) else None,
+        obs_bridge=Path(args.obs_bridge_report) if getattr(args, "obs_bridge_report", None) else None,
+        feature_mapping=feature_mapping,
+        eval_v2=eval_v2,
+        policy_path=getattr(args, "policy_path", None),
+        dataset_repo_id=getattr(args, "dataset_repo_id", None),
+    )
+    try:
+        manifest = package_bridge_benchmark(inputs, Path(args.output_dir))
+    except BenchmarkError as e:
+        print(f"error: {e}")
+        return 1
+
+    if args.json:
+        print(_json.dumps(manifest, indent=2))
+        return 0
+    print("lerobot-coreai package-bridge-benchmark")
+    print("=" * 50)
+    for slot, rel in manifest["reports"].items():
+        print(f"  + {slot}: {rel}")
+    print(f"Bundle written to {args.output_dir}")
+    print("Software reproducibility pack — no task-success or physical-safety claim.")
+    return 0
+
+
+def cmd_verify_bridge_benchmark(args: argparse.Namespace) -> int:
+    """Verify a bridge benchmark pack (checksums, tamper, honest claims)."""
+    import json as _json
+
+    from .benchmark_pack import verify_bridge_benchmark
+
+    result = verify_bridge_benchmark(Path(args.bundle_dir))
+    if args.json:
+        print(_json.dumps({"ok": result.ok, "checks": result.checks}, indent=2))
+        return 0 if result.ok else 1
+    print("lerobot-coreai verify-bridge-benchmark")
+    print("=" * 50)
+    for c in result.checks:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']}{detail}")
+    print("=" * 50)
+    print("Benchmark pack verified." if result.ok else "Benchmark pack verification FAILED.")
+    return 0 if result.ok else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
