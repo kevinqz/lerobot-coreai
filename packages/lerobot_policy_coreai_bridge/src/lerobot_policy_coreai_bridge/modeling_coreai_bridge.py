@@ -85,33 +85,46 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 f"invalid CoreAI action contract: {exc}") from exc
 
     def _resolve_protocol(self):
-        """Negotiate the full runner protocol with the bound runner (once).
+        """Negotiate the runner protocol once, honoring runtime_binding_mode (v1.3.6).
 
-        Real path (runner present): capabilities are fetched and any
-        capabilities/transport/protocol failure PROPAGATES — it is never turned
-        into a silent legacy fallback. Legacy is used only when the config opts in
-        via ``allow_legacy_runner_protocol``.
+        - strict/legacy: a runner is REQUIRED. Capabilities are fetched and any
+          capabilities/transport/protocol failure PROPAGATES (never silent legacy).
+          ``legacy`` additionally accepts a runner that announces no protocol.
+        - in_memory: NO wire boundary — for local/test binding against an
+          in-process CoreAI policy with no RunnerClient. Uses the config default
+          encoding and the minimum protocol.
 
-        Local/test path (no runner bound): there is no wire to negotiate, so the
-        config default encoding and the minimum protocol are used. This is not a
-        capabilities failure.
+        require_protocol_negotiation is now expressed by the mode: only in_memory
+        skips negotiation, and it must be chosen explicitly.
         """
         if self._protocol is not None:
             return self._protocol
         from .negotiation import NegotiatedRunnerProtocol, negotiate_runner_protocol
+        mode = self.config.runtime_binding_mode
         runner = getattr(self.coreai_policy, "runner", None)
-        if runner is None or not hasattr(runner, "capabilities"):
+        has_runner = runner is not None and hasattr(runner, "capabilities")
+
+        if not has_runner:
+            if mode != "in_memory":
+                raise PluginBindingError(
+                    "no runner is bound but runtime_binding_mode is "
+                    f"{mode!r}; a runner is required outside 'in_memory' mode.")
             self._protocol = NegotiatedRunnerProtocol(
                 protocol_version=self.config.minimum_runner_protocol,
                 observation_encoding=self.config.observation_encoding_or_default(),
                 supports_batch=False, max_batch_size=1, legacy=True)
             return self._protocol
+
+        if mode == "in_memory":
+            raise PluginBindingError(
+                "runtime_binding_mode='in_memory' must not be used with a bound "
+                "runner; use 'strict' (or 'legacy') for a real wire.")
         caps = runner.capabilities()  # propagate failures — no silent legacy
         self._protocol = negotiate_runner_protocol(
             requested_encoding=self.config.observation_encoding,
             capabilities=caps,
             minimum_protocol=self.config.minimum_runner_protocol,
-            allow_legacy=self.config.allow_legacy_runner_protocol)
+            allow_legacy=(mode == "legacy"))
         return self._protocol
 
     # MARK: - Official runtime binding
@@ -162,11 +175,11 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 raise PluginBindingError(
                     f"action_dim mismatch: manifest {contract.action_dim} != expected "
                     f"{config.expected_action_dim}.")
-        if config.expected_action_horizon is not None and \
-                contract.horizon != config.expected_action_horizon:
+        exp_horizon = config.effective_action_horizon()
+        if exp_horizon is not None and contract.horizon != exp_horizon:
             raise PluginBindingError(
                 f"action_horizon mismatch: manifest {contract.horizon} != expected "
-                f"{config.expected_action_horizon}.")
+                f"{exp_horizon}.")
         rt = getattr(coreai_policy, "robot_type", None)
         if config.expected_robot_type is not None:
             if rt is None:
@@ -177,6 +190,60 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 raise PluginBindingError(
                     f"robot_type mismatch: manifest {rt} != expected "
                     f"{config.expected_robot_type}.")
+        CoreAIBridgePolicy._cross_bind_features(config, coreai_policy, contract)
+
+    @staticmethod
+    def _cross_bind_features(config: CoreAIBridgeConfig, coreai_policy: Any,
+                             contract: Any) -> None:
+        """Validate make_policy-populated input/output features vs the manifest.
+
+        make_policy fills ``cfg.input_features``/``output_features`` from the
+        dataset/env before ``from_pretrained``. Here we hold them against the
+        CoreAI manifest, fail-closed:
+          - every declared input (observation) feature must exist in the manifest,
+            with a matching per-frame shape when the manifest declares one;
+          - the ACTION output feature's last dim must equal the manifest action dim
+            (horizon lives in the action contract, NOT the per-timestep feature).
+        Nothing to check if make_policy has not populated features (standalone use).
+        """
+        from lerobot.configs.types import FeatureType
+        manifest = coreai_policy.manifest
+        obs_feats = getattr(manifest, "observation_features", {}) or {}
+
+        def _manifest_shape(name: str):
+            spec = obs_feats.get(name)
+            if spec is None:
+                return None
+            shape = getattr(spec, "shape", None)
+            if shape is None and isinstance(spec, dict):
+                shape = spec.get("shape")
+            return tuple(shape) if shape else None
+
+        for key, feat in (config.input_features or {}).items():
+            if getattr(feat, "type", None) == FeatureType.ENV:
+                continue
+            if key not in obs_feats:
+                raise PluginBindingError(
+                    f"input feature {key!r} is not declared in the CoreAI manifest "
+                    f"observation features {sorted(obs_feats)}.")
+            m_shape = _manifest_shape(key)
+            f_shape = tuple(getattr(feat, "shape", ()) or ())
+            if m_shape is not None and f_shape and tuple(f_shape) != tuple(m_shape):
+                raise PluginBindingError(
+                    f"input feature {key!r} shape {f_shape} != manifest {m_shape}.")
+
+        action_feats = {k: f for k, f in (config.output_features or {}).items()
+                        if getattr(f, "type", None) == FeatureType.ACTION}
+        if config.output_features and not action_feats:
+            raise PluginBindingError(
+                "output_features present but no ACTION feature; refusing to bind.")
+        for key, feat in action_feats.items():
+            shape = tuple(getattr(feat, "shape", ()) or ())
+            if shape and contract.action_dim is not None and \
+                    shape[-1] != contract.action_dim:
+                raise PluginBindingError(
+                    f"output action feature {key!r} last-dim {shape[-1]} != manifest "
+                    f"action_dim {contract.action_dim}.")
 
     # MARK: - Inference (LeRobot contract)
 

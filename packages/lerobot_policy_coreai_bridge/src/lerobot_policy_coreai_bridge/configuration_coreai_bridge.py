@@ -22,31 +22,60 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     coreai_artifact: str = ""
     coreai_revision: str | None = None
     runner_url_env: str = "COREAI_RUNNER_URL"
-    action_horizon: int = 1
     # Cross-binding expectations verified against the loaded CoreAI manifest.
     expected_robot_type: str | None = None
     expected_action_dim: int | None = None
     expected_action_horizon: int | None = None
+    # Deprecated alias for expected_action_horizon (v1.3.6). Kept for back-compat;
+    # a contradictory explicit value fails in __post_init__. Prefer
+    # expected_action_horizon as the single source of truth.
+    action_horizon: int = 1
     # Batch handling: "single_only" raises clearly on B>1;
-    # "split_and_stack" is reserved for v1.3.6.
+    # "split_and_stack" is reserved for v1.3.7.
     batch_mode: str = "single_only"
     # Observation transport encoding: "auto" (default -> nested_json_v1),
     # "nested_json_v1", or "typed_array_envelope_v1" (only if the runner announces it).
     observation_encoding: str = "auto"
-    # Runner protocol negotiation (v1.3.5). When a runner is bound, capabilities
-    # are fetched and the protocol is negotiated fail-closed:
-    #   - a capabilities/transport failure propagates (never silent legacy);
-    #   - the runner must announce protocol_version >= minimum_runner_protocol;
-    #   - legacy (no announced protocol) is used ONLY when
-    #     allow_legacy_runner_protocol is explicitly True.
-    require_protocol_negotiation: bool = True
-    allow_legacy_runner_protocol: bool = False
+    # Runner protocol binding mode (v1.3.6), replacing the ambiguous boolean pair:
+    #   "strict"    — a runner is REQUIRED; capabilities are fetched and the
+    #                 protocol is negotiated fail-closed (any failure propagates).
+    #   "legacy"    — a runner is required, but a runner that announces no
+    #                 protocol_version is accepted as legacy nested_json_v1.
+    #   "in_memory" — NO wire boundary; for local/test binding against an
+    #                 in-process CoreAI policy with no RunnerClient. Never used by
+    #                 the official from_pretrained path (which always binds a runner).
+    runtime_binding_mode: str = "strict"
     minimum_runner_protocol: str = "coreai-runner.v2"
     # The CoreAI runtime device is separate from the torch host device. The
     # inherited `device` (default from PreTrainedConfig) stays a real torch
     # device so make_policy's `policy.to(cfg.device)` works; runtime_device
     # records that inference actually runs on CoreAI.
     runtime_device: str = "coreai"
+
+    _VALID_BINDING_MODES = ("strict", "legacy", "in_memory")
+
+    def __post_init__(self):
+        parent_post = getattr(super(), "__post_init__", None)
+        if callable(parent_post):
+            parent_post()
+        if self.runtime_binding_mode not in self._VALID_BINDING_MODES:
+            raise ValueError(
+                f"runtime_binding_mode must be one of {self._VALID_BINDING_MODES}, "
+                f"got {self.runtime_binding_mode!r}.")
+        # Reconcile the deprecated action_horizon alias with the source of truth.
+        if (self.expected_action_horizon is not None
+                and self.action_horizon != 1
+                and self.action_horizon != self.expected_action_horizon):
+            raise ValueError(
+                f"contradictory horizons: action_horizon={self.action_horizon} != "
+                f"expected_action_horizon={self.expected_action_horizon}; set only "
+                "expected_action_horizon.")
+
+    def effective_action_horizon(self) -> int | None:
+        """The single horizon source of truth (expected_action_horizon wins)."""
+        if self.expected_action_horizon is not None:
+            return self.expected_action_horizon
+        return self.action_horizon if self.action_horizon != 1 else None
 
     @property
     def observation_delta_indices(self) -> None:
@@ -61,9 +90,30 @@ class CoreAIBridgeConfig(PreTrainedConfig):
         return None
 
     def validate_features(self) -> None:
-        # Feature validation is delegated to the CoreAI manifest / obs-bridge; the
-        # official plugin does not re-impose LeRobot feature constraints here.
-        return None
+        """Validate populated input/output features against declared expectations.
+
+        make_policy fills ``input_features``/``output_features`` from the dataset
+        or env before ``from_pretrained``. The full manifest cross-binding lives in
+        the policy (which has the loaded manifest); here we enforce the invariants
+        that need only the config: an action output feature must exist, and if
+        ``expected_action_dim`` is declared it must match the per-timestep action
+        feature's last dimension (horizon is NOT part of the per-timestep feature).
+        """
+        if not self.output_features:
+            return  # not yet populated (e.g. constructed standalone) — nothing to check
+        from lerobot.configs.types import FeatureType
+        action_feats = {k: f for k, f in self.output_features.items()
+                        if getattr(f, "type", None) == FeatureType.ACTION}
+        if not action_feats:
+            raise ValueError(
+                "coreai_bridge requires an ACTION output feature; none present.")
+        if self.expected_action_dim is not None:
+            for k, f in action_feats.items():
+                shape = tuple(getattr(f, "shape", ()) or ())
+                if shape and shape[-1] != self.expected_action_dim:
+                    raise ValueError(
+                        f"output feature {k!r} action dim {shape[-1]} != "
+                        f"expected_action_dim {self.expected_action_dim}.")
 
     def get_optimizer_preset(self):
         raise NotImplementedError(

@@ -170,19 +170,61 @@ The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
   failure paths (lower/unknown/missing protocol, no common encoding, wrong
   horizon). Runs on both LeRobot 0.6.0 (blocking) and 0.6.1-dev.
 
+## v1.3.6 — canonical artifact + serializable processors + full factory E2E
+
+- **Structured protocol identity** — `ProtocolIdentifier(family, major)` replaces
+  the suffix-only `.vN` compare: the family must match (`coreai-runner.v3` ≠
+  `malicious-runner.v3`), a lower major fails, and a **higher** major is accepted
+  only when capabilities declare `backward_compatible_with` the minimum. A newer
+  major without that declaration fails closed (it may be breaking).
+- **Explicit binding modes** — `runtime_binding_mode` (`strict` | `legacy` |
+  `in_memory`) replaces the ambiguous boolean pair. `strict`/`legacy` **require a
+  bound runner** (no runner → error); `in_memory` is the only mode that skips the
+  wire, for local/in-process binding. `require_protocol_negotiation` is now
+  expressed by the mode.
+- **Real serializable processors** — `_IdentityProcessor` is gone;
+  `make_coreai_bridge_pre_post_processors` returns real
+  `lerobot.processor.PolicyProcessorPipeline` instances (step-empty, with the
+  official transition converters) that the factory loads from
+  `policy_preprocessor.json` / `policy_postprocessor.json`. Identity is allowed
+  only when the manifest declares `contracts.processor` CoreAI ownership;
+  packaging/binding fails closed otherwise.
+- **Canonical artifact** — `lerobot-coreai package-lerobot-plugin-artifact`
+  builds `config.json` / `policy_preprocessor.json` / `policy_postprocessor.json` /
+  `lerobot-coreai.json` / `plugin_artifact_manifest.json` / `checksums.json` /
+  `README.md`. `config.json` carries `coreai_artifact=""` (the root) and only the
+  runner env-var **name** — never a URL, token, or local path.
+  `verify-lerobot-plugin-artifact` checks schemas, checksums (tamper), versions,
+  processor reload, ownership, protocol floor, external-ref pinning
+  (revision+sha256 required), forbidden claims, secrets, and symlink escape.
+- **Feature cross-binding** — after `make_policy` fills
+  `cfg.input_features`/`output_features`, `from_pretrained` validates them against
+  the manifest: every input feature must be a declared observation feature (with
+  matching per-frame shape), and the ACTION output feature's last dim must equal
+  the manifest action dim (horizon lives in the action contract, not the
+  per-timestep feature). `validate_features()` is implemented; contradictory
+  `action_horizon`/`expected_action_horizon` fail.
+- **Full official-factory E2E, no mocks** (`tests/test_factory_e2e.py`) —
+  `register_third_party_plugins → PreTrainedConfig.from_pretrained(artifact) →
+  make_policy(cfg, ds_meta=…) → make_pre_post_processors(cfg, pretrained_path=…) →
+  post(policy.select_action(pre(batch))) → Tensor[1, A]` against a real
+  `ThreadingHTTPServer`. Nothing patched (not `CoreAIPolicy`, `RunnerClient`,
+  `make_policy`, or the processors). Asserts one predict request, no label
+  leakage on the wire (the `pre` pipeline injects `action`/`next.*` placeholders
+  that the transport allowlist drops), negotiated protocol/encoding/hash in
+  `options`, and fail-closed feature mismatch. Runs on 0.6.0 (blocking) + 0.6.1-dev.
+
 ## Not yet
 
-- Serializable `PolicyProcessorPipeline` (real `policy_preprocessor.json` /
-  `policy_postprocessor.json`) + canonical publishable artifact
-  (`config.json` / `lerobot-coreai.json` / `checksums.json` / …) + the full
-  official `make_policy` → `make_pre_post_processors` composition E2E — v1.3.6.
-  LeRobot's `PolicyProcessorPipeline` restructures the batch (an empty pipeline
-  is not a pass-through), so swapping it in changes the pre→policy→post
-  composition and must be validated by the full `make_policy` E2E — its own PR.
-  v1.3.5's E2E proves the `from_pretrained → RunnerClient → HTTP → negotiation →
-  POST → validation` chain without mocks; v1.3.6 adds the factory/processor legs.
-- Full batched evaluation (`batch_size > 1`) — v1.3.6.
-- Official `lerobot-eval` end-to-end certification — v1.4.0.
+- Formal `plugin_factory_e2e_report.json/md/jsonl` evidence artifacts +
+  artifact-backed **promotion** of `plugin_compat` levels (`policy_factory` /
+  `processor_pipeline` are still reported `partial` by the import-driven profile).
+  The E2E itself is the evidence today (run in CI on both LeRobot targets); the
+  signed compatibility-certificate v2 that promotes levels by evidence hashes is
+  v1.3.9 per the roadmap.
+- Full batched evaluation (`batch_size > 1`) — v1.3.7.
+- Official `lerobot-eval` end-to-end certification — v1.4.0; Apple CoreAI runtime
+  certification — v1.4.1.
 
 Guarded real egress remains a separately enforced runtime. `official_eval_certified`
 stays `false` until a real official-eval E2E.

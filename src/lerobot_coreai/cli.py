@@ -894,11 +894,84 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--json", action="store_true")
     p_compare.set_defaults(func=cmd_compare)
 
+    # --- canonical LeRobot plugin artifact (v1.3.6) ---
+    p_pkg_plugin = sub.add_parser(
+        "package-lerobot-plugin-artifact",
+        help="Build a canonical, factory-loadable LeRobot plugin artifact (v1.3.6)")
+    p_pkg_plugin.add_argument("--coreai-artifact", dest="coreai_artifact", required=True,
+                              help="Local dir/file or HF repo of the CoreAI artifact")
+    p_pkg_plugin.add_argument("--output-dir", dest="output_dir", required=True)
+    p_pkg_plugin.add_argument("--runner-url-env", dest="runner_url_env",
+                              default="COREAI_RUNNER_URL")
+    p_pkg_plugin.add_argument("--minimum-runner-protocol", dest="minimum_runner_protocol",
+                              default="coreai-runner.v2")
+    p_pkg_plugin.add_argument("--revision", dest="revision", default="main")
+    p_pkg_plugin.add_argument("--external", action="store_true",
+                              help="Record an external {repo,revision,sha256} reference")
+    p_pkg_plugin.add_argument("--external-revision", dest="external_revision", default=None)
+    p_pkg_plugin.add_argument("--external-sha256", dest="external_sha256", default=None)
+    p_pkg_plugin.add_argument("--json", action="store_true")
+    p_pkg_plugin.set_defaults(func=cmd_package_lerobot_plugin_artifact)
+
+    p_verify_plugin = sub.add_parser(
+        "verify-lerobot-plugin-artifact",
+        help="Verify a canonical LeRobot plugin artifact, fail-closed (v1.3.6)")
+    p_verify_plugin.add_argument("--artifact", dest="artifact", required=True)
+    p_verify_plugin.add_argument("--shallow", action="store_true",
+                                 help="Skip lerobot-dependent deep checks")
+    p_verify_plugin.add_argument("--json", action="store_true")
+    p_verify_plugin.set_defaults(func=cmd_verify_lerobot_plugin_artifact)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_package_lerobot_plugin_artifact(args: argparse.Namespace) -> int:
+    """Delegate to the companion plugin's artifact builder (needs the plugin)."""
+    import json as _json
+    try:
+        from lerobot_policy_coreai_bridge import build_plugin_artifact
+    except ImportError:
+        print("error: this command requires the companion package "
+              "'lerobot_policy_coreai_bridge' (pip install lerobot + the plugin).",
+              file=sys.stderr)
+        return 4
+    pm = build_plugin_artifact(
+        args.coreai_artifact, args.output_dir,
+        runner_url_env=args.runner_url_env,
+        minimum_runner_protocol=args.minimum_runner_protocol,
+        revision=args.revision, external=args.external,
+        external_revision=args.external_revision, external_sha256=args.external_sha256)
+    if args.json:
+        print(_json.dumps(pm, indent=2))
+    else:
+        print(f"Plugin artifact written to {args.output_dir}")
+        print("Proves factory/protocol compatibility only — not official eval, "
+              "task success, or physical safety.")
+    return 0
+
+
+def cmd_verify_lerobot_plugin_artifact(args: argparse.Namespace) -> int:
+    """Delegate to the companion plugin's artifact verifier (fail-closed)."""
+    import json as _json
+    try:
+        from lerobot_policy_coreai_bridge import verify_plugin_artifact
+    except ImportError:
+        print("error: this command requires the companion package "
+              "'lerobot_policy_coreai_bridge'.", file=sys.stderr)
+        return 4
+    result = verify_plugin_artifact(args.artifact, deep=not args.shallow)
+    if args.json:
+        print(_json.dumps(result.to_dict(), indent=2))
+    else:
+        for name, status in result.checks.items():
+            mark = "✓" if status == "passed" else "✗"
+            print(f"  {mark} {name}: {status}")
+        print(f"Artifact {'VERIFIED' if result.ok else 'FAILED verification'}.")
+    return 0 if result.ok else 1
 
 
 def cmd_not_implemented(args: argparse.Namespace) -> int:

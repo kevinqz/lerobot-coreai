@@ -92,6 +92,8 @@ class RunnerClient:
             observation_encodings=tuple(encodings),
             supports_batch=bool(batching.get("supported", False)),
             max_batch_size=batching.get("max_batch_size"),
+            backward_compatible_with=tuple(
+                data.get("backward_compatible_with") or ()),
             raw=data,
         )
 
