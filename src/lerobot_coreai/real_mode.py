@@ -15,11 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import signal
+
 from . import __version__
 from .errors import CoreAIPolicyError
 from .observation_adapters import ObservationAdapterConfig, adapt_observation
 from .policy import CoreAIPolicy
 from .reports import now_iso, save_json
+from .real_arming import build_arming_manifest, build_arming_markdown
 from .real_egress import DeadmanSwitch, RateLimiter, RealEgressGuard
 from .real_metrics import (
     RealMetricsCollector, build_real_metrics_markdown, build_real_metrics_report,
@@ -74,6 +77,8 @@ class RealModeConfig:
     redact_runner_url: bool = False
     redact_robot_endpoint: bool = False
     redact_operator: bool = False
+    # Abort controls (v1.0.6).
+    abort_file: Path | None = None
 
     def has_observation_config(self) -> bool:
         return bool(
@@ -139,6 +144,13 @@ def _redact(obj: dict[str, Any], config: RealModeConfig) -> dict[str, Any]:
             d["readiness"]["report"] = _basename(d["readiness"]["report"])
         if isinstance(d.get("approval"), dict) and d["approval"].get("path"):
             d["approval"]["path"] = _basename(d["approval"]["path"])
+        # Arming-manifest bindings paths (hashes are kept — they leak nothing).
+        if isinstance(d.get("bindings"), dict):
+            for k in ("safety_profile", "readiness_report", "approval"):
+                if d["bindings"].get(k):
+                    d["bindings"][k] = _basename(d["bindings"][k])
+        if isinstance(d.get("abort_controls"), dict) and d["abort_controls"].get("abort_file"):
+            d["abort_controls"]["abort_file"] = _basename(d["abort_controls"]["abort_file"])
     return d
 
 
@@ -275,6 +287,28 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
     adapter_connected = False
     metrics = RealMetricsCollector(fps=config.fps)
     loop_start = time.monotonic()
+
+    # v1.0.6: operator abort controls. SIGINT (Ctrl-C) and/or the appearance of
+    # an --abort-file both trigger an e-stop and stop the session cleanly.
+    abort = {"triggered": False, "reason": None}
+
+    def _on_sigint(signum, frame):  # pragma: no cover - exercised via handler ref
+        abort["triggered"] = True
+        abort["reason"] = "operator_abort_sigint"
+
+    prev_sigint = None
+    try:
+        prev_sigint = signal.signal(signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):
+        prev_sigint = None  # not in main thread; abort-file still works
+
+    def _abort_reason() -> str | None:
+        if abort["triggered"]:
+            return abort["reason"] or "operator_abort"
+        if config.abort_file and Path(config.abort_file).exists():
+            return "operator_abort_file"
+        return None
+
     try:
         policy = CoreAIPolicy.from_pretrained(
             config.policy_path, runner_url=config.runner_url,
@@ -286,10 +320,33 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
         save_json(output_dir / "real_session.json", session)
         deadman.heartbeat()
         trace.write("real.session.armed", {"session_id": session_id})
+        # v1.0.6: record the armed envelope before the first action.
+        arming = build_arming_manifest(
+            session_id=session_id, created_at=created, operator=config.operator,
+            robot_adapter=config.robot_adapter, robot_type=config.robot_type,
+            policy_path=config.policy_path, safety_profile=config.safety_profile,
+            readiness_report=config.readiness_report, approval=config.approval,
+            approval_id=approval_id, max_steps=config.max_steps,
+            duration_seconds=config.duration_seconds, fps=config.fps,
+            deadman_timeout_s=config.deadman_timeout_s, deadman_enabled=deadman_enabled,
+            attestations={
+                "real_hardware": config.attest_real_hardware,
+                "physical_estop": config.attest_physical_estop,
+                "workspace_clear": config.attest_workspace_clear,
+            },
+            abort_file=config.abort_file)
+        save_json(output_dir / "real_arming_manifest.json", _redact(arming, config))
+        (output_dir / "real_arming_manifest.md").write_text(build_arming_markdown(arming))
         loop_start = time.monotonic()
 
         for step in range(config.max_steps or 0):
             step_start = time.monotonic()
+            # v1.0.6: operator abort takes precedence over everything else.
+            _ar = _abort_reason()
+            if _ar is not None:
+                guard.trigger_estop(_ar)
+                stop_reason = "operator_abort"
+                break
             # Bounded by duration as well as step count.
             if config.duration_seconds is not None and \
                     (time.monotonic() - loop_start) >= config.duration_seconds:
@@ -351,6 +408,12 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
                 adapter.disconnect()
                 trace.write("real.adapter.disconnect", {})
         session["status"] = "failed"
+    finally:
+        if prev_sigint is not None:
+            try:
+                signal.signal(signal.SIGINT, prev_sigint)
+            except (ValueError, OSError):
+                pass
 
     # v1.0.5: per-step runtime metrics.
     if metrics.steps:

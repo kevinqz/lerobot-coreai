@@ -582,6 +582,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_real.add_argument("--redact-runner-url", dest="redact_runner_url", action="store_true")
     p_real.add_argument("--redact-robot-endpoint", dest="redact_robot_endpoint", action="store_true")
     p_real.add_argument("--redact-operator", dest="redact_operator", action="store_true")
+    # Abort controls (v1.0.6).
+    p_real.add_argument("--abort-file", dest="abort_file", default=None,
+                        help="Path polled each step; if it appears the session e-stops "
+                             "and stops (operator_abort). SIGINT (Ctrl-C) does the same.")
     p_real.add_argument("--output-dir", dest="output_dir", required=True)
     p_real.add_argument("--i-understand-this-may-move-real-hardware",
                         dest="attest_real_hardware", action="store_true")
@@ -2311,6 +2315,7 @@ def cmd_real(args: argparse.Namespace) -> int:
         redact_runner_url=getattr(args, "redact_runner_url", False),
         redact_robot_endpoint=getattr(args, "redact_robot_endpoint", False),
         redact_operator=getattr(args, "redact_operator", False),
+        abort_file=Path(args.abort_file) if getattr(args, "abort_file", None) else None,
     )
 
     if not args.json:

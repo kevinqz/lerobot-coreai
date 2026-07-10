@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/real-arming-manifest.schema.json",
+  "title": "lerobot-coreai real arming manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "session_id",
+    "armed_at",
+    "robot",
+    "policy_path",
+    "limits",
+    "abort_controls",
+    "bindings"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.real_arming.v0"},
+    "session_id": {"type": "string"},
+    "armed_at": {"type": "string"},
+    "operator": {"type": ["string", "null"]},
+    "robot": {
+      "type": "object",
+      "required": ["adapter", "type"],
+      "properties": {
+        "adapter": {"type": "string"},
+        "type": {"type": "string"}
+      }
+    },
+    "policy_path": {"type": "string"},
+    "approval_id": {"type": ["string", "null"]},
+    "limits": {
+      "type": "object",
+      "required": ["max_steps", "fps", "deadman_timeout_s", "deadman_enabled"],
+      "properties": {
+        "max_steps": {"type": ["integer", "null"]},
+        "duration_seconds": {"type": ["number", "null"]},
+        "fps": {"type": "number"},
+        "deadman_timeout_s": {"type": "number"},
+        "deadman_enabled": {"type": "boolean"}
+      }
+    },
+    "abort_controls": {
+      "type": "object",
+      "required": ["sigint", "abort_file"],
+      "properties": {
+        "sigint": {"type": "boolean"},
+        "abort_file": {"type": ["string", "null"]}
+      }
+    },
+    "attestations": {"type": "object"},
+    "bindings": {
+      "type": "object",
+      "properties": {
+        "safety_profile": {"type": ["string", "null"]},
+        "safety_profile_sha256": {"type": ["string", "null"]},
+        "readiness_report": {"type": ["string", "null"]},
+        "readiness_report_sha256": {"type": ["string", "null"]},
+        "approval": {"type": ["string", "null"]},
+        "approval_sha256": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
