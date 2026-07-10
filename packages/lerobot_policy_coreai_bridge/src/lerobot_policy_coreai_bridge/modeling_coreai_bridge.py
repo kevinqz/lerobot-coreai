@@ -61,35 +61,58 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self._action_contract = None
-        self._negotiated_encoding: str | None = None
+        self._protocol = None
         if coreai_policy is not None:
             self._bind_action_contract(coreai_policy)
         self.register_buffer("_sentinel", torch.zeros(1), persistent=False)
 
     def _bind_action_contract(self, coreai_policy: Any) -> None:
+        """Parse the manifest action contract, fail-closed (v1.3.5).
+
+        A malformed contract must not silently degrade to chunk/no-horizon
+        validation; it is a binding error.
+        """
+        manifest = getattr(coreai_policy, "manifest", None)
+        if manifest is None:
+            # No manifest bound (local/test path): nothing to fail closed on.
+            self._action_contract = None
+            return
         from lerobot_coreai.action_contract import parse_action_contract_from_manifest
         try:
-            self._action_contract = parse_action_contract_from_manifest(
-                coreai_policy.manifest)
-        except Exception:
-            self._action_contract = None
+            self._action_contract = parse_action_contract_from_manifest(manifest)
+        except Exception as exc:
+            raise PluginBindingError(
+                f"invalid CoreAI action contract: {exc}") from exc
 
-    def _resolve_encoding(self) -> str:
-        """Negotiate the observation encoding with the bound runner (once)."""
-        if self._negotiated_encoding is not None:
-            return self._negotiated_encoding
-        from .negotiation import negotiate_observation_encoding
-        caps = None
+    def _resolve_protocol(self):
+        """Negotiate the full runner protocol with the bound runner (once).
+
+        Real path (runner present): capabilities are fetched and any
+        capabilities/transport/protocol failure PROPAGATES — it is never turned
+        into a silent legacy fallback. Legacy is used only when the config opts in
+        via ``allow_legacy_runner_protocol``.
+
+        Local/test path (no runner bound): there is no wire to negotiate, so the
+        config default encoding and the minimum protocol are used. This is not a
+        capabilities failure.
+        """
+        if self._protocol is not None:
+            return self._protocol
+        from .negotiation import NegotiatedRunnerProtocol, negotiate_runner_protocol
         runner = getattr(self.coreai_policy, "runner", None)
-        if runner is not None and hasattr(runner, "capabilities"):
-            try:
-                caps = runner.capabilities()
-            except Exception:
-                caps = None
-        self._negotiated_encoding = negotiate_observation_encoding(
-            self.config.observation_encoding, caps,
-            allow_legacy=(caps is None))  # no runner in tests -> legacy nested_json
-        return self._negotiated_encoding
+        if runner is None or not hasattr(runner, "capabilities"):
+            self._protocol = NegotiatedRunnerProtocol(
+                protocol_version=self.config.minimum_runner_protocol,
+                observation_encoding=self.config.observation_encoding_or_default(),
+                supports_batch=False, max_batch_size=1, legacy=True)
+            return self._protocol
+        caps = runner.capabilities()  # propagate failures — no silent legacy
+        self._protocol = negotiate_runner_protocol(
+            requested_encoding=self.config.observation_encoding,
+            capabilities=caps,
+            minimum_protocol=self.config.minimum_runner_protocol,
+            allow_legacy=self.config.allow_legacy_runner_protocol)
+        return self._protocol
 
     # MARK: - Official runtime binding
 
@@ -159,6 +182,9 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
 
     def reset(self) -> None:
         self._queue.clear()
+        # Invalidate the negotiated protocol: a runner may restart with different
+        # capabilities, so re-negotiate on the next inference (v1.3.5).
+        self._protocol = None
         if self.coreai_policy is not None and hasattr(self.coreai_policy, "reset"):
             self.coreai_policy.reset()
 
@@ -166,8 +192,8 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         b = _infer_batch_size(batch)
         if b > 1 and self.config.batch_mode == "single_only":
             raise PluginBindingError(
-                f"coreai_bridge v1.3.1 supports only batch_size=1 (got {b}); "
-                "batched evaluation lands in v1.3.2.")
+                f"coreai_bridge supports only batch_size=1 (got {b}); "
+                "batched evaluation lands in v1.3.6.")
 
     def _tensor(self, action: Any) -> torch.Tensor:
         t = torch.as_tensor(action, dtype=torch.float32, device=self._sentinel.device)
@@ -180,9 +206,9 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         from .transport import prepare_single_coreai_observation
         manifest = getattr(self.coreai_policy, "manifest", None)
         audit: dict[str, Any] = {}
-        encoding = self._resolve_encoding()
+        proto = self._resolve_protocol()
         obs, sha = prepare_single_coreai_observation(
-            batch, manifest, encoding=encoding, audit=audit)
+            batch, manifest, encoding=proto.observation_encoding, audit=audit)
         self.last_observation_sha256 = sha
         self.last_observation_audit = audit
         return obs, sha
@@ -192,17 +218,19 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
         self._require_single_batch(batch)
         obs, sha = self._coreai_observation(batch)
-        encoding = self._resolve_encoding()
+        proto = self._resolve_protocol()
         runner_options = {
-            "protocol_version": "coreai-runner.v2",
-            "observation_encoding": encoding,
+            # The negotiated protocol/encoding — never a hardcoded constant.
+            "protocol_version": proto.protocol_version,
+            "observation_encoding": proto.observation_encoding,
             "observation_schema_version": "coreai-observation.v1",
             "observation_sha256": sha,
         }
-        try:
-            raw = self.coreai_policy.predict_action_chunk(obs, runner_options=runner_options)
-        except TypeError:  # a CoreAIPolicy without runner_options (older/fake)
-            raw = self.coreai_policy.predict_action_chunk(obs)
+        # No TypeError fallback (v1.3.5): the companion requires
+        # lerobot-coreai>=1.3.5, whose predict_action_chunk accepts runner_options.
+        # A TypeError raised inside inference must not be mistaken for a signature
+        # mismatch and silently re-run (which could double-advance a stateful runner).
+        raw = self.coreai_policy.predict_action_chunk(obs, runner_options=runner_options)
 
         # Strict normalization + validation, using the manifest action contract
         # for representation and horizon when known.

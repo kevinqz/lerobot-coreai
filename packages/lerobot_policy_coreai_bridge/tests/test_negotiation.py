@@ -5,7 +5,11 @@ from dataclasses import dataclass
 import pytest
 
 from lerobot_coreai.errors import CoreAIPolicyError
-from lerobot_policy_coreai_bridge.negotiation import negotiate_observation_encoding
+from lerobot_policy_coreai_bridge.negotiation import (
+    NegotiatedRunnerProtocol,
+    negotiate_observation_encoding,
+    negotiate_runner_protocol,
+)
 from lerobot_policy_coreai_bridge.transport import (
     NESTED_JSON_V1, TYPED_ARRAY_ENVELOPE_V1,
 )
@@ -14,6 +18,9 @@ from lerobot_policy_coreai_bridge.transport import (
 @dataclass
 class _Caps:
     observation_encodings: tuple = ()
+    protocol_version: str | None = None
+    supports_batch: bool = False
+    max_batch_size: int | None = None
 
 
 def test_auto_picks_first_common_encoding():
@@ -54,3 +61,57 @@ def test_no_common_encoding_fails():
     caps = _Caps(observation_encodings=("some_future_v9",))
     with pytest.raises(CoreAIPolicyError):
         negotiate_observation_encoding("auto", caps)
+
+
+# --- full runner-protocol negotiation (v1.3.5) ---
+
+def _v2_caps(**kw):
+    return _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="coreai-runner.v2", **kw)
+
+
+def test_protocol_v2_negotiates_and_uses_announced_version():
+    neg = negotiate_runner_protocol(
+        requested_encoding="auto", capabilities=_v2_caps(supports_batch=True,
+                                                         max_batch_size=4))
+    assert isinstance(neg, NegotiatedRunnerProtocol)
+    assert neg.protocol_version == "coreai-runner.v2"   # announced, not hardcoded
+    assert neg.observation_encoding == NESTED_JSON_V1
+    assert neg.supports_batch is True and neg.max_batch_size == 4
+    assert neg.legacy is False
+
+
+def test_newer_protocol_is_accepted():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="coreai-runner.v3")
+    neg = negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
+    assert neg.protocol_version == "coreai-runner.v3"
+
+
+def test_lower_protocol_fails():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="coreai-runner.v1")
+    with pytest.raises(CoreAIPolicyError):
+        negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
+
+
+def test_unknown_protocol_fails():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="something-weird")
+    with pytest.raises(CoreAIPolicyError):
+        negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
+
+
+def test_missing_protocol_without_legacy_fails():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,), protocol_version=None)
+    with pytest.raises(CoreAIPolicyError):
+        negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
+
+
+def test_missing_protocol_with_legacy_warns():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,), protocol_version=None)
+    with pytest.warns(RuntimeWarning):
+        neg = negotiate_runner_protocol(
+            requested_encoding="auto", capabilities=caps, allow_legacy=True)
+    assert neg.legacy is True
+    assert neg.protocol_version == "coreai-runner.v2"

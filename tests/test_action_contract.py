@@ -4,6 +4,7 @@ import json
 from importlib.resources import files
 
 import jsonschema
+import pytest
 
 from lerobot_coreai.action_contract import (
     ACTION_CONTRACT_SCHEMA_VERSION, ActionContract, BatchContract,
@@ -63,3 +64,32 @@ def test_report_schema_valid_and_honest():
     schema = json.loads(files("lerobot_coreai.schemas").joinpath(
         "action-contract.schema.json").read_text())
     jsonschema.validate(report, schema)
+
+
+# --- fail-closed on semantically invalid contracts (v1.3.5) ---
+
+def test_single_with_horizon_gt_1_fails():
+    with pytest.raises(ValueError):
+        parse_action_contract_from_manifest(
+            {"contracts": {"action": {"representation": "single", "horizon": 16,
+                                      "action_dim": 7}}})
+
+
+def test_single_with_horizon_1_is_ok():
+    c = parse_action_contract_from_manifest(
+        {"contracts": {"action": {"representation": "single", "horizon": 1,
+                                  "action_dim": 7}}})
+    assert c.representation == "single" and c.horizon == 1
+
+
+def test_unknown_representation_fails():
+    with pytest.raises(ValueError):
+        parse_action_contract_from_manifest(
+            {"contracts": {"action": {"representation": "bogus", "horizon": 1}}})
+
+
+def test_chunk_with_horizon_0_fails():
+    with pytest.raises(ValueError):
+        parse_action_contract_from_manifest(
+            {"contracts": {"action": {"representation": "chunk", "horizon": 0,
+                                      "action_dim": 7}}})

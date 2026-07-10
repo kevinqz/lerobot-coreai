@@ -103,9 +103,24 @@ def parse_action_contract_from_manifest(manifest) -> ActionContract:
         else:
             explicit = getattr(manifest, "action_contract", None)
     if isinstance(explicit, dict):
+        representation = explicit.get("representation", _CHUNK)
+        horizon = int(explicit.get("horizon", 1))
+        # Fail closed on semantically invalid contracts (v1.3.5): an unknown
+        # representation, or single-with-horizon!=1, is a manifest error — not a
+        # value to silently coerce.
+        if representation not in (_SINGLE, _CHUNK):
+            raise ValueError(
+                f"invalid action representation {representation!r} "
+                f"(expected {_SINGLE!r} or {_CHUNK!r}).")
+        if representation == _SINGLE and horizon != 1:
+            raise ValueError(
+                f"representation=single requires horizon=1, got horizon={horizon}.")
+        if representation == _CHUNK and horizon < 1:
+            raise ValueError(
+                f"representation=chunk requires horizon>=1, got horizon={horizon}.")
         return ActionContract(
-            representation=explicit.get("representation", _CHUNK),
-            horizon=int(explicit.get("horizon", 1)),
+            representation=representation,
+            horizon=horizon,
             action_dim=explicit.get("action_dim"),
             # v1 uses "selection_semantics"; v0 used "select_action_semantics".
             select_action_semantics=explicit.get(

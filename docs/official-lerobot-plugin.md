@@ -138,15 +138,51 @@ The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
   and a wrong-horizon runner output now **fails** (v1.3.3's validator was always
   called in `chunk` mode with no horizon).
 
+## v1.3.5 — strict protocol binding + hermetic B=1 E2E (no mocks)
+
+- **`NegotiatedRunnerProtocol`** — negotiation now returns a structured result
+  (`protocol_version` / `observation_encoding` / `supports_batch` /
+  `max_batch_size` / `legacy`). The runner's announced `protocol_version` is
+  validated against `config.minimum_runner_protocol` (default `coreai-runner.v2`):
+  an absent (without opt-in), unknown, or lower protocol **fails closed**. The
+  wire request carries the *negotiated* version, never a hardcoded constant.
+- **No silent legacy** — a capabilities/transport/protocol failure now
+  **propagates**; the old catch-all that turned any failure into
+  `nested_json_v1` is gone. Legacy is opt-in via
+  `allow_legacy_runner_protocol=True`. Config gains `require_protocol_negotiation`,
+  `allow_legacy_runner_protocol`, `minimum_runner_protocol`.
+- **No `TypeError` fallback** — the second `predict_action_chunk` call (which
+  could double-advance a stateful runner) is removed; the companion requires
+  `lerobot-coreai>=1.3.5`, whose signature accepts `runner_options`.
+- **Action contract fails closed** — a malformed contract raises
+  `PluginBindingError` instead of degrading to chunk/no-horizon; the base parser
+  enforces `representation=single ⇒ horizon=1` and `chunk ⇒ horizon≥1`.
+- **`reset()` re-negotiates** — the cached protocol is invalidated so a restarted
+  runner with different capabilities is re-negotiated on the next inference.
+- **Hermetic B=1 E2E, no mocks** (`tests/test_e2e_http_no_mocks.py`) — a real
+  `ThreadingHTTPServer` implements `/v1/health`, `/v1/capabilities`,
+  `/v1/predict`; a real `CoreAIBridgePolicy.from_pretrained` loads a local
+  canonical artifact, opens a real `RunnerClient`, negotiates over HTTP, POSTs a
+  real observation, and the strict validator yields `Tensor[1, A]` — nothing is
+  patched. Asserts the wire payload (batch dim stripped, `task` list→str,
+  no `action`/`index`/`reward`/`timestamp` leakage), negotiated
+  protocol/encoding/hash in `options`, no secret persisted, and fail-closed
+  failure paths (lower/unknown/missing protocol, no common encoding, wrong
+  horizon). Runs on both LeRobot 0.6.0 (blocking) and 0.6.1-dev.
+
 ## Not yet
 
-- Full batched evaluation (`batch_size > 1`) — v1.3.5.
-- Real serializable `PolicyProcessorPipeline` + canonical Hub artifact layout
-  (`config.json` / `policy_preprocessor.json` / …) — v1.3.5. LeRobot's
-  `PolicyProcessorPipeline` restructures the batch (an empty pipeline is not a
-  pass-through), so swapping it in changes the pre→policy→post composition and
-  must be validated by the full `make_policy` E2E — its own PR.
-- Live end-to-end `make_policy` → processors → fake-HTTP-runner test — v1.3.5.
+- Serializable `PolicyProcessorPipeline` (real `policy_preprocessor.json` /
+  `policy_postprocessor.json`) + canonical publishable artifact
+  (`config.json` / `lerobot-coreai.json` / `checksums.json` / …) + the full
+  official `make_policy` → `make_pre_post_processors` composition E2E — v1.3.6.
+  LeRobot's `PolicyProcessorPipeline` restructures the batch (an empty pipeline
+  is not a pass-through), so swapping it in changes the pre→policy→post
+  composition and must be validated by the full `make_policy` E2E — its own PR.
+  v1.3.5's E2E proves the `from_pretrained → RunnerClient → HTTP → negotiation →
+  POST → validation` chain without mocks; v1.3.6 adds the factory/processor legs.
+- Full batched evaluation (`batch_size > 1`) — v1.3.6.
 - Official `lerobot-eval` end-to-end certification — v1.4.0.
 
-Guarded real egress remains a separately enforced runtime.
+Guarded real egress remains a separately enforced runtime. `official_eval_certified`
+stays `false` until a real official-eval E2E.

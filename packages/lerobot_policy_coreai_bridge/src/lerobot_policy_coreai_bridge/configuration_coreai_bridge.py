@@ -28,11 +28,20 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     expected_action_dim: int | None = None
     expected_action_horizon: int | None = None
     # Batch handling: "single_only" raises clearly on B>1;
-    # "split_and_stack" is reserved for v1.3.4.
+    # "split_and_stack" is reserved for v1.3.6.
     batch_mode: str = "single_only"
     # Observation transport encoding: "auto" (default -> nested_json_v1),
     # "nested_json_v1", or "typed_array_envelope_v1" (only if the runner announces it).
     observation_encoding: str = "auto"
+    # Runner protocol negotiation (v1.3.5). When a runner is bound, capabilities
+    # are fetched and the protocol is negotiated fail-closed:
+    #   - a capabilities/transport failure propagates (never silent legacy);
+    #   - the runner must announce protocol_version >= minimum_runner_protocol;
+    #   - legacy (no announced protocol) is used ONLY when
+    #     allow_legacy_runner_protocol is explicitly True.
+    require_protocol_negotiation: bool = True
+    allow_legacy_runner_protocol: bool = False
+    minimum_runner_protocol: str = "coreai-runner.v2"
     # The CoreAI runtime device is separate from the torch host device. The
     # inherited `device` (default from PreTrainedConfig) stays a real torch
     # device so make_policy's `policy.to(cfg.device)` works; runtime_device

@@ -24,7 +24,7 @@ class _FakeCoreAI:
         self.manifest = {"contracts": {"action": {
             "representation": "chunk", "horizon": horizon, "action_dim": action_dim}}}
 
-    def predict_action_chunk(self, batch):
+    def predict_action_chunk(self, batch, runner_options=None, **kw):
         return self._chunk
 
     def reset(self):
