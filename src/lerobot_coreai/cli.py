@@ -710,6 +710,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_vbb.add_argument("--json", action="store_true")
     p_vbb.set_defaults(func=cmd_verify_bridge_benchmark)
 
+    # --- provenance-create / sign-artifact / verify-signature (v1.2.0) ---
+    p_prov = sub.add_parser("provenance-create",
+                            help="Create a provenance manifest for an artifact dir (v1.2.0)")
+    p_prov.add_argument("--artifact-dir", dest="artifact_dir", required=True)
+    p_prov.add_argument("--artifact-type", dest="artifact_type", required=True)
+    p_prov.add_argument("--output", dest="output", required=True)
+    p_prov.add_argument("--json", action="store_true")
+    p_prov.set_defaults(func=cmd_provenance_create)
+
+    p_sign = sub.add_parser("sign-artifact",
+                            help="Sign an artifact's provenance + checksums + manifest (v1.2.0)")
+    p_sign.add_argument("--artifact-dir", dest="artifact_dir", required=True)
+    p_sign.add_argument("--provenance", dest="provenance", required=True)
+    p_sign.add_argument("--key-env", dest="key_env", default=None,
+                        help="Env var holding the Ed25519 private seed (hex/base64)")
+    p_sign.add_argument("--key-file", dest="key_file", default=None,
+                        help="File holding the Ed25519 private seed (hex/base64)")
+    p_sign.add_argument("--signer-name", dest="signer_name", default=None)
+    p_sign.add_argument("--output", dest="output", required=True)
+    p_sign.add_argument("--json", action="store_true")
+    p_sign.set_defaults(func=cmd_sign_artifact)
+
+    p_vsig = sub.add_parser("verify-signature",
+                            help="Verify a signed artifact against provenance + trust policy (v1.2.0)")
+    p_vsig.add_argument("--artifact-dir", dest="artifact_dir", required=True)
+    p_vsig.add_argument("--provenance", dest="provenance", required=True)
+    p_vsig.add_argument("--signature", dest="signature", required=True)
+    p_vsig.add_argument("--trust-policy", dest="trust_policy", default=None)
+    p_vsig.add_argument("--json", action="store_true")
+    p_vsig.set_defaults(func=cmd_verify_signature)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -748,7 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2835,6 +2866,114 @@ def cmd_verify_bridge_benchmark(args: argparse.Namespace) -> int:
         print(f"{mark} {c['name']}{detail}")
     print("=" * 50)
     print("Benchmark pack verified." if result.ok else "Benchmark pack verification FAILED.")
+    return 0 if result.ok else 1
+
+
+# MARK: - provenance-create / sign-artifact / verify-signature (v1.2.0)
+
+def cmd_provenance_create(args: argparse.Namespace) -> int:
+    """Create a provenance manifest for an artifact directory."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .provenance import build_provenance, build_provenance_markdown
+
+    try:
+        prov = build_provenance(Path(args.artifact_dir), args.artifact_type)
+    except CoreAIPolicyError as e:
+        print(f"error: {e}")
+        return 1
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(prov, indent=2))
+    out.with_suffix(".md").write_text(build_provenance_markdown(prov))
+    if args.json:
+        print(_json.dumps(prov, indent=2))
+    else:
+        print(f"Provenance written to {out}")
+        print("Proves integrity + origin metadata only — not physical safety.")
+    return 0
+
+
+def cmd_sign_artifact(args: argparse.Namespace) -> int:
+    """Sign an artifact's provenance + checksums + manifest with an Ed25519 key."""
+    import json as _json
+    import os as _os
+    from datetime import datetime, timezone
+
+    from .errors import CoreAIPolicyError
+    from .signing import (
+        build_signature_manifest, canonical_payload, load_private_key,
+        public_key_bytes, sign_payload,
+    )
+    from .trust_policy import build_signed_payload_fields
+
+    # Resolve the private key from env or file. Never printed or persisted.
+    material = None
+    if getattr(args, "key_env", None):
+        material = _os.environ.get(args.key_env)
+        if not material:
+            print(f"error: --key-env names {args.key_env!r}, but it is unset or empty.")
+            return 1
+    elif getattr(args, "key_file", None):
+        material = Path(args.key_file).read_text()
+    else:
+        print("error: provide --key-env or --key-file (the private key is never persisted).")
+        return 1
+
+    try:
+        private_key = load_private_key(material)
+        signed_fields = build_signed_payload_fields(
+            Path(args.artifact_dir), Path(args.provenance))
+        signature_b64 = sign_payload(canonical_payload(signed_fields), private_key)
+        manifest = build_signature_manifest(
+            signer_name=getattr(args, "signer_name", None),
+            public_bytes=public_key_bytes(private_key),
+            signed_fields=signed_fields, signature_b64=signature_b64,
+            signed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except CoreAIPolicyError as e:
+        print(f"error: {e}")
+        return 1
+    finally:
+        material = None  # drop the secret reference promptly
+
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(manifest, indent=2))
+    if args.json:
+        print(_json.dumps(manifest, indent=2))
+    else:
+        print(f"Signature written to {out}")
+        print(f"Signer fingerprint: {manifest['signer']['key_fingerprint']}")
+        print("The private key was not written to any file or log.")
+    return 0
+
+
+def cmd_verify_signature(args: argparse.Namespace) -> int:
+    """Verify a signed artifact against its provenance and (optionally) a trust policy."""
+    import json as _json
+
+    from .trust_policy import load_trust_policy, verify_signed_artifact
+
+    trust = None
+    if getattr(args, "trust_policy", None):
+        trust = load_trust_policy(Path(args.trust_policy))
+
+    result = verify_signed_artifact(
+        Path(args.artifact_dir), Path(args.provenance), Path(args.signature),
+        trust_policy=trust)
+
+    if args.json:
+        print(_json.dumps({"ok": result.ok, "checks": result.checks}, indent=2))
+        return 0 if result.ok else 1
+    print("lerobot-coreai verify-signature")
+    print("=" * 50)
+    for c in result.checks:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']}{detail}")
+    print("=" * 50)
+    print("Signature verified." if result.ok else "Signature verification FAILED.")
     return 0 if result.ok else 1
 
 

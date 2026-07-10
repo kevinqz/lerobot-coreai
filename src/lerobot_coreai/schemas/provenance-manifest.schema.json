@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/provenance-manifest.schema.json",
+  "title": "lerobot-coreai provenance manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "artifact_type", "created_at", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.provenance.v0"},
+    "artifact_type": {"type": "string"},
+    "artifact_dir": {"type": "string"},
+    "created_at": {"type": "string"},
+    "lerobot_coreai_version": {"type": "string"},
+    "source_reports": {"type": "object", "additionalProperties": {"type": "string"}},
+    "artifact_hashes": {"type": "object", "additionalProperties": {"type": "string"}},
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety",
+                   "authorizes_robot_actuation"],
+      "properties": {
+        "proves_artifact_integrity": {"type": "boolean"},
+        "proves_artifact_origin_metadata": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
