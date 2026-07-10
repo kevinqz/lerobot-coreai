@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/obs-bridge-report.schema.json",
+  "title": "lerobot-coreai observation bridge report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "input_source", "checks", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.obs_bridge.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "policy_path": {"type": ["string", "null"]},
+    "input_source": {"type": "string"},
+    "frame_index": {"type": ["integer", "null"]},
+    "keys_present": {"type": "array", "items": {"type": "string"}},
+    "keys_missing": {"type": "array", "items": {"type": "string"}},
+    "dropped_keys": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed", "severity"],
+        "properties": {
+          "name": {"type": "string"},
+          "passed": {"type": "boolean"},
+          "severity": {"type": "string", "enum": ["required", "info"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety"],
+      "properties": {
+        "proves_observation_mapping_valid_for_sample": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
