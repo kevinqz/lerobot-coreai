@@ -45,17 +45,32 @@ class ActionContract:
         }
 
 
+BATCH_CONTRACT_SCHEMA_VERSION = "coreai-batch-contract.v2"
+_VALID_FALLBACKS = ("split_and_stack", "reject")
+_VALID_CLIENT_MODES = ("native_batch", "split_and_stack")
+_VALID_QUEUE_LAYOUTS = ("time_major_batched",)
+
+
 @dataclass
 class BatchContract:
     supports_batch: bool = False
     max_batch_size: int = 1
     fallback: str = "split_and_stack"      # "split_and_stack" | "reject"
+    # v2 (v1.3.9): explicit client modes + atomic-commit contract.
+    schema_version: str = BATCH_CONTRACT_SCHEMA_VERSION
+    supported_client_modes: tuple[str, ...] = ("native_batch", "split_and_stack")
+    queue_layout: str = "time_major_batched"
+    requires_atomic_commit: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "supports_batch": self.supports_batch,
+            "schema_version": self.schema_version,
+            "policy_supports_batch": self.supports_batch,
+            "supported_client_modes": list(self.supported_client_modes),
             "max_batch_size": self.max_batch_size,
             "fallback": self.fallback,
+            "queue_layout": self.queue_layout,
+            "requires_atomic_commit": self.requires_atomic_commit,
         }
 
 
@@ -151,12 +166,38 @@ def parse_batch_contract_from_manifest(manifest) -> BatchContract:
         else:
             explicit = getattr(manifest, "batch_contract", None)
     if isinstance(explicit, dict):
+        # v2 uses "policy_supports_batch"; v1 "runner_supports_batch"; v0 "supports_batch".
+        supports = explicit.get(
+            "policy_supports_batch",
+            explicit.get("runner_supports_batch",
+                         explicit.get("supports_batch", False)))
+        try:
+            max_bs = int(explicit.get("max_batch_size", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"batch contract max_batch_size is not an integer: {exc}") from exc
+        if max_bs < 1:
+            raise ValueError(
+                f"batch contract max_batch_size must be >= 1, got {max_bs}.")
+        fallback = explicit.get("fallback", "split_and_stack")
+        if fallback not in _VALID_FALLBACKS:
+            raise ValueError(
+                f"batch contract fallback {fallback!r} not in {_VALID_FALLBACKS}.")
+        modes = tuple(explicit.get("supported_client_modes",
+                                   ("native_batch", "split_and_stack")))
+        for m in modes:
+            if m not in _VALID_CLIENT_MODES:
+                raise ValueError(
+                    f"batch contract client mode {m!r} not in {_VALID_CLIENT_MODES}.")
+        layout = explicit.get("queue_layout", "time_major_batched")
+        if layout not in _VALID_QUEUE_LAYOUTS:
+            raise ValueError(
+                f"batch contract queue_layout {layout!r} not in {_VALID_QUEUE_LAYOUTS}.")
         return BatchContract(
-            # v1 uses "runner_supports_batch"; v0 used "supports_batch".
-            supports_batch=explicit.get("runner_supports_batch",
-                                        explicit.get("supports_batch", False)),
-            max_batch_size=int(explicit.get("max_batch_size", 1)),
-            fallback=explicit.get("fallback", "split_and_stack"))
+            supports_batch=bool(supports), max_batch_size=max_bs, fallback=fallback,
+            schema_version=explicit.get("schema_version", BATCH_CONTRACT_SCHEMA_VERSION),
+            supported_client_modes=modes, queue_layout=layout,
+            requires_atomic_commit=bool(explicit.get("requires_atomic_commit", True)))
     return BatchContract()
 
 

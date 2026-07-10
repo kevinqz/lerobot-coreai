@@ -30,9 +30,11 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     # a contradictory explicit value fails in __post_init__. Prefer
     # expected_action_horizon as the single source of truth.
     action_horizon: int = 1
-    # Batch handling: "single_only" raises clearly on B>1;
-    # "split_and_stack" is reserved for v1.3.7.
+    # Batch handling (v1.3.9): "single_only" | "native_batch" | "split_and_stack"
+    # | "auto". B>1 requires a batch-capable, safely-scoped runner.
     batch_mode: str = "single_only"
+    # Optional client-side cap; the effective max is min(artifact, config, runner).
+    max_batch_size: int | None = None
     # Observation transport encoding: "auto" (default -> nested_json_v1),
     # "nested_json_v1", or "typed_array_envelope_v1" (only if the runner announces it).
     observation_encoding: str = "auto"

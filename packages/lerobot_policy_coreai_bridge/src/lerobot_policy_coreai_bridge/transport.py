@@ -45,6 +45,36 @@ def infer_batch_size(batch: dict[str, Any]) -> int:
     return next(iter(sizes)) if sizes else 1
 
 
+def infer_and_validate_batch_size(batch: dict[str, Any], manifest: Any = None) -> int:
+    """Single strict batch-size boundary (v1.3.9).
+
+    Every leading dimension of a manifest-declared observation feature — and the
+    ``task`` list length, if present — must be EXACTLY equal. A ragged batch
+    (state B=4 but task length 2) fails closed rather than defaulting to max.
+    """
+    expected = getattr(manifest, "observation_features", None) if manifest else None
+    sizes: dict[str, int] = {}
+    for k, v in batch.items():
+        if k == "task":
+            if isinstance(v, (list, tuple)):
+                sizes["task"] = len(v)
+            continue
+        if expected is not None and k not in expected:
+            continue  # ignore stray label keys (action/reward/index/…)
+        shape = getattr(v, "shape", None)
+        if shape is not None and len(shape) >= 1:
+            sizes[k] = int(shape[0])
+        elif isinstance(v, (list, tuple)) and v and isinstance(v[0], (list, tuple)):
+            sizes[k] = len(v)
+    if not sizes:
+        return 1
+    distinct = set(sizes.values())
+    if len(distinct) > 1:
+        raise CoreAIPolicyError(
+            f"inconsistent batch sizes across observation keys: {sizes}.")
+    return next(iter(distinct))
+
+
 def _strip_leading_batch(value: Any) -> Any:
     """Drop a leading batch dim of size 1 (tensor/ndarray/list)."""
     shape = getattr(value, "shape", None)
@@ -115,3 +145,88 @@ def prepare_single_coreai_observation(
         else:
             single[k] = serialize_value(stripped)  # typed_array_envelope_v1
     return single, observation_sha256(single)
+
+
+def _sample_slice(value: Any, i: int) -> Any:
+    """Return sample ``i`` keeping a leading singleton dim ([B,...] -> [1,...])."""
+    shape = getattr(value, "shape", None)
+    if shape is not None and len(shape) >= 1:
+        return value[i:i + 1]
+    if isinstance(value, (list, tuple)):
+        return [value[i]]
+    return value
+
+
+def split_coreai_observations(
+    batch: dict[str, Any], manifest: Any, *, batch_size: int,
+    encoding: str = NESTED_JSON_V1,
+) -> list[tuple[dict[str, Any], str]]:
+    """Split a B-observation batch into B independent single observations (v1.3.9).
+
+    Each sample reuses the strict B=1 boundary, so every per-sample payload keeps
+    only manifest-declared features, drops labels, unwraps its task, is shape-
+    validated, and carries its own sha256. Used by split-and-stack (stateless only).
+    """
+    out: list[tuple[dict[str, Any], str]] = []
+    for i in range(batch_size):
+        sample: dict[str, Any] = {}
+        for k, v in batch.items():
+            if k == "task" and isinstance(v, (list, tuple)):
+                sample[k] = [v[i]]
+            else:
+                sample[k] = _sample_slice(v, i)
+        obs, sha = prepare_single_coreai_observation(
+            sample, manifest, require_single=True, encoding=encoding)
+        out.append((obs, sha))
+    return out
+
+
+def prepare_batched_coreai_observation(
+    batch: dict[str, Any], manifest: Any, *, batch_size: int,
+    encoding: str = NESTED_JSON_V1, audit: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str, list[str]]:
+    """Build a native [B, ...] CoreAI observation payload (v1.3.9).
+
+    Keeps only manifest-declared features, drops labels, requires ``task`` to be a
+    list[str] of length B, validates each feature's leading dim == B and per-sample
+    shape against the manifest, and returns (payload, batch_sha256, sample_sha256s).
+    """
+    if encoding not in VALID_ENCODINGS:
+        raise CoreAIPolicyError(f"unknown observation encoding {encoding!r}.")
+    b = infer_and_validate_batch_size(batch, manifest)
+    if b != batch_size:
+        raise CoreAIPolicyError(
+            f"batched observation size {b} != requested {batch_size}.")
+
+    obs = extract_observation(dict(batch), manifest)
+    expected = getattr(manifest, "observation_features", None) if manifest else None
+
+    payload: dict[str, Any] = {}
+    for k, v in obs.items():
+        if k == "task":
+            if not isinstance(v, (list, tuple)) or len(v) != batch_size:
+                raise CoreAIPolicyError(
+                    f"task must be a list[str] of length {batch_size}; got {v!r}.")
+            payload[k] = [str(t) for t in v]
+            continue
+        values, shape = _plain_and_shape(v)
+        if shape is None or len(shape) < 1 or int(shape[0]) != batch_size:
+            raise CoreAIPolicyError(
+                f"batched feature {k!r} must have leading dim {batch_size}; "
+                f"got shape {list(shape) if shape else None}.")
+        if expected and k in expected:
+            want = getattr(expected[k], "shape", None)
+            if want is not None and list(shape[1:]) != list(want):
+                raise CoreAIPolicyError(
+                    f"batched {k!r} per-sample shape {list(shape[1:])} != manifest "
+                    f"{list(want)}.")
+        if audit is not None:
+            audit[k] = {"shape": list(shape)}
+        payload[k] = values if encoding == NESTED_JSON_V1 else serialize_value(v)
+
+    # Per-sample hashes (over the same single-obs form the runner would see).
+    sample_hashes: list[str] = []
+    for obs_i, sha_i in split_coreai_observations(
+            batch, manifest, batch_size=batch_size, encoding=encoding):
+        sample_hashes.append(sha_i)
+    return payload, observation_sha256(payload), sample_hashes

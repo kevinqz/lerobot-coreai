@@ -4,39 +4,123 @@
   "title": "lerobot-coreai action + batch contract",
   "type": "object",
   "additionalProperties": true,
-  "required": ["schema_version", "action_contract", "batch_contract", "claims"],
+  "required": [
+    "schema_version",
+    "action_contract",
+    "batch_contract",
+    "claims"
+  ],
   "properties": {
-    "schema_version": {"type": "string", "const": "lerobot-coreai.action_contract.v1"},
+    "schema_version": {
+      "type": "string",
+      "const": "lerobot-coreai.action_contract.v1"
+    },
     "action_contract": {
       "type": "object",
-      "required": ["representation", "horizon", "select_action_semantics"],
+      "required": [
+        "representation",
+        "horizon",
+        "select_action_semantics"
+      ],
       "properties": {
-        "representation": {"type": "string", "enum": ["single", "chunk"]},
-        "horizon": {"type": "integer", "minimum": 1},
-        "action_dim": {"type": ["integer", "null"]},
-        "select_action_semantics": {"type": "string"},
-        "predict_action_chunk_semantics": {"type": "string"},
-        "queue_owner": {"type": "string"},
-        "reset_clears_queue": {"type": "boolean"},
-        "temporal_ensembling": {"type": "boolean"}
+        "representation": {
+          "type": "string",
+          "enum": [
+            "single",
+            "chunk"
+          ]
+        },
+        "horizon": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action_dim": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "select_action_semantics": {
+          "type": "string"
+        },
+        "predict_action_chunk_semantics": {
+          "type": "string"
+        },
+        "queue_owner": {
+          "type": "string"
+        },
+        "reset_clears_queue": {
+          "type": "boolean"
+        },
+        "temporal_ensembling": {
+          "type": "boolean"
+        }
       }
     },
     "batch_contract": {
       "type": "object",
-      "required": ["supports_batch", "max_batch_size", "fallback"],
+      "required": [
+        "policy_supports_batch",
+        "max_batch_size",
+        "fallback"
+      ],
       "properties": {
-        "supports_batch": {"type": "boolean"},
-        "max_batch_size": {"type": "integer", "minimum": 1},
-        "fallback": {"type": "string", "enum": ["split_and_stack", "reject"]}
+        "schema_version": {
+          "type": "string"
+        },
+        "policy_supports_batch": {
+          "type": "boolean"
+        },
+        "supported_client_modes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "native_batch",
+              "split_and_stack"
+            ]
+          }
+        },
+        "max_batch_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fallback": {
+          "type": "string",
+          "enum": [
+            "split_and_stack",
+            "reject"
+          ]
+        },
+        "queue_layout": {
+          "type": "string",
+          "enum": [
+            "time_major_batched"
+          ]
+        },
+        "requires_atomic_commit": {
+          "type": "boolean"
+        }
       }
     },
     "claims": {
       "type": "object",
-      "required": ["supports_training", "proves_physical_safety"],
+      "required": [
+        "supports_training",
+        "proves_physical_safety"
+      ],
       "properties": {
-        "matches_lerobot_select_action_semantics": {"type": "boolean"},
-        "supports_training": {"type": "boolean", "const": false},
-        "proves_physical_safety": {"type": "boolean", "const": false}
+        "matches_lerobot_select_action_semantics": {
+          "type": "boolean"
+        },
+        "supports_training": {
+          "type": "boolean",
+          "const": false
+        },
+        "proves_physical_safety": {
+          "type": "boolean",
+          "const": false
+        }
       }
     }
   }

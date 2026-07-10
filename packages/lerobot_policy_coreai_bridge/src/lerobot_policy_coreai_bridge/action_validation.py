@@ -67,3 +67,52 @@ def normalize_and_validate_action_chunk(
     if not _all_finite(t):
         raise CoreAIPolicyError("action contains non-finite values.")
     return t
+
+
+def normalize_and_validate_batched_action_chunk(
+    raw_action: Any, *, representation: str, expected_batch_size: int,
+    expected_horizon: int | None = None, expected_action_dim: int | None = None,
+    device: Any = None,
+) -> torch.Tensor:
+    """Normalize a NATIVE batched Runner action to a validated ``(B, H, A)`` (v1.3.9).
+
+    Permitted shapes for B>1:
+      single: ``[B, A]``      -> ``[B, 1, A]``
+      chunk:  ``[B, H, A]``   -> unchanged
+    Anything ambiguous (ragged, wrong rank/B/H/A, non-finite) fails closed.
+    B<=1 routes through the single normalizer.
+    """
+    if expected_batch_size <= 1:
+        return normalize_and_validate_action_chunk(
+            raw_action, representation=representation,
+            expected_batch_size=max(1, expected_batch_size),
+            expected_horizon=expected_horizon,
+            expected_action_dim=expected_action_dim, device=device)
+    try:
+        t = torch.as_tensor(raw_action, dtype=torch.float32)
+    except Exception as e:
+        raise CoreAIPolicyError(f"batched action is not a numeric tensor: {e}")
+    if device is not None:
+        t = t.to(device)
+
+    if representation == "single":
+        if t.ndim == 2:
+            t = t.unsqueeze(1)                 # [B,A] -> [B,1,A]
+        else:
+            raise CoreAIPolicyError(
+                f"single batched action must be [B,A]; got shape {tuple(t.shape)}.")
+    else:  # chunk
+        if t.ndim != 3:
+            raise CoreAIPolicyError(
+                f"chunk batched action must be [B,H,A]; got shape {tuple(t.shape)}.")
+
+    b, h, a = t.shape
+    if b != expected_batch_size:
+        raise CoreAIPolicyError(f"batch {b} != expected {expected_batch_size}.")
+    if expected_horizon is not None and h != expected_horizon:
+        raise CoreAIPolicyError(f"horizon {h} != expected {expected_horizon}.")
+    if expected_action_dim is not None and a != expected_action_dim:
+        raise CoreAIPolicyError(f"action_dim {a} != expected {expected_action_dim}.")
+    if not _all_finite(t):
+        raise CoreAIPolicyError("batched action contains non-finite values.")
+    return t

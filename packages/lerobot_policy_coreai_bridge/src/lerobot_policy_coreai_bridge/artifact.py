@@ -509,9 +509,11 @@ def verify_plugin_artifact(artifact_dir: str, *, deep: bool = True,
 
     # --- semantics (lerobot-free cross-binding) ---
     semantics = verify_artifact_semantics(out)
-    semantics_ok = all(v == "passed" or v.startswith("not_verified")
-                       for v in semantics.values())
-    integrity_ok &= ok("semantics", semantics_ok, "semantic cross-binding failed")
+    # Consistency = nothing failed; completeness = everything passed (v1.3.9).
+    consistency_ok = all(not v.startswith("failed") for v in semantics.values())
+    completeness_ok = all(v == "passed" for v in semantics.values())
+    integrity_ok &= ok("semantic_consistency", consistency_ok,
+                       "a semantic cross-binding check failed")
 
     processor_ok = manifest_declares_coreai_ownership(
         json.loads((out / MANIFEST_FILENAME).read_text()))
@@ -521,7 +523,8 @@ def verify_plugin_artifact(artifact_dir: str, *, deep: bool = True,
 
     return _finish(out, integrity_ok, checks, semantics, pm,
                    inventory.get("artifact_root_sha256"), report_dir,
-                   processor_contract=processor_ok, semantics_verified=semantics_ok)
+                   processor_contract=processor_ok,
+                   consistency=consistency_ok, completeness=completeness_ok)
 
 
 def _verify_deep(out, pm, checks, ok, integrity_ok):
@@ -554,12 +557,16 @@ def _verify_deep(out, pm, checks, ok, integrity_ok):
 
 
 def _finish(out, integrity_ok, checks, semantics, pm, root_sha, report_dir,
-            *, authenticity=False, processor_contract=False, semantics_verified=False):
+            *, authenticity=False, processor_contract=False,
+            consistency=False, completeness=False):
     claims = {
         "integrity_verified": bool(integrity_ok),
         "authenticity_verified": bool(authenticity),
         "processor_contract_verified": bool(processor_contract),
-        "semantics_verified": bool(semantics_verified),
+        # Honest split (v1.3.9): consistency = nothing failed; completeness = all
+        # passed. not_verified aspects keep completeness false without failing.
+        "semantic_consistency_verified": bool(consistency),
+        "semantic_completeness_verified": bool(completeness),
         "factory_b1_certified": False,      # promoted only by the signed cert (v1.3.10)
         "official_eval_certified": False,
         "proves_physical_safety": False,

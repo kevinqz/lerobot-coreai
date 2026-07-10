@@ -95,6 +95,7 @@ class RunnerClient:
             backward_compatible_with=tuple(
                 data.get("backward_compatible_with") or ()),
             action_batching_semantics=batching.get("semantics"),
+            action_batching_state_isolation=batching.get("state_isolation"),
             inference_state_scope=(data.get("inference_state") or {}).get("scope"),
             supports_session_ids=bool(
                 (data.get("inference_state") or {}).get("supports_session_ids", False)),
