@@ -37,20 +37,27 @@ class SourcePolicyBundle:
     postprocessor: Any
     dataset_metadata: Any
     config: Any
+    pretrained_path_bound: bool = False
+    policy_revision: str | None = None
+    policy_class: str | None = None
 
 
 # --- Thin, mockable wrappers over the official LeRobot API ---
 
-def _load_config(policy_path: str):  # pragma: no cover - needs lerobot
+def _load_config(policy_path: str, revision: str | None = None):  # pragma: no cover - needs lerobot
     from lerobot.configs import PreTrainedConfig  # type: ignore
+    if revision:
+        return PreTrainedConfig.from_pretrained(policy_path, revision=revision)
     return PreTrainedConfig.from_pretrained(policy_path)
 
 
-def _load_dataset_metadata(dataset_repo_id: str):  # pragma: no cover - needs lerobot
+def _load_dataset_metadata(dataset_repo_id: str, revision: str | None = None):  # pragma: no cover - needs lerobot
     try:
         from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata  # type: ignore
     except Exception:
         from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata  # type: ignore
+    if revision:
+        return LeRobotDatasetMetadata(dataset_repo_id, revision=revision)
     return LeRobotDatasetMetadata(dataset_repo_id)
 
 
@@ -67,14 +74,39 @@ def _make_processors(cfg, policy_path, ds_meta):  # pragma: no cover - needs ler
         dataset_stats=getattr(ds_meta, "stats", None), dataset_meta=ds_meta)
 
 
-def load_source_policy(policy_path: str, dataset_repo_id: str) -> SourcePolicyBundle:
-    """Load a source PyTorch policy + official processors. Fails with the stage."""
+def load_source_policy(policy_path: str, dataset_repo_id: str, *,
+                       policy_revision: str | None = None,
+                       dataset_revision: str | None = None) -> SourcePolicyBundle:
+    """Load a source PyTorch policy + official processors. Fails with the stage.
+
+    Binds ``cfg.pretrained_path`` (and revision) BEFORE make_policy — LeRobot's
+    make_policy only loads the trained weights when pretrained_path is set;
+    without this the compare would run a randomly-initialized policy.
+    """
+    from pathlib import Path as _Path
     try:
-        cfg = _load_config(policy_path)
+        cfg = _load_config(policy_path, revision=policy_revision)
     except Exception as e:
         raise SourceLoaderError("config", f"PreTrainedConfig.from_pretrained failed: {e}")
+
+    # Bind the checkpoint so make_policy loads the trained weights.
     try:
-        ds_meta = _load_dataset_metadata(dataset_repo_id)
+        cfg.pretrained_path = _Path(policy_path)
+        if policy_revision is not None:
+            try:
+                cfg.pretrained_revision = policy_revision
+            except Exception:
+                pass
+        pretrained_path_bound = getattr(cfg, "pretrained_path", None) is not None
+    except Exception:
+        pretrained_path_bound = False
+    if not pretrained_path_bound:
+        raise SourceLoaderError(
+            "config", "could not bind cfg.pretrained_path; refusing to compare a "
+            "possibly randomly-initialized policy.")
+
+    try:
+        ds_meta = _load_dataset_metadata(dataset_repo_id, revision=dataset_revision)
     except Exception as e:
         raise SourceLoaderError("dataset_meta", f"LeRobotDatasetMetadata failed: {e}")
     try:
@@ -85,8 +117,10 @@ def load_source_policy(policy_path: str, dataset_repo_id: str) -> SourcePolicyBu
         pre, post = _make_processors(cfg, policy_path, ds_meta)
     except Exception as e:
         raise SourceLoaderError("processors", f"make_pre_post_processors failed: {e}")
-    return SourcePolicyBundle(policy=policy, preprocessor=pre, postprocessor=post,
-                              dataset_metadata=ds_meta, config=cfg)
+    return SourcePolicyBundle(
+        policy=policy, preprocessor=pre, postprocessor=post, dataset_metadata=ds_meta,
+        config=cfg, pretrained_path_bound=pretrained_path_bound,
+        policy_revision=policy_revision, policy_class=type(policy).__name__)
 
 
 def build_source_load_report(policy_path: str, dataset_repo_id: str, *,
@@ -110,8 +144,14 @@ def build_source_load_report(policy_path: str, dataset_repo_id: str, *,
             "used_string_policy_type": False,
         },
         "failed_stage": error.stage if error else None,
+        "weights": {
+            "pretrained_path_bound": bool(bundle.pretrained_path_bound) if bundle else False,
+            "revision": bundle.policy_revision if bundle else None,
+            "policy_class": bundle.policy_class if bundle else None,
+        },
         "claims": {
             "proves_source_policy_loaded_with_official_lerobot_api": ok,
+            "proves_source_weights_bound": bool(bundle.pretrained_path_bound) if bundle else False,
             "proves_training_support": False,
             "proves_physical_safety": False,
         },

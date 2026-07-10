@@ -35,19 +35,30 @@ class ActionQueue:
         return not self._q
 
     def load_chunk(self, chunk: Any) -> None:
-        """Load a chunk [H, A]. Rejects ragged or non-finite chunks."""
+        """Load a chunk [H, A] (or a single action [A]). Rejects ragged/non-finite.
+
+        A single action ``[A]`` (scalar rows) is wrapped as a one-row chunk so a
+        single-representation policy works. Values are normalized to float, so a
+        numeric-like string cannot slip through as a non-numeric action.
+        """
         if not isinstance(chunk, (list, tuple)) or len(chunk) == 0:
-            raise CoreAIPolicyError("action chunk must be a non-empty [H, A] sequence.")
-        rows = [list(r) for r in chunk]
-        width = len(rows[0])
-        if width == 0:
-            raise CoreAIPolicyError("action chunk rows must be non-empty.")
-        for r in rows:
-            if len(r) != width:
+            raise CoreAIPolicyError("action chunk must be a non-empty sequence.")
+        # Single action [A]: elements are scalars, not rows → wrap to [[...]].
+        if not isinstance(chunk[0], (list, tuple)):
+            chunk = [chunk]
+        width = None
+        rows: list[list[float]] = []
+        for r in chunk:
+            if not isinstance(r, (list, tuple)) or len(r) == 0:
+                raise CoreAIPolicyError("action chunk rows must be non-empty sequences.")
+            if width is None:
+                width = len(r)
+            elif len(r) != width:
                 raise CoreAIPolicyError(
                     f"ragged action chunk: row widths differ ({width} vs {len(r)}).")
             if not _is_finite_row(r):
                 raise CoreAIPolicyError("action chunk contains non-finite values.")
+            rows.append([float(x) for x in r])  # normalize (no numeric-like strings)
         self._q.extend(rows)
 
     def pop_next(self) -> list[float]:

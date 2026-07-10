@@ -1,10 +1,10 @@
-# Compare v2 — Source Loader v2 + Processor-Inclusive Compare (v1.2.6)
+# Compare v2 — Source Loader v2 + Processor-Inclusive Compare (v1.2.6, hardened v1.2.7)
 
-> The v0.5 compare could compare a raw CoreAI action against a LeRobot action at
-> the wrong stage — high numeric parity, operationally invalid. compare-v2 loads
-> the source policy the way LeRobot itself does and compares the **final** action
-> after each side's declared processing. Metrics + per-frame trace only. No
-> robot/sim/real egress; no task-success or physical-safety claim.
+> **Experimental — not release evidence yet.** compare-v2 loads the source policy
+> the way LeRobot does and compares the **final** action after each side's
+> processing. v1.2.7 hardened the evidence integrity so a result can only be
+> called "parity" when explicit numeric tolerances are met. Software-only; no
+> robot/sim/real egress; no task-success/physical-safety claim.
 
 ## CLI
 
@@ -14,63 +14,53 @@ lerobot-coreai compare-v2 \
   --coreai.policy.path kevinqz/EVO1-Pusht-CoreAI \
   --dataset.repo_id lerobot/pusht \
   --runner.url http://127.0.0.1:8710 \
-  --max-frames 32 \
+  --compare-target next_action \
+  --policy.revision <sha-or-tag> --dataset.revision <sha-or-tag> \
+  --max-frames 32 --min-frames 32 \
+  --tolerance.mean-mae 1e-5 --tolerance.max-abs-error 1e-4 \
+  --tolerance.min-cosine 0.999 --tolerance.max-relative-mae 0.01 \
   --strict-processors \
   --output-dir reports/compare-v2
 ```
 
-Writes `source_policy_load_report.json`, `processor_contract_report.json`,
-`compare_v2_report.json` / `.md`, and `compare_v2_actions.jsonl`.
+## What v1.2.7 fixed (evidence integrity)
 
-## Source loader v2 (official API)
-
-```python
-cfg = PreTrainedConfig.from_pretrained(policy_path)
-ds_meta = LeRobotDatasetMetadata(dataset_repo_id)
-policy = make_policy(cfg, ds_meta=ds_meta)
-pre, post = make_pre_post_processors(cfg, pretrained_path=policy_path,
-                                     dataset_stats=ds_meta.stats, dataset_meta=ds_meta)
-```
-
-It never calls `make_policy` with a string `policy_type` and never instantiates
-the abstract `PreTrainedPolicy` base. Failures report the exact stage
-(`config` / `dataset_meta` / `policy` / `processors`).
+- **Numeric gates decide parity.** `proves_action_parity_on_final_unit` is true
+  **only** when tolerance gates are configured *and* pass. Without tolerances a
+  perfect-looking match is reported but parity is **not** claimed; a large finite
+  error fails the gate (previously it could read as "parity").
+- **Structural shape.** Actions must match nested shape, not just flattened
+  length — `[[1,2],[3,4]]` no longer "matches" `[1,2,3,4]`.
+- **Explicit compare target.** `--compare-target next_action|action_chunk` —
+  a per-timestep action is never compared against a full chunk. `next_action`
+  uses source `select_action` vs CoreAI `select_next_action`; `action_chunk` uses
+  `predict_action_chunk` on both sides.
+- **Source weights bound.** The loader sets `cfg.pretrained_path` (+ revision)
+  before `make_policy`, so the trained checkpoint is loaded — not a randomly
+  initialized policy. The report proves `weights.pretrained_path_bound`.
 
 ## Processor contract
 
-The CoreAI manifest declares who owns processing:
+`--strict-processors` fails closed when the CoreAI manifest doesn't declare
+observation/action ownership (`expects` ∈ raw/preprocessed, `returns` ∈
+postprocessed/normalized).
 
-```json
-{
-  "processor_contract": {
-    "observation_input": {"expects": "raw_lerobot_observation",
-                          "image_layout": "CHW", "image_range": [0.0, 1.0]},
-    "action_output": {"returns": "postprocessed_action", "action_order": ["x", "y"]},
-    "stats": {"dataset_stats_sha256": "sha256:..."}
-  }
-}
-```
+## Still deferred (do not treat compare-v2 as strong release evidence yet)
 
-`expects ∈ {raw_lerobot_observation, policy_preprocessed_observation}`,
-`returns ∈ {postprocessed_action, normalized_action}`. Under `--strict-processors`
-an ambiguous/undeclared contract **fails closed** — because comparing a
-normalized action against a postprocessed action is meaningless.
+The following are tracked for v1.2.8+ and are **not** implemented yet:
 
-## Compare flow (same final unit)
+- **Manifest v1 contracts** — the base manifest schema does not yet carry
+  `processor_contract`/`action_contract`/`batch_contract`; today they're passed
+  as dicts / inferred. A published, schema-valid manifest carrying them is v1.2.8.
+- **Real processor execution** — the CoreAI side does not yet execute the
+  declared preprocessing/normalization path; `normalized_action` mode is declared
+  but not applied. Until then, prefer artifacts whose runner returns the final
+  postprocessed action.
+- **Temporal alignment** — delta timestamps, episode boundaries, and per-episode
+  reset are not yet wired into the frame iteration.
+- **Live unmocked fixtures** — the stable CI job exercises the official loader
+  imports and the mocked flow; a tiny-checkpoint + tiny-dataset live compare is
+  v1.2.8.
 
-```
-dataset frame -> official preprocessor -> policy.select_action() -> official postprocessor -> source final action
-dataset frame -> (per processor_contract) -> CoreAI runner -> coreai final action
-compare(source final, coreai final)
-```
-
-Metrics: `mae`, `max_abs_error`, `cosine_similarity`, `relative_mae`, plus
-`shape_match` and `finite` gates. A shape mismatch or non-finite value fails the
-comparison rather than reporting a misleading number.
-
-## Scope
-
-Proves action parity **on the final unit** for the compared frames — not task
-success, not physical safety. The official-API loader runs live in the stable CI
-job (LeRobot 0.6.0); the metrics and processor-contract logic are pure and run
-everywhere.
+Because of these, `release-check`/approval should **not** rely on a compare-v2
+report as strong parity evidence yet.

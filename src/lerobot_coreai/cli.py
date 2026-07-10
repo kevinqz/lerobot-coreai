@@ -833,6 +833,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp2.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
     p_cmp2.add_argument("--runner.url", dest="runner_url", default=None)
     p_cmp2.add_argument("--max-frames", dest="max_frames", type=int, default=32)
+    p_cmp2.add_argument("--compare-target", dest="compare_target", default="next_action",
+                        choices=["next_action", "action_chunk"],
+                        help="Compare per-timestep next actions or full chunks (never mixed)")
+    p_cmp2.add_argument("--policy.revision", dest="policy_revision", default=None)
+    p_cmp2.add_argument("--dataset.revision", dest="dataset_revision", default=None)
+    p_cmp2.add_argument("--tolerance.mean-mae", dest="max_mean_mae", type=float, default=None)
+    p_cmp2.add_argument("--tolerance.max-abs-error", dest="max_max_abs_error", type=float, default=None)
+    p_cmp2.add_argument("--tolerance.min-cosine", dest="min_cosine_similarity", type=float, default=None)
+    p_cmp2.add_argument("--tolerance.max-relative-mae", dest="max_relative_mae", type=float, default=None)
+    p_cmp2.add_argument("--min-frames", dest="min_frames_compared", type=int, default=1)
     p_cmp2.add_argument("--strict-processors", dest="strict_processors", action="store_true")
     p_cmp2.add_argument("--output-dir", dest="output_dir", default=None)
     p_cmp2.add_argument("--json", action="store_true")
@@ -3306,6 +3316,14 @@ def cmd_compare_v2(args: argparse.Namespace) -> int:
         dataset_repo_id=args.dataset_repo_id,
         runner_url=getattr(args, "runner_url", None),
         max_frames=getattr(args, "max_frames", 32),
+        compare_target=getattr(args, "compare_target", "next_action"),
+        policy_revision=getattr(args, "policy_revision", None),
+        dataset_revision=getattr(args, "dataset_revision", None),
+        max_mean_mae=getattr(args, "max_mean_mae", None),
+        max_max_abs_error=getattr(args, "max_max_abs_error", None),
+        min_cosine_similarity=getattr(args, "min_cosine_similarity", None),
+        max_relative_mae=getattr(args, "max_relative_mae", None),
+        min_frames_compared=getattr(args, "min_frames_compared", 1),
         strict_processors=getattr(args, "strict_processors", False),
         output_dir=Path(args.output_dir) if getattr(args, "output_dir", None) else None,
     )

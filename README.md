@@ -137,6 +137,17 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `real` | v1.0.0 ✅ | Guarded real mode: preflight or bounded guarded session |
 | `verify-real-session` | v1.0.2 ✅ | Offline audit of a completed guarded real session |
 | `lerobot-bridge-check` | v1.1.0 ✅ | Probe the local LeRobot bridge for a CoreAI policy (no robot action) |
+| `lerobot-compat-check` | v1.1.2 ✅ | LeRobot compatibility certificate; `--contract` for the leveled v1 report (v1.2.4) |
+| `lerobot-registry-check` | v1.1.3 ✅ | Check the local (non-upstream) LeRobot registry adapter |
+| `eval-v2` | v1.1.4 ✅ | Auditable dataset↔policy feature mapping (not an action replay) |
+| `obs-bridge-check` | v1.1.5 ✅ | Confirm a LeRobot frame maps to the CoreAI observation |
+| `hf-metadata` | v1.1.6 ✅ | Emit + validate honest HF-style artifact metadata |
+| `package-bridge-benchmark` / `verify-bridge-benchmark` | v1.1.7 ✅ | Bundle + verify reproducible bridge benchmark packs |
+| `provenance-create` / `sign-artifact` / `verify-signature` | v1.2.0 ✅ | Ed25519 provenance + signing + trust-policy verification (`[signing]`) |
+| `release-check` | v1.2.1 ✅ | Evaluate an artifact against a per-channel release policy |
+| `artifact-index` | v1.2.2 ✅ | Local registry for signed/verified artifacts (init/add/list/find/verify) |
+| `policy-card` | v1.2.3 ✅ | Generate an honest policy card from verified evidence |
+| `compare-v2` | v1.2.6 ⚠️ | Processor-inclusive parity via the official loader — **experimental**; parity claimed only when numeric tolerance gates pass (v1.2.7) |
 
 ## Safety model
 
@@ -213,6 +224,7 @@ v1.2.3 adds a **policy card generator** (`policy-card`): deterministic, honest m
 v1.2.4 is a **compatibility-truth** release: a leveled contract report (`lerobot-compat-check --contract` → `lerobot_compatibility_report_v1.json/md`) that reports each rung of the official LeRobot contract separately and honestly (action semantics, plugin discovery, config registry, processor pipeline, official eval/rollout all reported `failed`/`not_supported` today, never assumed), a CI split into a blocking **stable** (LeRobot 0.6.0) job and a pinned, non-blocking **development** job, and corrected docs (removed "same LeRobot workflow intact"; documented the local opt-in `get_policy_class` patch and that `eval-v2` is feature-mapping only). See [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md).
 v1.2.5 adds **action contract v2 + batch/reset semantics**: explicit `ActionContract`/`BatchContract` (parsed from the manifest), a per-timestep `select_next_action()` backed by an `ActionQueue` (legacy `select_action` unchanged — still a chunk for chunked policies), `reset()` that clears the queue + runner session, and a split-and-stack batching fallback. The contract report's `action_batch_contract` moves to `partial`; action semantics/tensor stay `failed` until the official plugin. See [docs/action-contract-v2.md](docs/action-contract-v2.md).
 v1.2.6 adds **source loader v2 + processor-inclusive compare** (`compare-v2`): loads the source PyTorch policy via the official LeRobot API (`PreTrainedConfig.from_pretrained` → `LeRobotDatasetMetadata` → `make_policy(cfg, ds_meta=...)` → `make_pre_post_processors`, never a string `policy_type` and never the abstract base), declares a processor-ownership contract (`--strict-processors` fails closed on ambiguity), and compares the **final** action after each side's processing (`mae`/`max_abs_error`/`cosine`/`relative_mae`, with shape/finite gates). Software-only; sends no robot/sim/real action. See [docs/compare-v2.md](docs/compare-v2.md).
+v1.2.7 is a **compare-v2 correctness hardening** (evidence integrity): parity is claimed **only when explicit numeric tolerance gates pass** (`--tolerance.*`; a large finite error no longer reads as parity), actions must match **structural** shape (not just flattened length), the compare target is explicit (`--compare-target next_action|action_chunk`, never mixed), and the source loader binds `cfg.pretrained_path` (+ `--policy.revision`/`--dataset.revision`) so the trained checkpoint is loaded rather than a random init. compare-v2 is marked **experimental** — not release evidence until manifest-v1 processor contracts, real processor execution, temporal alignment, and live fixtures land (v1.2.8+). Also fixes the single-action `ActionQueue` case (with float normalization). See [docs/compare-v2.md](docs/compare-v2.md).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
