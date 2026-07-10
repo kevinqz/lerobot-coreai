@@ -98,6 +98,42 @@ def test_report_schema_valid_and_honest(valid_manifest_dict):
     jsonschema.validate(report, schema)
 
 
+def test_ground_truth_action_not_fed_to_policy(valid_manifest_dict):
+    # Label-leakage guard: the frame carries an "action", which must never reach
+    # the policy's observation.
+    seen = {}
+
+    def _capture(obs, **kw):
+        seen.update(obs)
+        return [0.0] * 7
+
+    m = LeRobotCoreAIManifest.from_dict(valid_manifest_dict)
+    p = CoreAIPolicy(m, validate_io=False)
+    p.select_next_action = _capture  # type: ignore
+    p.reset = lambda: None  # type: ignore
+    obs_key = next(iter(m.observation_features))
+    frame = {"episode_index": 0, obs_key: [0.0] * 7, "action": [9.0] * 7,
+             "reward": 1.0, "timestamp": 0.1}
+    with patch.object(CoreAIPolicy, "from_pretrained", return_value=p), \
+         patch.object(ev3, "_load_frames", return_value=[frame]):
+        run_eval_v3(EvalV3Config(policy_path="p", dataset_repo_id="d"))
+    assert "action" not in seen
+    assert "reward" not in seen
+
+
+def test_first_reset_when_no_episode_index(valid_manifest_dict):
+    actions = [[0.0] * 7, [0.0] * 7]
+    frames = [{"observation.state": [0.0] * 7}, {"observation.state": [0.0] * 7}]
+    p = _policy(valid_manifest_dict, actions)
+    resets = {"n": 0}
+    p.reset = lambda: resets.__setitem__("n", resets["n"] + 1)  # type: ignore
+    with patch.object(CoreAIPolicy, "from_pretrained", return_value=p), \
+         patch.object(ev3, "_load_frames", return_value=frames):
+        run_eval_v3(EvalV3Config(policy_path="p", dataset_repo_id="d"))
+    # No episode_index anywhere → reset must still fire once at the start.
+    assert resets["n"] == 1
+
+
 def test_reset_called_per_episode(valid_manifest_dict):
     actions = [[0.0] * 7, [0.0] * 7, [0.0] * 7]
     frames = [{"episode_index": 0}, {"episode_index": 1}, {"episode_index": 1}]

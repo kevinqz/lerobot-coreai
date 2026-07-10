@@ -69,7 +69,7 @@ def test_predict_action_chunk_returns_tensor():
     p = _policy()
     chunk = p.predict_action_chunk({"observation.state": [0.0] * 7})
     assert isinstance(chunk, torch.Tensor)
-    assert chunk.shape == (3, 7)
+    assert chunk.shape == (1, 3, 7)  # (B, H, A) — v1.3.1 tensor contract
 
 
 def test_train_true_raises_but_eval_works():

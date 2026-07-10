@@ -127,13 +127,21 @@ def evaluate_gates(metrics: dict[str, Any], config: CompareV2Config) -> dict[str
     gates: dict[str, Any] = {}
 
     def _le(name, value, threshold):
-        if threshold is None or value is None:
+        if threshold is None:
+            return
+        if value is None:  # configured gate with no metric must FAIL, not vanish
+            gates[name] = {"value": None, "threshold": threshold, "passed": False,
+                           "reason": "metric_unavailable"}
             return
         gates[name] = {"value": value, "threshold": threshold,
                        "passed": value <= threshold}
 
     def _ge(name, value, threshold):
-        if threshold is None or value is None:
+        if threshold is None:
+            return
+        if value is None:
+            gates[name] = {"value": None, "threshold": threshold, "passed": False,
+                           "reason": "metric_unavailable"}
             return
         gates[name] = {"value": value, "threshold": threshold,
                        "passed": value >= threshold}
@@ -174,7 +182,9 @@ def _coreai_action(coreai_policy, item, contract, target: str) -> Any:  # pragma
     # NB: import the module (not the symbol) so this file avoids a substring the
     # no-hardware scanner reserves for serial-port driver imports.
     from . import coreai_observation_serialization as _obs_ser
-    obs = _obs_ser.serialize_observation(dict(item)) if isinstance(item, dict) else item
+    manifest = getattr(coreai_policy, "manifest", None)
+    obs = (_obs_ser.serialize_observation(_obs_ser.extract_observation(dict(item), manifest))
+           if isinstance(item, dict) else item)
     if target == "action_chunk":
         return coreai_policy.predict_action_chunk(obs)
     return coreai_policy.select_next_action(obs)

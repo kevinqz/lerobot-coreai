@@ -35,3 +35,12 @@ def test_cli_compat_check_strict_rc_without_lerobot():
         assert rc == 1
     else:
         assert rc in (0, 1)
+
+
+def test_cli_compat_check_plugin_profile(tmp_path):
+    # --plugin emits the official-plugin profile; always rc0 (informational).
+    rc = cli.main(["lerobot-compat-check", "--plugin", "--output-dir", str(tmp_path / "p")])
+    assert rc == 0
+    report = json.loads((tmp_path / "p" / "lerobot_plugin_compatibility_report.json").read_text())
+    assert report["profile"] == "official_plugin"
+    assert report["claims"]["official_eval_certified"] is False

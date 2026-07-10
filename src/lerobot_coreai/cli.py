@@ -629,6 +629,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_lcc.add_argument("--contract", action="store_true",
                        help="Emit the v1 leveled contract report (v1.2.4) instead of the "
                             "v0 shape certificate")
+    p_lcc.add_argument("--plugin", action="store_true",
+                       help="Emit the official-plugin compatibility profile (v1.3.1)")
     p_lcc.add_argument("--output-dir", dest="output_dir", default=None)
     p_lcc.add_argument("--json", action="store_true")
     p_lcc.set_defaults(func=cmd_lerobot_compat_check)
@@ -2702,6 +2704,28 @@ def cmd_lerobot_compat_check(args: argparse.Namespace) -> int:
     Default: v0 shape certificate. --contract: v1 leveled contract (v1.2.4).
     """
     import json as _json
+
+    if getattr(args, "plugin", False):
+        from .plugin_compat import build_plugin_compat_markdown, evaluate_plugin_compat
+        report = evaluate_plugin_compat()
+        if getattr(args, "output_dir", None):
+            out = Path(args.output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            with open(out / "lerobot_plugin_compatibility_report.json", "w") as f:
+                _json.dump(report, f, indent=2)
+            (out / "lerobot_plugin_compatibility_report.md").write_text(
+                build_plugin_compat_markdown(report))
+        if args.json:
+            print(_json.dumps(report, indent=2))
+            return 0
+        print("lerobot-coreai lerobot-compat-check --plugin (official plugin profile)")
+        print("=" * 50)
+        for k, v in report["levels"].items():
+            print(f"  {k}: {v}")
+        print("=" * 50)
+        print(f"Plugin installed: {report['plugin_installed']}. "
+              "official_eval_certified stays false until a live E2E eval.")
+        return 0
 
     if getattr(args, "contract", False):
         from .lerobot_contracts import (

@@ -77,3 +77,39 @@ def observation_sha256(payload: dict[str, Any]) -> str:
 def serialize_and_hash(observation: dict[str, Any]) -> tuple[dict[str, Any], str]:
     payload = serialize_observation(observation)
     return payload, observation_sha256(payload)
+
+
+# Keys a dataset frame may carry that must NOT be fed to a policy as input —
+# feeding the ground-truth action/reward/index would contaminate evaluation.
+_NON_OBSERVATION_KEYS = {
+    "action", "reward", "index", "frame_index", "episode_index", "timestamp",
+    "task_index", "dataset_index", "next.reward", "next.done", "next.success",
+    "success", "done",
+}
+
+
+def extract_observation(item: dict[str, Any], manifest: Any = None) -> dict[str, Any]:
+    """Return only the policy's declared observation inputs (+ task).
+
+    Prevents label leakage: a LeRobotDataset frame carries the ground-truth
+    action/reward/index, which must never reach the policy. With a manifest, keep
+    exactly the declared observation features (plus ``task``); without one, keep
+    ``observation.*`` and ``task`` and drop known non-observation keys.
+    """
+    if not isinstance(item, dict):
+        return item
+    obs: dict[str, Any] = {}
+    features = getattr(manifest, "observation_features", None) if manifest else None
+    if features:
+        for k in features:
+            if k in item:
+                obs[k] = item[k]
+        if "task" in item:
+            obs["task"] = item["task"]
+        return obs
+    for k, v in item.items():
+        if k in _NON_OBSERVATION_KEYS:
+            continue
+        if k.startswith("observation") or k == "task":
+            obs[k] = v
+    return obs

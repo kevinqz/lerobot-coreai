@@ -10,7 +10,7 @@ from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 from .modeling_coreai_bridge import CoreAIBridgePolicy
 from .processor_coreai_bridge import make_coreai_bridge_pre_post_processors
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 __all__ = [
     "POLICY_TYPE",
