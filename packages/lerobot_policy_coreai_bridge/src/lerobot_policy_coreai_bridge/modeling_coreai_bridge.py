@@ -60,7 +60,36 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._queue: deque = deque()
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
+        self._action_contract = None
+        self._negotiated_encoding: str | None = None
+        if coreai_policy is not None:
+            self._bind_action_contract(coreai_policy)
         self.register_buffer("_sentinel", torch.zeros(1), persistent=False)
+
+    def _bind_action_contract(self, coreai_policy: Any) -> None:
+        from lerobot_coreai.action_contract import parse_action_contract_from_manifest
+        try:
+            self._action_contract = parse_action_contract_from_manifest(
+                coreai_policy.manifest)
+        except Exception:
+            self._action_contract = None
+
+    def _resolve_encoding(self) -> str:
+        """Negotiate the observation encoding with the bound runner (once)."""
+        if self._negotiated_encoding is not None:
+            return self._negotiated_encoding
+        from .negotiation import negotiate_observation_encoding
+        caps = None
+        runner = getattr(self.coreai_policy, "runner", None)
+        if runner is not None and hasattr(runner, "capabilities"):
+            try:
+                caps = runner.capabilities()
+            except Exception:
+                caps = None
+        self._negotiated_encoding = negotiate_observation_encoding(
+            self.config.observation_encoding, caps,
+            allow_legacy=(caps is None))  # no runner in tests -> legacy nested_json
+        return self._negotiated_encoding
 
     # MARK: - Official runtime binding
 
@@ -146,32 +175,45 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             t = t.unsqueeze(0)  # (action_dim,) -> (1, action_dim)
         return t
 
-    def _coreai_observation(self, batch: dict[str, Any]) -> dict[str, Any]:
+    def _coreai_observation(self, batch: dict[str, Any]) -> tuple[dict[str, Any], str]:
         """Bridge a LeRobot batch to a single JSON-safe CoreAI observation."""
         from .transport import prepare_single_coreai_observation
         manifest = getattr(self.coreai_policy, "manifest", None)
         audit: dict[str, Any] = {}
+        encoding = self._resolve_encoding()
         obs, sha = prepare_single_coreai_observation(
-            batch, manifest, encoding=self.config.observation_encoding_or_default(),
-            audit=audit)
-        # Persist the last observation hash + shape audit for trace/evidence.
+            batch, manifest, encoding=encoding, audit=audit)
         self.last_observation_sha256 = sha
         self.last_observation_audit = audit
-        return obs
+        return obs, sha
 
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
         if self.coreai_policy is None:
             raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
         self._require_single_batch(batch)
-        obs = self._coreai_observation(batch)
-        raw = self.coreai_policy.predict_action_chunk(obs)
-        # Strictly normalize + validate the Runner output — never silently reshape.
-        # predict_action_chunk always yields a chunk ([H,A] or [1,H,A]); a
-        # single-action policy returns H=1.
+        obs, sha = self._coreai_observation(batch)
+        encoding = self._resolve_encoding()
+        runner_options = {
+            "protocol_version": "coreai-runner.v2",
+            "observation_encoding": encoding,
+            "observation_schema_version": "coreai-observation.v1",
+            "observation_sha256": sha,
+        }
+        try:
+            raw = self.coreai_policy.predict_action_chunk(obs, runner_options=runner_options)
+        except TypeError:  # a CoreAIPolicy without runner_options (older/fake)
+            raw = self.coreai_policy.predict_action_chunk(obs)
+
+        # Strict normalization + validation, using the manifest action contract
+        # for representation and horizon when known.
         from .action_validation import normalize_and_validate_action_chunk
+        c = self._action_contract
+        rep = c.representation if c is not None else "chunk"
+        horizon = c.horizon if (c is not None and c.representation == "chunk") else None
+        dim = self.config.expected_action_dim or (c.action_dim if c is not None else None)
         return normalize_and_validate_action_chunk(
-            raw, representation="chunk", expected_batch_size=1,
-            expected_action_dim=self.config.expected_action_dim,
+            raw, representation=rep, expected_batch_size=1,
+            expected_horizon=horizon, expected_action_dim=dim,
             device=self._sentinel.device)
 
     @torch.no_grad()

@@ -122,15 +122,31 @@ The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
 - **Fully fail-closed cross-binding** — `expected_robot_type` (like action_dim)
   now fails when the manifest declares no robot type.
 
+## v1.3.4 — real codec negotiation + action-contract integration
+
+- **Negotiated observation encoding** — `RunnerCapabilities` now carries
+  `protocol_version` / `observation_encodings` / `supports_batch` /
+  `max_batch_size`, and `negotiate_observation_encoding()` selects the encoding
+  as the intersection of the config request, the plugin's supported encodings,
+  and what the runner **announces**. `auto` picks the first common encoding; an
+  unsupported request or empty intersection **fails closed** (legacy fallback is
+  opt-in). The selected encoding + protocol version + observation `sha256` are
+  sent in `request.options` (threaded through `CoreAIPolicy.predict_action`).
+- **Action-contract integration** — the plugin persists the manifest action
+  contract on bind and passes its `representation` / `horizon` / `action_dim`
+  into the strict validator, so a single-action artifact returns `[A]` correctly
+  and a wrong-horizon runner output now **fails** (v1.3.3's validator was always
+  called in `chunk` mode with no horizon).
+
 ## Not yet
 
-- Full batched evaluation (`batch_size > 1`) — v1.3.4.
+- Full batched evaluation (`batch_size > 1`) — v1.3.5.
 - Real serializable `PolicyProcessorPipeline` + canonical Hub artifact layout
-  (`config.json` / `policy_preprocessor.json` / …) — v1.3.4 (LeRobot's
-  `PolicyProcessorPipeline` has a non-trivial serialization API that warrants its
-  own PR).
-- Live end-to-end `make_policy` → processors → fake-HTTP-runner test (factory
-  tests still bind via a fake `CoreAIPolicy`) — v1.3.4.
+  (`config.json` / `policy_preprocessor.json` / …) — v1.3.5. LeRobot's
+  `PolicyProcessorPipeline` restructures the batch (an empty pipeline is not a
+  pass-through), so swapping it in changes the pre→policy→post composition and
+  must be validated by the full `make_policy` E2E — its own PR.
+- Live end-to-end `make_policy` → processors → fake-HTTP-runner test — v1.3.5.
 - Official `lerobot-eval` end-to-end certification — v1.4.0.
 
 Guarded real egress remains a separately enforced runtime.

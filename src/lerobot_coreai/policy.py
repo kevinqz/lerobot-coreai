@@ -150,6 +150,7 @@ class CoreAIPolicy:
         batch: dict[str, Any],
         *,
         return_metadata: bool | None = None,
+        runner_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run the policy on a LeRobot-shaped batch and return a dict with the action.
 
@@ -179,10 +180,12 @@ class CoreAIPolicy:
                 strict_observation_keys=self._strict_observation_keys,
             )
 
-        # Build runner request.
+        # Build runner request. runner_options (v1.3.4) carry the negotiated
+        # observation encoding / protocol version / observation sha256.
         request = ActionPredictRequest(
             model_id=self._manifest.model_id,
             observation=batch,
+            options=dict(runner_options) if runner_options else {},
         )
 
         # Call runner.
@@ -224,13 +227,16 @@ class CoreAIPolicy:
         result = self.predict_action(batch, return_metadata=False)
         return result["action"]
 
-    def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> Any:
+    def predict_action_chunk(self, batch: dict[str, Any], *,
+                             runner_options: dict[str, Any] | None = None,
+                             **kwargs: Any) -> Any:
         """Return the full action chunk ``[H, A]`` for ``batch``.
 
         Explicit name for the chunk semantics that :meth:`select_action` has
         historically had. The next-action queue is filled from this.
         """
-        return self.predict_action(batch, return_metadata=False)["action"]
+        return self.predict_action(batch, return_metadata=False,
+                                   runner_options=runner_options)["action"]
 
     def select_next_action(self, batch: dict[str, Any], **kwargs: Any) -> Any:
         """Return ONE per-timestep action ``[A]`` (LeRobot-correct semantics).
