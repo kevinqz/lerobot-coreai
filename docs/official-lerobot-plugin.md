@@ -362,17 +362,40 @@ typed, and batching is proven **multimodal** with processors actually executed.
   **executed**, not just loaded) against a real batch-capable HTTP runner on
   0.6.0 + 0.6.1-dev.
 
+## v1.3.11 — contract closure + official rollout readiness
+
+- **Native slot-isolation is fail-closed** (fixes a v1.3.10 flaw) — native B>1 now
+  requires `slot_isolation == 'independent'` on **both** the artifact contract and
+  the runner; `shared`/`unknown` never enable native, even if both sides agree.
+- **`BatchContract` v3 schema** — `BATCH_CONTRACT_V3_SCHEMA`
+  (`additionalProperties:false`, `required_slot_isolation` pinned `independent`,
+  closed scopes/layout/commit); the parser no longer coerces (`"false"`/`"4"` fail).
+- **Batch contract in the artifact** — `plugin_artifact_manifest.json` now carries
+  `batch_contract` + `batch_contract_sha256` + `processor_stage_contract`;
+  `verify_artifact_semantics` cross-binds the plugin manifest's batch contract to
+  the CoreAI manifest's (equality + hash) and the processor input stage.
+- **Official rollout readiness, no mocks** (`tests/test_e2e_official_rollout.py`) —
+  drives the **real** `lerobot.scripts.lerobot_eval.rollout` over a deterministic
+  `gym.vector.SyncVectorEnv` (state + front/wrist cameras + `task_description`,
+  staggered episode termination) through the official chain
+  `preprocess_observation → env_preprocessor → policy_preprocessor →
+  CoreAIBridgePolicy.select_action → policy_postprocessor → env_postprocessor`,
+  native and split, B=1/2/4, on 0.6.0 + 0.6.1-dev. This proves the rollout
+  **pipeline completes** (`Tensor[B, seq, A]`, done-masking) — NOT lerobot-eval
+  certification, task success, or safety.
+
 ## Not yet
 
-- **Processor-stage vocabulary** — formalize `observation_stage` into a typed set
-  (`lerobot_policy_preprocessor_output.v1`, …) and cross-bind it end to end. The
-  v3 contract records the field; the exact-string enforcement is v1.3.11.
-- **Real `LeRobotDatasetMetadata`** fixtures — close `feature_dtype` /
-  `action_names_order` / `image_layout_range` so `semantic_completeness_verified`
-  can be `true` for a certified fixture (v1.3.11).
-- **Official `lerobot-eval` rollout readiness** — call the real
-  `lerobot.scripts.lerobot_eval.rollout` over a deterministic `SyncVectorEnv`
-  (env processors, done-masking, async episode ends) — v1.3.11.
+- **Processor-stage vocabulary as a typed enum** — v1.3.11 records the stage string
+  and cross-binds it; a closed `ObservationStage` enum replacing the last
+  `raw_lerobot_observation` string is v1.3.12.
+- **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
+  value_range/units in the manifest schema and an on-disk official dataset fixture
+  to close `feature_dtype` / `action_names_order` / `image_layout_range` so
+  `semantic_completeness_verified` can be `true` — v1.3.12.
+- **Formal rollout evidence** — `official_rollout_readiness_report.json/md` +
+  `batch_execution_report`; the rollout E2E is the evidence today (run in CI on
+  both targets), the signed report is v1.3.12/v1.3.13.
 - **Session-scoped / global batching** — requires a per-slot session lifecycle
   (create / session-ids / reset / close) + transaction/rollback protocol; deferred
   until that contract exists. Only stateless/request-scoped B>1 is supported.

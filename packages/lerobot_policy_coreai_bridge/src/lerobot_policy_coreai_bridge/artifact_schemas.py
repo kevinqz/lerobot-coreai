@@ -118,12 +118,51 @@ _SOURCE_REF_SCHEMA = {
     },
 }
 
+BATCH_CONTRACT_V3_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["schema_version", "native_batch", "client_split", "fallback", "queue"],
+    "properties": {
+        "schema_version": {"const": "coreai-batch-contract.v3"},
+        "native_batch": {
+            "type": "object", "additionalProperties": False,
+            "required": ["supported", "max_batch_size", "required_slot_isolation"],
+            "properties": {
+                "supported": {"type": "boolean"},
+                "max_batch_size": {"type": "integer", "minimum": 1},
+                # runtime only certifies independent native slots (v1.3.11).
+                "required_slot_isolation": {"const": "independent"},
+            }},
+        "client_split": {
+            "type": "object", "additionalProperties": False,
+            "required": ["supported", "max_batch_size", "allowed_state_scopes"],
+            "properties": {
+                "supported": {"type": "boolean"},
+                "max_batch_size": {"type": "integer", "minimum": 1},
+                "allowed_state_scopes": {
+                    "type": "array", "minItems": 1,
+                    "items": {"enum": ["stateless", "request_scoped"]}},
+            }},
+        "fallback": {"enum": ["split_and_stack", "reject"]},
+        "queue": {
+            "type": "object", "additionalProperties": False,
+            "required": ["layout", "commit_semantics"],
+            "properties": {
+                "layout": {"const": "time_major_batched"},
+                "commit_semantics": {"const": "atomic_queue_commit"}}},
+        "observation_stage": {"type": "string"},
+    },
+}
+
 PLUGIN_ARTIFACT_MANIFEST_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "additionalProperties": False,
     "required": ["schema_version", "policy_type", "files", "versions", "runner",
-                 "action_contract", "source_coreai_artifact_reference", "claims"],
+                 "action_contract", "batch_contract", "batch_contract_sha256",
+                 "processor_stage_contract", "source_coreai_artifact_reference",
+                 "claims"],
     "properties": {
         "schema_version": {"const": "lerobot-coreai.plugin_artifact.v1"},
         "policy_type": {"const": "coreai_bridge"},
@@ -158,6 +197,16 @@ PLUGIN_ARTIFACT_MANIFEST_SCHEMA = {
             },
         },
         "action_contract": ACTION_CONTRACT_SCHEMA,
+        "batch_contract": BATCH_CONTRACT_V3_SCHEMA,
+        "batch_contract_sha256": _SHA256,
+        "processor_stage_contract": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["observation_input_stage", "action_output_stage"],
+            "properties": {
+                "observation_input_stage": {"type": "string"},
+                "action_output_stage": {"type": "string"},
+            }},
         "source_coreai_artifact_reference": _SOURCE_REF_SCHEMA,
         "claims": CLAIMS_SCHEMA,
     },

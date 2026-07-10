@@ -115,17 +115,23 @@ def select_batch_execution_mode(config, artifact_batch_contract, capabilities,
     slot_iso = (getattr(capabilities, "action_batching_slot_isolation", None)
                 or getattr(capabilities, "action_batching_state_isolation", None))
     runner_supports_batch = bool(getattr(capabilities, "supports_batch", False))
+    # v1.3.11 (P1.1): native B>1 requires INDEPENDENT slot isolation on BOTH the
+    # artifact contract AND the runner — not mere agreement. 'shared'/'unknown'
+    # (even if both sides agree) must never enable native batching in v1.3.x.
     native_ok = (c.native_supported and runner_supports_batch and semantics == "native"
-                 and slot_iso == c.native_slot_isolation)
+                 and c.native_slot_isolation == "independent"
+                 and slot_iso == "independent")
     split_ok = c.split_supported and scope in c.split_allowed_scopes
 
     def _native():
         if not native_ok:
             raise CoreAIPolicyError(
-                "native_batch refused: needs contract.native_supported + runner "
-                f"native semantics + slot_isolation=={c.native_slot_isolation!r}; got "
-                f"contract={c.native_supported} runner_supported={runner_supports_batch} "
-                f"semantics={semantics!r} slot_isolation={slot_iso!r}.")
+                "native_batch refused: requires contract.native_supported + runner "
+                "native semantics + INDEPENDENT slot isolation on BOTH sides; got "
+                f"contract_supported={c.native_supported} "
+                f"contract_isolation={c.native_slot_isolation!r} "
+                f"runner_supported={runner_supports_batch} semantics={semantics!r} "
+                f"runner_isolation={slot_iso!r}.")
         eff = _native_effective_max(config, c, capabilities)
         if b > eff:
             raise CoreAIPolicyError(f"native batch {b} exceeds effective max {eff}.")
