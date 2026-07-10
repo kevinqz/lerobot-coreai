@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/lerobot-eval-v3-report.schema.json",
+  "title": "lerobot-coreai LeRobot eval v3 report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "summary", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.lerobot_eval_v3.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "policy_path": {"type": "string"},
+    "dataset_repo_id": {"type": "string"},
+    "action_contract": {"type": "object"},
+    "summary": {
+      "type": "object",
+      "required": ["frames_evaluated", "actions_generated", "failures",
+                   "actions_sent_to_robot", "actions_sent_to_simulator"],
+      "properties": {
+        "frames_evaluated": {"type": "integer", "minimum": 0},
+        "actions_generated": {"type": "integer", "minimum": 0},
+        "actions_valid": {"type": "integer", "minimum": 0},
+        "failures": {"type": "integer", "minimum": 0},
+        "actions_sent_to_robot": {"type": "integer", "const": 0},
+        "actions_sent_to_simulator": {"type": "integer", "const": 0},
+        "latency_ms": {"type": "object"}
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety",
+                   "authorizes_robot_actuation"],
+      "properties": {
+        "proves_eval_replay_completed": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
