@@ -143,9 +143,14 @@ def evaluate_compatibility_contract(*, strict: bool = False) -> dict[str, Any]:
     # semantics are chunk-passthrough, not per-timestep, and it returns lists,
     # not a torch (B, A) tensor. Report that honestly.
     levels["action_method_name"] = PASSED
-    levels["action_semantics"] = FAILED  # chunk passthrough, not next-action
-    levels["action_tensor_contract"] = FAILED  # returns Any/list, not Tensor(B,A)
-    levels["action_batch_contract"] = FAILED  # runner is non-batched today
+    # v1.2.5: select_next_action() now provides per-timestep semantics via a queue,
+    # but the default select_action() is still chunk-passthrough and the official
+    # tensor contract is unmet — so semantics stay failed until the plugin lands.
+    levels["action_semantics"] = FAILED  # default select_action still chunk passthrough
+    levels["action_tensor_contract"] = FAILED  # returns list, not Tensor(B,A)
+    # v1.2.5: a split-and-stack fallback exists for batched observations, so the
+    # batch contract is partially satisfied (not the official batched tensor path).
+    levels["action_batch_contract"] = PARTIAL
 
     # Official integration levels — none implemented in the local bridge.
     levels["official_plugin_discovery"] = FAILED  # package not lerobot_policy_*

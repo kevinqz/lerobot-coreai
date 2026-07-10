@@ -64,6 +64,11 @@ class CoreAIPolicy:
             },
             runtime=self._runtime,
         )
+        # v1.2.5: per-timestep action queue for select_next_action().
+        from .action_contract import parse_action_contract_from_manifest
+        from .action_queue import ActionQueue
+        self._action_contract = parse_action_contract_from_manifest(manifest)
+        self._action_queue = ActionQueue()
 
     # MARK: - Loading
 
@@ -207,26 +212,54 @@ class CoreAIPolicy:
         batch: dict[str, Any],
         **kwargs: Any,
     ) -> Any:
-        """Run the policy and return the raw action (LeRobot 0.6.0 semantics).
+        """Return the raw action as produced by the runner (LEGACY semantics).
 
-        In LeRobot, ``select_action(batch)`` returns the action directly, not a dict.
-        This method follows that contract::
-
-            action = policy.select_action(batch)
-
-        If you need metadata or a dict response, use :meth:`predict_action`.
+        NOTE (v1.2.5): for a chunked policy this returns the whole action chunk
+        ``[H, A]``, NOT a single per-timestep action. This is the historical
+        CoreAIPolicy behavior and is preserved for backward compatibility. For
+        LeRobot-correct per-timestep semantics use :meth:`select_next_action`
+        (which pops one action from an internal queue). See
+        :meth:`predict_action_chunk`.
         """
         result = self.predict_action(batch, return_metadata=False)
         return result["action"]
 
+    def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> Any:
+        """Return the full action chunk ``[H, A]`` for ``batch``.
+
+        Explicit name for the chunk semantics that :meth:`select_action` has
+        historically had. The next-action queue is filled from this.
+        """
+        return self.predict_action(batch, return_metadata=False)["action"]
+
+    def select_next_action(self, batch: dict[str, Any], **kwargs: Any) -> Any:
+        """Return ONE per-timestep action ``[A]`` (LeRobot-correct semantics).
+
+        Owns an internal queue: when empty it predicts a fresh chunk via
+        :meth:`predict_action_chunk` and loads it; each call pops the next action.
+        For a single-action policy the queue simply holds one row per prediction.
+        """
+        if self._action_queue.empty:
+            chunk = self.predict_action_chunk(batch, **kwargs)
+            self._action_queue.load_chunk(chunk)
+        return self._action_queue.pop_next()
+
     # MARK: - Lifecycle
 
     def reset(self) -> None:
-        """Reset the policy's internal state (e.g. KV cache, action queue).
+        """Reset the policy's internal state.
 
-        v0.2: local no-op unless the runner exposes session reset.
+        v1.2.5: clears the local per-timestep action queue and asks the runner to
+        reset its session when supported (best-effort).
         """
-        pass
+        self._action_queue.reset()
+        client = self._runner_client
+        reset_fn = getattr(client, "reset_session", None) if client else None
+        if callable(reset_fn):
+            try:  # pragma: no cover - depends on runner capability
+                reset_fn()
+            except Exception:
+                pass
 
     def eval(self) -> "CoreAIPolicy":
         """Set the policy to evaluation mode (inference-only). Always returns self."""
