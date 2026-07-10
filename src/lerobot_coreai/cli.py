@@ -662,6 +662,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev2.add_argument("--json", action="store_true")
     p_ev2.set_defaults(func=cmd_eval_v2)
 
+    # --- eval-v3 (v1.2.9) — real LeRobotDataset action replay ---
+    p_ev3 = sub.add_parser("eval-v3",
+                           help="Real LeRobotDataset action replay (frames_evaluated>0) (v1.2.9)")
+    p_ev3.add_argument("--policy.path", dest="policy_path", required=True)
+    p_ev3.add_argument("--runner.url", dest="runner_url", default=None)
+    p_ev3.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_ev3.add_argument("--dataset.revision", dest="dataset_revision", default=None)
+    p_ev3.add_argument("--policy.revision", dest="policy_revision", default=None)
+    p_ev3.add_argument("--episodes", dest="episodes", default=None)
+    p_ev3.add_argument("--max-frames", dest="max_frames", type=int, default=None)
+    p_ev3.add_argument("--stride", dest="stride", type=int, default=1)
+    p_ev3.add_argument("--fail-fast", dest="fail_fast", action="store_true")
+    p_ev3.add_argument("--output-dir", dest="output_dir", default=None)
+    p_ev3.add_argument("--json", action="store_true")
+    p_ev3.set_defaults(func=cmd_eval_v3)
+
     # --- obs-bridge-check (v1.1.5) — observation pipeline bridge ---
     p_obc = sub.add_parser("obs-bridge-check",
                            help="Check a LeRobot frame maps to the CoreAI observation (v1.1.5)")
@@ -886,7 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, lerobot-compat-check --contract, compare, compare-v2, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, eval-v3, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, lerobot-compat-check --contract, compare, compare-v2, export.",
         file=sys.stderr,
     )
     return 1
@@ -2773,6 +2789,51 @@ def cmd_lerobot_registry_check(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Local registry adapter OK." if report["ok"] else "Registry check FAILED.")
     print("Local adapter only — not upstream LeRobot registration.")
+    return 0 if report["ok"] else 1
+
+
+# MARK: - eval-v3 (v1.2.9 — real LeRobotDataset action replay)
+
+def cmd_eval_v3(args: argparse.Namespace) -> int:
+    """Real LeRobotDataset action replay. Sends no robot/sim/real action."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .lerobot_eval_v3 import EvalV3Config, run_eval_v3
+
+    episodes = None
+    if getattr(args, "episodes", None):
+        episodes = [int(e.strip()) for e in args.episodes.split(",")]
+
+    config = EvalV3Config(
+        policy_path=args.policy_path, dataset_repo_id=args.dataset_repo_id,
+        runner_url=getattr(args, "runner_url", None), episodes=episodes,
+        max_frames=getattr(args, "max_frames", None), stride=getattr(args, "stride", 1),
+        fail_fast=getattr(args, "fail_fast", False),
+        dataset_revision=getattr(args, "dataset_revision", None),
+        policy_revision=getattr(args, "policy_revision", None),
+        output_dir=Path(args.output_dir) if getattr(args, "output_dir", None) else None)
+
+    try:
+        report = run_eval_v3(config)
+    except (CoreAIPolicyError, ImportError) as e:
+        print(f"error: eval-v3 needs a policy manifest, the [lerobot] extra + "
+              f"dataset access, and a reachable runner: {e}")
+        return 1
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    s = report["summary"]
+    print("lerobot-coreai eval-v3")
+    print("=" * 50)
+    print(f"frames_evaluated: {s['frames_evaluated']}  actions_generated: "
+          f"{s['actions_generated']}  failures: {s['failures']}")
+    print(f"latency ms: {s['latency_ms']}")
+    print("=" * 50)
+    print("Replay completed." if report["ok"] else "eval-v3 replay had failures.")
+    print("No robot/sim/real egress; proves neither task success nor physical safety.")
     return 0 if report["ok"] else 1
 
 
