@@ -93,3 +93,42 @@ def test_chunk_with_horizon_0_fails():
         parse_action_contract_from_manifest(
             {"contracts": {"action": {"representation": "chunk", "horizon": 0,
                                       "action_dim": 7}}})
+
+
+# --- v1.3.12: BatchContract v3 fail-closed regressions ---
+
+def _v3(**native):
+    n = {"supported": True, "max_batch_size": 4, "required_slot_isolation": "independent"}
+    n.update(native)
+    return {"contracts": {"batch": {"schema_version": "coreai-batch-contract.v3",
+            "native_batch": n,
+            "client_split": {"supported": True, "max_batch_size": 4,
+                             "allowed_state_scopes": ["stateless"]},
+            "fallback": "split_and_stack",
+            "queue": {"layout": "time_major_batched",
+                      "commit_semantics": "atomic_queue_commit"}}}}
+
+
+def test_batch_native_shared_isolation_fails():
+    with pytest.raises(ValueError):
+        parse_batch_contract_from_manifest(_v3(required_slot_isolation="shared"))
+
+
+def test_batch_native_unknown_isolation_fails():
+    with pytest.raises(ValueError):
+        parse_batch_contract_from_manifest(_v3(required_slot_isolation="unknown"))
+
+
+def test_batch_string_bool_fails():
+    with pytest.raises(ValueError):
+        parse_batch_contract_from_manifest(_v3(supported="false"))
+
+
+def test_batch_string_int_fails():
+    with pytest.raises(ValueError):
+        parse_batch_contract_from_manifest(_v3(max_batch_size="4"))
+
+
+def test_batch_v3_authoritative_ok():
+    bc = parse_batch_contract_from_manifest(_v3())
+    assert bc.authoritative and bc.native_supported and bc.native_slot_isolation == "independent"

@@ -85,14 +85,10 @@
               "minimum": 1
             },
             "required_slot_isolation": {
-              "type": "string",
-              "enum": [
-                "independent",
-                "shared",
-                "unknown"
-              ]
+              "const": "independent"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "client_split": {
           "type": "object",
@@ -111,10 +107,14 @@
             "allowed_state_scopes": {
               "type": "array",
               "items": {
-                "type": "string"
+                "enum": [
+                  "stateless",
+                  "request_scoped"
+                ]
               }
             }
-          }
+          },
+          "additionalProperties": false
         },
         "fallback": {
           "type": "string",
@@ -143,7 +143,8 @@
         "observation_stage": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "claims": {
       "type": "object",

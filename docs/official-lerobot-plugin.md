@@ -384,11 +384,43 @@ typed, and batching is proven **multimodal** with processors actually executed.
   **pipeline completes** (`Tensor[B, seq, A]`, done-masking) — NOT lerobot-eval
   certification, task success, or safety.
 
+## v1.3.12 — mandatory rollout gate + evidence integrity
+
+- **Rollout is now a mandatory CI gate** — a dedicated `lerobot-rollout-stable` job
+  installs LeRobot's media stack (`datasets`/`av`) **isolated** from the compat
+  jobs (which must not see the dataset stack) and runs the rollout E2E with
+  `COREAI_REQUIRE_ROLLOUT=1`, so a missing dependency **fails** instead of skipping.
+- **Rollout actually exercises the loop** — a common `_max_episode_steps=8` with
+  **staggered** `terminate_at` (`[2,4,6,8]`) and `HORIZON=3` means the temporal
+  queue genuinely drains and refills. The test asserts **exact** request counts
+  (`native = ceil(seq/H) = 3`; `split = B×3`), **cumulative** done masks
+  (`first_done[i] == terminate_at[i]-1`, every env reaches done), and the **wire
+  payload** (batched obs, both cameras, `task` list/str, `batch_size`, and **no**
+  `action`/`reward`/`done`/`success`/`index`/`timestamp` leakage).
+- **Readiness evidence** — `rollout_evidence.build_rollout_readiness_report`
+  emits a schema-valid report (`official_rollout_pipeline_smoke_passed` only when
+  every check passes; `official_eval_certified` etc. stay false).
+- **Task requiredness** — `extract_observation` no longer forwards an **undeclared**
+  task; a declared-**required** task that is absent fails; declared-optional may be
+  absent.
+- **Capabilities enum + alias hardening** — `capabilities()` validates
+  `semantics`/`slot_isolation`/`scope`/`reset_scope` enums and `observation_encodings`
+  as `list[str]`, and **fails on conflicting** `slot_isolation`/`state_isolation`.
+- **Schema convergence** — the public `action-contract` batch schema now pins
+  native `required_slot_isolation` to `independent` (matching the runtime), with
+  regressions for artifact `shared`/`unknown` and string `"false"`/`"4"`.
+
 ## Not yet
 
-- **Processor-stage vocabulary as a typed enum** — v1.3.11 records the stage string
-  and cross-binds it; a closed `ObservationStage` enum replacing the last
-  `raw_lerobot_observation` string is v1.3.12.
+- **Processor-stage vocabulary as a typed enum** — the stage string is recorded and
+  cross-bound; a closed `ObservationStage` enum replacing the last
+  `raw_lerobot_observation` string is v1.3.13.
+- **Single canonical BatchContract v3 schema file** shared verbatim by
+  `lerobot-coreai.schema.json` / `action-contract.schema.json` / plugin — today the
+  runtime parser + plugin artifact schema are strict and the public action-contract
+  schema matches native isolation; unifying into one file is v1.3.13.
+- **Dev-target rollout gate** — the mandatory rollout job runs on stable (0.6.0);
+  gating it on the pinned 0.6.1-dev is v1.3.13.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

@@ -49,6 +49,29 @@ jobs:
           name: lerobot-stable-compatibility-report
           path: reports/lerobot-stable
 
+  lerobot-rollout-stable:
+    # v1.3.12: dedicated MANDATORY official-rollout gate. Isolated from the compat
+    # jobs because it installs LeRobot's heavy media stack (datasets/av) which the
+    # dataset-import probe in the compat check must NOT see. COREAI_REQUIRE_ROLLOUT=1
+    # turns a missing rollout dependency into a FAILURE (never a silent skip).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COREAI_REQUIRE_ROLLOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[test,signing]"
+      - run: pip install "lerobot==0.6.0"
+      # exactly what lerobot.scripts.lerobot_eval imports at load (datasets + av)
+      - run: pip install datasets av
+      - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
+      - name: Official rollout readiness (mandatory)
+        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
+
   lerobot-dev:
     # v1.2.4: DEVELOPMENT target. Post-0.6.0 LeRobot, PINNED to an exact ref
     # (never a moving @main). Non-blocking — it produces an artifact and signal
