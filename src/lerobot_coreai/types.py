@@ -22,6 +22,11 @@ class RunnerCapabilities:
     supports_vlm: bool = False
     supports_host_loop: bool = False
     supports_multi_graph: bool = False
+    # v1.3.4: protocol + observation encoding negotiation.
+    protocol_version: str | None = None
+    observation_encodings: tuple[str, ...] = ()
+    supports_batch: bool = False
+    max_batch_size: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 

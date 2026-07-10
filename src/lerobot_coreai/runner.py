@@ -79,6 +79,8 @@ class RunnerClient:
         resp = self._get("v1/capabilities")
         data = self._parse_json(resp)
         supports = data.get("supports", {})
+        batching = data.get("action_batching", {}) or {}
+        encodings = data.get("observation_encodings") or ()
         return RunnerCapabilities(
             runtime=data.get("runtime", "coreai-runner"),
             supports_action=supports.get("action", False),
@@ -86,6 +88,10 @@ class RunnerClient:
             supports_vlm=supports.get("vlm", False),
             supports_host_loop=supports.get("host_loop", False),
             supports_multi_graph=supports.get("multi_graph", False),
+            protocol_version=data.get("protocol_version"),
+            observation_encodings=tuple(encodings),
+            supports_batch=bool(batching.get("supported", False)),
+            max_batch_size=batching.get("max_batch_size"),
             raw=data,
         )
 
