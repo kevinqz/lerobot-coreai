@@ -311,6 +311,43 @@
           "description": "Whether real mode requires --confirm-real-robot-actuation."
         }
       }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional machine-readable action/batch/processor contracts (v1.2.8+). Declares chunk vs single action semantics, batch support, and who owns pre/post-processing. Absent in v0 manifests; parsers fall back to inference.",
+      "properties": {
+        "action": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "representation": { "type": "string", "enum": ["single", "chunk"] },
+            "horizon": { "type": "integer", "minimum": 1 },
+            "action_dim": { "type": ["integer", "null"] },
+            "selection_semantics": { "type": "string" },
+            "queue_owner": { "type": "string" },
+            "temporal_ensembling": { "type": "boolean" }
+          }
+        },
+        "batch": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "runner_supports_batch": { "type": "boolean" },
+            "max_batch_size": { "type": "integer", "minimum": 1 },
+            "fallback": { "type": "string", "enum": ["split_and_stack", "reject"] }
+          }
+        },
+        "processor": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "observation_input": { "type": "object" },
+            "action_output": { "type": "object" },
+            "bindings": { "type": "object" }
+          }
+        }
+      }
     }
   }
 }

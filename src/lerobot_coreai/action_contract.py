@@ -80,25 +80,37 @@ def _first_action_shape(manifest) -> list[int] | None:
     return None
 
 
+def _contracts_block(manifest) -> dict[str, Any]:
+    """Return the v1 ``contracts`` block from a dict or manifest object, or {}."""
+    if isinstance(manifest, dict):
+        c = manifest.get("contracts")
+    else:
+        c = getattr(manifest, "contracts", None)
+    return c if isinstance(c, dict) else {}
+
+
 def parse_action_contract_from_manifest(manifest) -> ActionContract:
     """Derive an ActionContract, honoring an explicit block or inferring safely.
 
-    An explicit ``action_contract`` in the manifest wins. Otherwise we infer a
-    backward-compatible contract: a 2D action shape ``[H, A]`` implies a chunk of
-    horizon H; a 1D ``[A]`` implies a single action. We never assert LeRobot
-    per-timestep semantics from inference alone — inference only records shape.
+    Precedence: v1 ``contracts.action`` → v0 top-level ``action_contract`` →
+    shape inference (2D ``[H, A]`` → chunk of horizon H; 1D ``[A]`` → single).
+    Inference never asserts LeRobot per-timestep semantics — it records shape only.
     """
-    explicit = None
-    if isinstance(manifest, dict):
-        explicit = manifest.get("action_contract")
-    else:
-        explicit = getattr(manifest, "action_contract", None)
+    explicit = _contracts_block(manifest).get("action")
+    if not isinstance(explicit, dict):
+        if isinstance(manifest, dict):
+            explicit = manifest.get("action_contract")
+        else:
+            explicit = getattr(manifest, "action_contract", None)
     if isinstance(explicit, dict):
         return ActionContract(
             representation=explicit.get("representation", _CHUNK),
             horizon=int(explicit.get("horizon", 1)),
             action_dim=explicit.get("action_dim"),
-            select_action_semantics=explicit.get("select_action_semantics", "next_action"),
+            # v1 uses "selection_semantics"; v0 used "select_action_semantics".
+            select_action_semantics=explicit.get(
+                "selection_semantics",
+                explicit.get("select_action_semantics", "next_action")),
             predict_action_chunk_semantics=explicit.get(
                 "predict_action_chunk_semantics", "full_chunk"),
             queue_owner=explicit.get("queue_owner", "python_bridge"),
@@ -117,14 +129,17 @@ def parse_action_contract_from_manifest(manifest) -> ActionContract:
 
 
 def parse_batch_contract_from_manifest(manifest) -> BatchContract:
-    explicit = None
-    if isinstance(manifest, dict):
-        explicit = manifest.get("batch_contract")
-    else:
-        explicit = getattr(manifest, "batch_contract", None)
+    explicit = _contracts_block(manifest).get("batch")
+    if not isinstance(explicit, dict):
+        if isinstance(manifest, dict):
+            explicit = manifest.get("batch_contract")
+        else:
+            explicit = getattr(manifest, "batch_contract", None)
     if isinstance(explicit, dict):
         return BatchContract(
-            supports_batch=explicit.get("supports_batch", False),
+            # v1 uses "runner_supports_batch"; v0 used "supports_batch".
+            supports_batch=explicit.get("runner_supports_batch",
+                                        explicit.get("supports_batch", False)),
             max_batch_size=int(explicit.get("max_batch_size", 1)),
             fallback=explicit.get("fallback", "split_and_stack"))
     return BatchContract()
