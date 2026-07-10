@@ -12,7 +12,7 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Current:** `inspect`, `doctor`, `predict`, `rollout --mode dry_run`, `shadow` (motor-blocked), `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, `sim` (simulator-only egress), the safety/governance chain (`supervisor-check`, `profile-*`, `safety-gate`, `safety-regression`, `approval-request`/`approve-bundle`/`verify-approval`, `release-readiness`), and — since v1.0.0 — `real --mode guarded` (guarded real egress) with `verify-real-session`.
 > Up to v0.9.3 **no robot commands are ever sent**; v1.0.0 introduces real egress **only** through `real --mode guarded`, behind every gate. This is guarded real egress, not native LeRobot robot integration, and proves nothing about physical safety.
-> `select_action()` returns raw action (LeRobot 0.6.x semantics). `predict_action()` for dict+metadata.
+> `select_action()` currently follows the project-local CoreAI contract and may return an action **chunk** for chunked policies. Full LeRobot per-timestep `select_action(batch) -> torch.Tensor(B, A)` semantics are tracked by the compatibility contract and are planned for the official plugin; use `select_next_action()` for per-timestep actions and `predict_action()` for dict+metadata.
 
 ---
 
@@ -86,8 +86,11 @@ batch = {
     "task": "pick up the cube",
 }
 
-# LeRobot 0.6.0 semantics: returns raw action
+# Legacy CoreAI contract: returns the raw action (a chunk [H,A] for chunked policies)
 action = policy.select_action(batch)
+
+# LeRobot-correct per-timestep semantics: returns one action [A] from an internal queue
+next_action = policy.select_next_action(batch)
 
 # Debug/CLI-style: returns dict with action + metadata
 result = policy.predict_action(batch, return_metadata=True)
@@ -208,6 +211,7 @@ v1.2.1 adds **release channel governance** (`release-check`): per-channel polici
 v1.2.2 adds an **artifact index** (`artifact-index init/add/list/find/verify`): a local registry of signed/verified bundles. `add` fails closed on a tampered artifact, an overclaim, a raw secret, or an untrusted signer, sets `signature_verified` only after a real `verify-signature` pass, and refuses to silently overwrite an existing id; `verify` re-checks every indexed artifact for drift/tamper. See [docs/artifact-index.md](docs/artifact-index.md).
 v1.2.3 adds a **policy card generator** (`policy-card`): deterministic, honest model cards built from verified evidence (an artifact-index entry or direct report paths). It verifies the source bundle/index first, fails closed on tamper or overclaim, summarizes the compat/bridge/registry/eval-v2/obs/benchmark/provenance/signature/release evidence, and always includes the mandatory non-claims. See [docs/policy-card-generator.md](docs/policy-card-generator.md).
 v1.2.4 is a **compatibility-truth** release: a leveled contract report (`lerobot-compat-check --contract` → `lerobot_compatibility_report_v1.json/md`) that reports each rung of the official LeRobot contract separately and honestly (action semantics, plugin discovery, config registry, processor pipeline, official eval/rollout all reported `failed`/`not_supported` today, never assumed), a CI split into a blocking **stable** (LeRobot 0.6.0) job and a pinned, non-blocking **development** job, and corrected docs (removed "same LeRobot workflow intact"; documented the local opt-in `get_policy_class` patch and that `eval-v2` is feature-mapping only). See [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md).
+v1.2.5 adds **action contract v2 + batch/reset semantics**: explicit `ActionContract`/`BatchContract` (parsed from the manifest), a per-timestep `select_next_action()` backed by an `ActionQueue` (legacy `select_action` unchanged — still a chunk for chunked policies), `reset()` that clears the queue + runner session, and a split-and-stack batching fallback. The contract report's `action_batch_contract` moves to `partial`; action semantics/tensor stay `failed` until the official plugin. See [docs/action-contract-v2.md](docs/action-contract-v2.md).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
