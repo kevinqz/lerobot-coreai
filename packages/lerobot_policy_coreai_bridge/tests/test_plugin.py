@@ -24,7 +24,7 @@ class _FakeCoreAI:
         self._chunk = [[float(i)] * action_dim for i in range(horizon)]
         self.resets = 0
 
-    def predict_action_chunk(self, batch):
+    def predict_action_chunk(self, batch, runner_options=None, **kw):
         return self._chunk
 
     def reset(self):
