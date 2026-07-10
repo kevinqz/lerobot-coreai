@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/source-policy-load-report.schema.json",
+  "title": "lerobot-coreai source policy load report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "loader", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.source_policy_load.v0"},
+    "ok": {"type": "boolean"},
+    "policy_path": {"type": "string"},
+    "dataset_repo_id": {"type": "string"},
+    "loader": {"type": "object"},
+    "failed_stage": {"type": ["string", "null"]},
+    "claims": {
+      "type": "object",
+      "required": ["proves_training_support", "proves_physical_safety"],
+      "properties": {
+        "proves_source_policy_loaded_with_official_lerobot_api": {"type": "boolean"},
+        "proves_training_support": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

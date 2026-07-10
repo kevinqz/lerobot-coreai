@@ -36,8 +36,8 @@ jobs:
         run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-stable
       - name: LeRobot contract report (strict, v1 levels)
         run: lerobot-coreai lerobot-compat-check --contract --strict --output-dir reports/lerobot-stable
-      - name: Bridge + compat + registry + contract tests
-        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py
+      - name: Bridge + compat + registry + contract + loader tests
+        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py tests/test_source_loader_v2.py tests/test_compare_v2.py tests/test_processor_contract.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

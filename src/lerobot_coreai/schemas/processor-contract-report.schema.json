@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/processor-contract-report.schema.json",
+  "title": "lerobot-coreai processor contract report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ambiguous", "contract", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.processor_contract.v0"},
+    "ambiguous": {"type": "boolean"},
+    "strict": {"type": "boolean"},
+    "contract": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety"],
+      "properties": {
+        "proves_processor_ownership_declared": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

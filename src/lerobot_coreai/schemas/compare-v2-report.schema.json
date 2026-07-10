@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/compare-v2-report.schema.json",
+  "title": "lerobot-coreai compare v2 report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "metrics", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.compare_v2.v0"},
+    "ok": {"type": "boolean"},
+    "torch_policy_path": {"type": "string"},
+    "coreai_policy_path": {"type": "string"},
+    "dataset_repo_id": {"type": "string"},
+    "strict_processors": {"type": "boolean"},
+    "source_load": {"type": "object"},
+    "processor_contract": {"type": "object"},
+    "metrics": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety"],
+      "properties": {
+        "proves_action_parity_on_final_unit": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
