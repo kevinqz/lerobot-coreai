@@ -97,12 +97,17 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         """Fail closed if the CoreAI manifest contradicts declared expectations."""
         from lerobot_coreai.action_contract import parse_action_contract_from_manifest
         contract = parse_action_contract_from_manifest(coreai_policy.manifest)
-        if config.expected_action_dim is not None and \
-                contract.action_dim is not None and \
-                contract.action_dim != config.expected_action_dim:
-            raise PluginBindingError(
-                f"action_dim mismatch: manifest {contract.action_dim} != expected "
-                f"{config.expected_action_dim}.")
+        # Fail-closed: a declared expectation with an unknown artifact value is a
+        # failure, not a pass.
+        if config.expected_action_dim is not None:
+            if contract.action_dim is None:
+                raise PluginBindingError(
+                    "expected_action_dim declared but the manifest declares no "
+                    "action dimension; refusing to bind.")
+            if contract.action_dim != config.expected_action_dim:
+                raise PluginBindingError(
+                    f"action_dim mismatch: manifest {contract.action_dim} != expected "
+                    f"{config.expected_action_dim}.")
         if config.expected_action_horizon is not None and \
                 contract.horizon != config.expected_action_horizon:
             raise PluginBindingError(
@@ -135,11 +140,19 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             t = t.unsqueeze(0)  # (action_dim,) -> (1, action_dim)
         return t
 
+    def _coreai_observation(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Bridge a LeRobot batch to a single JSON-safe CoreAI observation."""
+        from .transport import prepare_single_coreai_observation
+        manifest = getattr(self.coreai_policy, "manifest", None)
+        obs, _sha = prepare_single_coreai_observation(batch, manifest)
+        return obs
+
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
         if self.coreai_policy is None:
             raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
         self._require_single_batch(batch)
-        chunk = self.coreai_policy.predict_action_chunk(batch)
+        obs = self._coreai_observation(batch)
+        chunk = self.coreai_policy.predict_action_chunk(obs)
         t = torch.as_tensor(chunk, dtype=torch.float32, device=self._sentinel.device)
         # Normalize to (B, H, A): a [H, A] chunk becomes batch 1.
         if t.ndim == 2:
@@ -148,14 +161,10 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:
-        self._require_single_batch(batch)
+        # Single boundary: select_action ALWAYS goes through predict_action_chunk.
         if not self._queue:
-            if self.coreai_policy is None:
-                raise PluginBindingError("coreai_bridge has no CoreAI policy bound.")
-            chunk = self.coreai_policy.predict_action_chunk(batch)
-            rows = chunk if (hasattr(chunk, "__len__") and chunk
-                             and isinstance(chunk[0], (list, tuple))) else [chunk]
-            for row in rows:
+            chunk = self.predict_action_chunk(batch, **kwargs)  # (B, H, A), B=1
+            for row in chunk[0]:  # enqueue each timestep [A]
                 self._queue.append(row)
         return self._tensor(self._queue.popleft())
 
