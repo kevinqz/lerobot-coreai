@@ -757,6 +757,51 @@ def build_parser() -> argparse.ArgumentParser:
     p_rel.add_argument("--json", action="store_true")
     p_rel.set_defaults(func=cmd_release_check)
 
+    # --- artifact-index (v1.2.2) — local registry for signed/verified artifacts ---
+    p_ai = sub.add_parser("artifact-index",
+                          help="Local registry for signed/verified artifacts (v1.2.2)")
+    ai_sub = p_ai.add_subparsers(dest="ai_action")
+    ai_sub.required = True
+
+    p_ai_init = ai_sub.add_parser("init", help="Initialize an index directory")
+    p_ai_init.add_argument("--index-dir", dest="index_dir", required=True)
+    p_ai_init.add_argument("--json", action="store_true")
+    p_ai_init.set_defaults(func=cmd_artifact_index_init)
+
+    p_ai_add = ai_sub.add_parser("add", help="Verify + add an artifact to the index")
+    p_ai_add.add_argument("--index-dir", dest="index_dir", required=True)
+    p_ai_add.add_argument("--artifact-dir", dest="artifact_dir", required=True)
+    p_ai_add.add_argument("--artifact-type", dest="artifact_type", default="bridge_benchmark")
+    p_ai_add.add_argument("--release-channel", dest="release_channel", default=None)
+    p_ai_add.add_argument("--policy.path", dest="policy_path", default=None)
+    p_ai_add.add_argument("--dataset.repo_id", dest="dataset_repo_id", default=None)
+    p_ai_add.add_argument("--provenance", dest="provenance", default=None)
+    p_ai_add.add_argument("--signature", dest="signature", default=None)
+    p_ai_add.add_argument("--trust-policy", dest="trust_policy", default=None)
+    p_ai_add.add_argument("--release-check-report", dest="release_check_report", default=None)
+    p_ai_add.add_argument("--force", action="store_true")
+    p_ai_add.add_argument("--json", action="store_true")
+    p_ai_add.set_defaults(func=cmd_artifact_index_add)
+
+    p_ai_list = ai_sub.add_parser("list", help="List indexed artifacts")
+    p_ai_list.add_argument("--index-dir", dest="index_dir", required=True)
+    p_ai_list.add_argument("--json", action="store_true")
+    p_ai_list.set_defaults(func=cmd_artifact_index_list)
+
+    p_ai_find = ai_sub.add_parser("find", help="Find indexed artifacts by filter")
+    p_ai_find.add_argument("--index-dir", dest="index_dir", required=True)
+    p_ai_find.add_argument("--policy.path", dest="policy_path", default=None)
+    p_ai_find.add_argument("--dataset.repo_id", dest="dataset_repo_id", default=None)
+    p_ai_find.add_argument("--artifact-type", dest="artifact_type", default=None)
+    p_ai_find.add_argument("--release-channel", dest="release_channel", default=None)
+    p_ai_find.add_argument("--json", action="store_true")
+    p_ai_find.set_defaults(func=cmd_artifact_index_find)
+
+    p_ai_verify = ai_sub.add_parser("verify", help="Verify every indexed artifact")
+    p_ai_verify.add_argument("--index-dir", dest="index_dir", required=True)
+    p_ai_verify.add_argument("--json", action="store_true")
+    p_ai_verify.set_defaults(func=cmd_artifact_index_verify)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -795,7 +840,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -3043,6 +3088,96 @@ def cmd_release_check(args: argparse.Namespace) -> int:
     print(f"Release-approved for channel {report['channel']!r}." if report["ok"]
           else f"NOT release-approved for channel {report['channel']!r}.")
     return 0 if report["ok"] else 1
+
+
+# MARK: - artifact-index (v1.2.2 — local registry)
+
+def cmd_artifact_index_init(args: argparse.Namespace) -> int:
+    import json as _json
+    from .artifact_index import init_index
+    root = init_index(Path(args.index_dir))
+    if args.json:
+        print(_json.dumps(root, indent=2))
+    else:
+        print(f"Initialized artifact index at {args.index_dir}")
+    return 0
+
+
+def cmd_artifact_index_add(args: argparse.Namespace) -> int:
+    import json as _json
+    from .artifact_index import ArtifactIndexError, add_artifact
+    from .trust_policy import load_trust_policy
+    trust = load_trust_policy(Path(args.trust_policy)) \
+        if getattr(args, "trust_policy", None) else None
+    try:
+        result = add_artifact(
+            Path(args.index_dir), Path(args.artifact_dir), args.artifact_type,
+            release_channel=getattr(args, "release_channel", None),
+            policy_path=getattr(args, "policy_path", None),
+            dataset_repo_id=getattr(args, "dataset_repo_id", None),
+            signature=Path(args.signature) if getattr(args, "signature", None) else None,
+            provenance=Path(args.provenance) if getattr(args, "provenance", None) else None,
+            trust_policy=trust,
+            release_check_report=Path(args.release_check_report)
+            if getattr(args, "release_check_report", None) else None,
+            force=getattr(args, "force", False))
+    except ArtifactIndexError as e:
+        print(f"error: {e}")
+        return 1
+    if args.json:
+        print(_json.dumps(result.entry, indent=2))
+    else:
+        print(f"Added {result.entry['artifact_id']} "
+              f"(signed={result.entry['signature_verified']}).")
+    return 0
+
+
+def cmd_artifact_index_list(args: argparse.Namespace) -> int:
+    import json as _json
+    from .artifact_index import ArtifactIndexError, list_entries
+    from .artifact_index_reports import format_entries_table
+    try:
+        entries = list_entries(Path(args.index_dir))
+    except ArtifactIndexError as e:
+        print(f"error: {e}")
+        return 1
+    if args.json:
+        print(_json.dumps(entries, indent=2))
+    else:
+        print(format_entries_table(entries))
+    return 0
+
+
+def cmd_artifact_index_find(args: argparse.Namespace) -> int:
+    import json as _json
+    from .artifact_index import ArtifactIndexError, find_entries
+    from .artifact_index_reports import format_entries_table
+    try:
+        entries = find_entries(
+            Path(args.index_dir), policy_path=getattr(args, "policy_path", None),
+            dataset_repo_id=getattr(args, "dataset_repo_id", None),
+            artifact_type=getattr(args, "artifact_type", None),
+            release_channel=getattr(args, "release_channel", None))
+    except ArtifactIndexError as e:
+        print(f"error: {e}")
+        return 1
+    if args.json:
+        print(_json.dumps(entries, indent=2))
+    else:
+        print(format_entries_table(entries))
+    return 0
+
+
+def cmd_artifact_index_verify(args: argparse.Namespace) -> int:
+    import json as _json
+    from .artifact_index import verify_index
+    from .artifact_index_reports import format_verify
+    result = verify_index(Path(args.index_dir))
+    if args.json:
+        print(_json.dumps({"ok": result.ok, "checks": result.checks}, indent=2))
+        return 0 if result.ok else 1
+    print(format_verify(result.checks, result.ok))
+    return 0 if result.ok else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
