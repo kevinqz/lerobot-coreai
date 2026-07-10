@@ -57,8 +57,8 @@ def _manifest(action_dim=ACTION_DIM):
         "safety": {"default_mode": "dry_run",
                    "real_actuation_requires_confirmation": True},
         "contracts": {"processor": {
-            "observation_input": {"owner": "coreai_runner", "expects": "raw"},
-            "action_output": {"owner": "coreai_runner", "returns": "post"}}},
+            "observation_input": {"owner": "coreai_runner", "expects": "raw_lerobot_observation"},
+            "action_output": {"owner": "coreai_runner", "returns": "postprocessed_environment_action"}}},
     }
 
 
@@ -216,5 +216,26 @@ def test_official_composition_feature_mismatch_fails(tmp_path, monkeypatch):
     try:
         with pytest.raises(Exception):
             make_policy(cfg, ds_meta=_ds_meta(action_dim=9))
+    finally:
+        server.__exit__()
+
+
+def test_official_composition_input_feature_mismatch_fails(tmp_path, monkeypatch):
+    # Dataset presents an observation key the manifest does not declare -> the
+    # feature cross-binding must fail closed.
+    art = _artifact(tmp_path)
+    state = _State()
+    server = _Server(state).__enter__()
+    monkeypatch.setenv("COREAI_RUNNER_URL", server.url)
+    register_third_party_plugins()
+    cfg = PreTrainedConfig.from_pretrained(art)
+    cfg.pretrained_path = art
+    ds_meta = types.SimpleNamespace(
+        features={"observation.unexpected": {"dtype": "float32", "shape": [ACTION_DIM]},
+                  "action": {"dtype": "float32", "shape": [ACTION_DIM]}},
+        stats={})
+    try:
+        with pytest.raises(Exception):
+            make_policy(cfg, ds_meta=ds_meta)
     finally:
         server.__exit__()

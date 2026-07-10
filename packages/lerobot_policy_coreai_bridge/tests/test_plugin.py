@@ -97,15 +97,25 @@ def test_reset_clears_queue_and_resets_coreai():
     assert fake.resets == 1
 
 
-def test_processor_factory_returns_real_pipelines():
-    pre, post = make_coreai_bridge_pre_post_processors(
-        CoreAIBridgeConfig(runtime_binding_mode="in_memory"))
-    # v1.3.6: real PolicyProcessorPipeline (not custom identity callables).
-    # (PolicyProcessorPipeline is a subscripted generic, so check by capability.)
+def test_processor_factory_fails_closed_without_artifact():
+    # v1.3.7: building processors from scratch (no artifact evidence) is refused.
+    from lerobot_policy_coreai_bridge.processor_coreai_bridge import (
+        ProcessorOwnershipError,
+    )
+    with pytest.raises(ProcessorOwnershipError):
+        make_coreai_bridge_pre_post_processors(
+            CoreAIBridgeConfig(runtime_binding_mode="in_memory"))
+
+
+def test_build_processors_are_real_pipelines():
+    from lerobot_policy_coreai_bridge.processor_coreai_bridge import (
+        build_coreai_bridge_processors,
+    )
+    pre, post = build_coreai_bridge_processors()
+    # real PolicyProcessorPipeline (subscripted generic -> check by capability).
     assert type(pre).__name__ == "DataProcessorPipeline"
     assert hasattr(pre, "save_pretrained") and hasattr(pre, "from_pretrained")
     assert list(pre.steps) == [] and list(post.steps) == []
-    # Step-empty pipelines preserve observation content and action tensors.
     batch = {"observation.state": torch.zeros(1, 7), "task": ["pick"]}
     out = pre(batch)
     assert torch.equal(out["observation.state"], batch["observation.state"])
