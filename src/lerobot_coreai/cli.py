@@ -907,9 +907,12 @@ def build_parser() -> argparse.ArgumentParser:
                               default="coreai-runner.v2")
     p_pkg_plugin.add_argument("--revision", dest="revision", default="main")
     p_pkg_plugin.add_argument("--external", action="store_true",
-                              help="Record an external {repo,revision,sha256} reference")
-    p_pkg_plugin.add_argument("--external-revision", dest="external_revision", default=None)
-    p_pkg_plugin.add_argument("--external-sha256", dest="external_sha256", default=None)
+                              help="Record an external provenance reference")
+    p_pkg_plugin.add_argument("--requested-ref", dest="requested_ref", default=None,
+                              help="The (possibly mutable) requested ref, e.g. main")
+    p_pkg_plugin.add_argument("--resolved-commit-sha", dest="resolved_commit_sha",
+                              default=None,
+                              help="Immutable 40-hex commit (required for --external)")
     p_pkg_plugin.add_argument("--json", action="store_true")
     p_pkg_plugin.set_defaults(func=cmd_package_lerobot_plugin_artifact)
 
@@ -919,8 +922,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify_plugin.add_argument("--artifact", dest="artifact", required=True)
     p_verify_plugin.add_argument("--shallow", action="store_true",
                                  help="Skip lerobot-dependent deep checks")
-    p_verify_plugin.add_argument("--report", action="store_true",
-                                 help="Write plugin_artifact_verification_report.json/md")
+    p_verify_plugin.add_argument("--output-dir", dest="output_dir", default=None,
+                                 help="Write the verification report here (OUTSIDE the "
+                                      "sealed artifact); the artifact is never modified")
     p_verify_plugin.add_argument("--json", action="store_true")
     p_verify_plugin.set_defaults(func=cmd_verify_lerobot_plugin_artifact)
 
@@ -946,7 +950,7 @@ def cmd_package_lerobot_plugin_artifact(args: argparse.Namespace) -> int:
         runner_url_env=args.runner_url_env,
         minimum_runner_protocol=args.minimum_runner_protocol,
         revision=args.revision, external=args.external,
-        external_revision=args.external_revision, external_sha256=args.external_sha256)
+        requested_ref=args.requested_ref, resolved_commit_sha=args.resolved_commit_sha)
     if args.json:
         print(_json.dumps(pm, indent=2))
     else:
@@ -966,7 +970,7 @@ def cmd_verify_lerobot_plugin_artifact(args: argparse.Namespace) -> int:
               "'lerobot_policy_coreai_bridge'.", file=sys.stderr)
         return 4
     result = verify_plugin_artifact(args.artifact, deep=not args.shallow,
-                                    write_report=getattr(args, "report", False))
+                                    report_dir=getattr(args, "output_dir", None))
     if args.json:
         print(_json.dumps(result.to_dict(), indent=2))
     else:

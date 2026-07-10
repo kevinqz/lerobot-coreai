@@ -94,6 +94,11 @@ class RunnerClient:
             max_batch_size=batching.get("max_batch_size"),
             backward_compatible_with=tuple(
                 data.get("backward_compatible_with") or ()),
+            action_batching_semantics=batching.get("semantics"),
+            inference_state_scope=(data.get("inference_state") or {}).get("scope"),
+            supports_session_ids=bool(
+                (data.get("inference_state") or {}).get("supports_session_ids", False)),
+            reset_scope=(data.get("inference_state") or {}).get("reset_scope"),
             raw=data,
         )
 

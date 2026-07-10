@@ -1,21 +1,17 @@
-# artifact.py — canonical, publishable CoreAI-bridge plugin artifact (v1.3.6/1.3.7).
+# artifact.py — canonical, publishable CoreAI-bridge plugin artifact (v1.3.6–1.3.8).
 #
-# v1.3.6 built a factory-loadable artifact. v1.3.7 HARDENS it before batching
-# multiplies it: a strict typed inventory, exact checksum coverage, path-traversal
-# and symlink guards, structured secret scanning, real JSON-schema validation,
-# version binding, an honest source-provenance reference, and a verification report
-# that separates INTEGRITY (unsigned checksum consistency) from AUTHENTICITY
-# (cryptographic signature — still false here; signing lands later).
+# v1.3.6 built a factory-loadable artifact; v1.3.7 hardened its STRUCTURE (typed
+# inventory, exact checksums, path/symlink guards, integrity≠authenticity). v1.3.8
+# closes its SEMANTICS: every embedded contract is schema-validated (processor,
+# action, claims), the files are cross-bound to a single source of truth, secrets
+# are scanned across ALL declared JSON, provenance carries an immutable resolved
+# commit sha, the artifact root digest binds role+size, and verification reports
+# are written OUTSIDE the sealed artifact (verify is idempotent).
 #
 #   plugin-artifact/
-#   ├── config.json                        (PreTrainedConfig for coreai_bridge)
-#   ├── policy_preprocessor.json           (real PolicyProcessorPipeline)
-#   ├── policy_postprocessor.json          (real PolicyProcessorPipeline)
-#   ├── lerobot-coreai.json                (the CoreAI manifest)
-#   ├── plugin_artifact_manifest.json      (index + versions + claims + provenance)
-#   ├── plugin_artifact_inventory.json     (typed inventory + artifact_root_sha256)
-#   ├── checksums.json                     (must equal the inventory content set)
-#   └── README.md
+#   ├── config.json / policy_preprocessor.json / policy_postprocessor.json
+#   ├── lerobot-coreai.json / plugin_artifact_manifest.json
+#   ├── plugin_artifact_inventory.json / checksums.json / README.md
 #
 # Never persists a runner URL, token, secret, or machine-local absolute path.
 # No hardware, no egress.
@@ -36,9 +32,13 @@ from lerobot_coreai.manifest import load_manifest
 
 from . import __version__ as PLUGIN_VERSION
 from .artifact_schemas import (
+    ACTION_CONTRACT_SCHEMA,
+    ARTIFACT_ROLES,
+    CLAIMS_SCHEMA,
     PLUGIN_ARTIFACT_INVENTORY_SCHEMA,
     PLUGIN_ARTIFACT_MANIFEST_SCHEMA,
     PLUGIN_ARTIFACT_VERIFICATION_REPORT_SCHEMA,
+    PROCESSOR_CONTRACT_SCHEMA,
 )
 from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 from .processor_coreai_bridge import (
@@ -52,6 +52,7 @@ from .processor_coreai_bridge import (
 ARTIFACT_SCHEMA_VERSION = "lerobot-coreai.plugin_artifact.v1"
 INVENTORY_SCHEMA_VERSION = "lerobot-coreai.plugin_inventory.v1"
 REPORT_SCHEMA_VERSION = "lerobot-coreai.plugin_artifact_verification.v1"
+ROOT_ALGORITHM = "canonical-json-sha256.v1"
 
 MANIFEST_FILENAME = "lerobot-coreai.json"
 CONFIG_FILENAME = "config.json"
@@ -59,30 +60,27 @@ PLUGIN_MANIFEST_FILENAME = "plugin_artifact_manifest.json"
 INVENTORY_FILENAME = "plugin_artifact_inventory.json"
 CHECKSUMS_FILENAME = "checksums.json"
 README_FILENAME = "README.md"
-VERIFICATION_REPORT_FILENAME = "plugin_artifact_verification_report.json"
 
-# Content files (covered by the inventory + checksums). The inventory and
-# checksums themselves are integrity descriptors and are NOT content files;
-# the verification report is generated after verification and is excluded too.
-_CONTENT_ROLES = {
-    CONFIG_FILENAME: "policy_config",
-    PREPROCESSOR_FILENAME: "policy_preprocessor",
-    POSTPROCESSOR_FILENAME: "policy_postprocessor",
-    MANIFEST_FILENAME: "coreai_manifest",
-    PLUGIN_MANIFEST_FILENAME: "plugin_manifest",
-    README_FILENAME: "readme",
+# role -> filename (exactly one file per role).
+_ROLE_FILE = {
+    "policy_config": CONFIG_FILENAME,
+    "policy_preprocessor": PREPROCESSOR_FILENAME,
+    "policy_postprocessor": POSTPROCESSOR_FILENAME,
+    "coreai_manifest": MANIFEST_FILENAME,
+    "plugin_manifest": PLUGIN_MANIFEST_FILENAME,
+    "readme": README_FILENAME,
 }
+_CONTENT_FILES = set(_ROLE_FILE.values())
 _INTEGRITY_FILES = {INVENTORY_FILENAME, CHECKSUMS_FILENAME}
-_NON_CONTENT = _INTEGRITY_FILES | {VERIFICATION_REPORT_FILENAME}
+# JSON content files scanned for secrets (README is text -> URL-only scan).
+_JSON_CONTENT = (CONFIG_FILENAME, PLUGIN_MANIFEST_FILENAME, MANIFEST_FILENAME,
+                 PREPROCESSOR_FILENAME, POSTPROCESSOR_FILENAME)
 
-_FORBIDDEN_TRUE = ("official_eval_certified", "upstream_native", "supports_training",
-                   "proves_task_success", "proves_physical_safety")
-
-# Structured secret scan: sensitive JSON key substrings + credential-in-URL.
 _SECRET_KEYS = ("token", "secret", "password", "api_key", "apikey", "authorization",
                 "bearer")
 _CREDENTIAL_URL_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ArtifactError(RuntimeError):
@@ -98,18 +96,22 @@ def _sha256_file(path: Path) -> str:
 
 
 def _artifact_root_sha256(entries: list[dict]) -> str:
-    """A single root digest over sorted (path, sha256) pairs."""
-    canon = json.dumps(sorted((e["path"], e["sha256"]) for e in entries),
-                       separators=(",", ":"))
+    """Root digest over sorted full entries (path, role, sha256, size) + algorithm."""
+    canon = json.dumps(
+        {"algorithm": ROOT_ALGORITHM, "schema_version": INVENTORY_SCHEMA_VERSION,
+         "files": sorted(({"path": e["path"], "role": e["role"], "sha256": e["sha256"],
+                           "size_bytes": e["size_bytes"]} for e in entries),
+                         key=lambda e: e["path"])},
+        separators=(",", ":"), sort_keys=True)
     return "sha256:" + hashlib.sha256(canon.encode()).hexdigest()
 
 
 def _find_secret(obj: Any, path: str = "") -> str | None:
-    """Return a human path to the first secret found, or None. Public URLs pass."""
+    """First secret path, or None. Sensitive key + ANY non-empty value fails."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             kl = str(k).lower()
-            if isinstance(v, str) and v and any(s in kl for s in _SECRET_KEYS):
+            if any(s in kl for s in _SECRET_KEYS) and v not in (None, "", {}, [], ()):
                 return f"{path}.{k}"
             found = _find_secret(v, f"{path}.{k}")
             if found:
@@ -119,21 +121,14 @@ def _find_secret(obj: Any, path: str = "") -> str | None:
             found = _find_secret(v, f"{path}[{i}]")
             if found:
                 return found
-    elif isinstance(obj, str):
-        if _CREDENTIAL_URL_RE.search(obj):
-            return f"{path} (credential-in-URL)"
+    elif isinstance(obj, str) and _CREDENTIAL_URL_RE.search(obj):
+        return f"{path} (credential-in-URL)"
     return None
 
 
-# MARK: - Version binding (pure, unit-testable)
+# MARK: - Version binding (pure)
 
 def check_version_compatibility(artifact_versions: dict, installed: dict) -> tuple[bool, str]:
-    """Compare artifact-recorded versions against installed ones (v1.3.7).
-
-    Rules: core/plugin lockstep inside the artifact; installed core/plugin share
-    the artifact's major and are not OLDER than the artifact; if a LeRobot version
-    is recorded, installed LeRobot must share major.minor.
-    """
     a_core = artifact_versions.get("lerobot_coreai")
     a_plugin = artifact_versions.get("lerobot_policy_coreai_bridge")
     if a_core != a_plugin:
@@ -141,8 +136,7 @@ def check_version_compatibility(artifact_versions: dict, installed: dict) -> tup
     try:
         for name, key in (("core", "lerobot_coreai"),
                           ("plugin", "lerobot_policy_coreai_bridge")):
-            av = Version(artifact_versions[key])
-            iv = Version(installed[key])
+            av, iv = Version(artifact_versions[key]), Version(installed[key])
             if av.major != iv.major:
                 return False, f"{name} major mismatch (artifact {av} vs installed {iv})"
             if iv < av:
@@ -180,12 +174,16 @@ def build_plugin_artifact(
     minimum_runner_protocol: str = "coreai-runner.v2",
     revision: str = "main",
     external: bool = False,
-    external_revision: str | None = None,
-    external_sha256: str | None = None,  # accepted but re-derived from the manifest
+    requested_ref: str | None = None,
+    resolved_commit_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Build a canonical, hardened plugin artifact from a CoreAI artifact."""
+    """Build a canonical, hardened, semantically-closed plugin artifact."""
     manifest = load_manifest(coreai_artifact, revision=revision)
     require_coreai_processor_ownership(manifest)  # exact v2 semantics
+
+    # Validate the embedded processor contract against its schema (v1.3.8).
+    proc_contract = _manifest_processor_contract(getattr(manifest, "raw", None) or {})
+    jsonschema.validate(proc_contract, PROCESSOR_CONTRACT_SCHEMA)
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -193,7 +191,7 @@ def build_plugin_artifact(
     from lerobot_coreai.action_contract import parse_action_contract_from_manifest
     contract = parse_action_contract_from_manifest(manifest)
 
-    # 1. config.json — coreai_artifact="" (root); only the env-var NAME; cpu device.
+    # 1. config.json — coreai_artifact="" (root); env-var NAME only; cpu device.
     cfg = CoreAIBridgeConfig(
         coreai_artifact="", runner_url_env=runner_url_env,
         minimum_runner_protocol=minimum_runner_protocol,
@@ -204,7 +202,7 @@ def build_plugin_artifact(
         device="cpu")
     cfg.save_pretrained(str(out))
 
-    # 2. processors (real PolicyProcessorPipeline; ownership already required).
+    # 2. processors (real PolicyProcessorPipeline).
     pre, post = build_coreai_bridge_processors()
     pre.save_pretrained(str(out), config_filename=PREPROCESSOR_FILENAME)
     post.save_pretrained(str(out), config_filename=POSTPROCESSOR_FILENAME)
@@ -213,15 +211,20 @@ def build_plugin_artifact(
     (out / MANIFEST_FILENAME).write_text(
         json.dumps(getattr(manifest, "raw", None) or manifest, indent=2))
     manifest_sha = _sha256_file(out / MANIFEST_FILENAME)
+
+    # Provenance: immutable resolved commit for external release references.
     if external:
-        if not external_revision:
+        if not resolved_commit_sha or not _COMMIT_RE.match(resolved_commit_sha):
             raise ArtifactError(
-                "external source references require external_revision (a moving "
-                "branch reference is refused); sha256 is derived from the manifest.")
-        if external_sha256 and external_sha256 != manifest_sha:
-            raise ArtifactError(
-                f"external_sha256 {external_sha256} != embedded manifest sha "
-                f"{manifest_sha}.")
+                "external references require resolved_commit_sha (40-hex); a mutable "
+                f"ref like {requested_ref!r} alone is refused.")
+    source_ref = {
+        "mode": "external" if external else "embedded",
+        "embedded_manifest_sha256": manifest_sha,
+        "source_repo": coreai_artifact if external else None,
+        "requested_ref": requested_ref if external else None,
+        "resolved_commit_sha": resolved_commit_sha if external else None,
+    }
 
     # 4. plugin_artifact_manifest.json
     from lerobot_coreai import __version__ as CORE_VERSION
@@ -233,62 +236,51 @@ def build_plugin_artifact(
     plugin_manifest = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "policy_type": POLICY_TYPE,
-        "files": {
-            "config": CONFIG_FILENAME, "preprocessor": PREPROCESSOR_FILENAME,
-            "postprocessor": POSTPROCESSOR_FILENAME, "coreai_manifest": MANIFEST_FILENAME,
-            "inventory": INVENTORY_FILENAME,
-        },
-        "versions": {
-            "lerobot_coreai": CORE_VERSION,
-            "lerobot_policy_coreai_bridge": PLUGIN_VERSION,
-            "lerobot": lerobot_v,
-        },
+        "files": {"config": CONFIG_FILENAME, "preprocessor": PREPROCESSOR_FILENAME,
+                  "postprocessor": POSTPROCESSOR_FILENAME,
+                  "coreai_manifest": MANIFEST_FILENAME, "inventory": INVENTORY_FILENAME},
+        "versions": {"lerobot_coreai": CORE_VERSION,
+                     "lerobot_policy_coreai_bridge": PLUGIN_VERSION, "lerobot": lerobot_v},
         "runner": {"runner_url_env": runner_url_env,
                    "minimum_runner_protocol": minimum_runner_protocol},
         "action_contract": contract.to_dict(),
-        # Honest provenance: the RUNTIME manifest is always embedded; an external
-        # reference is provenance only (where the source came from).
-        "source_coreai_artifact_reference": {
-            "mode": "external" if external else "embedded",
-            "manifest_sha256": manifest_sha,
-            "repo": coreai_artifact if external else None,
-            "revision": external_revision if external else None,
-        },
-        "claims": {
-            "official_plugin_factory_compatible": None,  # promoted only by E2E evidence
-            "official_eval_certified": False, "upstream_native": False,
-            "supports_training": False, "proves_task_success": False,
-            "proves_physical_safety": False,
-        },
+        "source_coreai_artifact_reference": source_ref,
+        "claims": {"official_plugin_factory_compatible": None,
+                   "official_eval_certified": False, "upstream_native": False,
+                   "supports_training": False, "proves_task_success": False,
+                   "proves_physical_safety": False},
     }
+    jsonschema.validate(plugin_manifest, PLUGIN_ARTIFACT_MANIFEST_SCHEMA)
     (out / PLUGIN_MANIFEST_FILENAME).write_text(json.dumps(plugin_manifest, indent=2))
     (out / README_FILENAME).write_text(_render_readme(plugin_manifest))
 
-    # 5. Refuse secrets in config + plugin manifest before sealing.
-    for name in (CONFIG_FILENAME, PLUGIN_MANIFEST_FILENAME):
-        data = json.loads((out / name).read_text())
-        if name == CONFIG_FILENAME and data.get("coreai_artifact"):
-            raise ArtifactError(f"{name}: coreai_artifact must be empty (no local path).")
-        hit = _find_secret(data)
+    # 5. Refuse secrets across all declared JSON before sealing.
+    if json.loads((out / CONFIG_FILENAME).read_text()).get("coreai_artifact"):
+        raise ArtifactError("config.json: coreai_artifact must be empty (no local path).")
+    for name in _JSON_CONTENT:
+        hit = _find_secret(json.loads((out / name).read_text()))
         if hit:
             raise ArtifactError(f"{name}: refusing to persist a secret at {hit}.")
 
-    # 6. Typed inventory over the content files, then checksums.json (same set).
+    # 6. Typed inventory (unique path+role, role enum) + checksums (== inventory).
     entries = []
-    for name, role in _CONTENT_ROLES.items():
+    for role, name in _ROLE_FILE.items():
         p = out / name
         entries.append({"path": name, "role": role, "sha256": _sha256_file(p),
                         "size_bytes": p.stat().st_size})
     entries.sort(key=lambda e: e["path"])
-    inventory = {"schema_version": INVENTORY_SCHEMA_VERSION, "files": entries,
+    inventory = {"schema_version": INVENTORY_SCHEMA_VERSION,
+                 "artifact_root_algorithm": ROOT_ALGORITHM, "files": entries,
                  "artifact_root_sha256": _artifact_root_sha256(entries)}
     jsonschema.validate(inventory, PLUGIN_ARTIFACT_INVENTORY_SCHEMA)
     (out / INVENTORY_FILENAME).write_text(json.dumps(inventory, indent=2))
     (out / CHECKSUMS_FILENAME).write_text(
         json.dumps({e["path"]: e["sha256"] for e in entries}, indent=2))
-
-    jsonschema.validate(plugin_manifest, PLUGIN_ARTIFACT_MANIFEST_SCHEMA)
     return plugin_manifest
+
+
+def _manifest_processor_contract(manifest_raw: dict) -> dict:
+    return (manifest_raw.get("contracts", {}) or {}).get("processor", {}) or {}
 
 
 def _render_readme(pm: dict[str, Any]) -> str:
@@ -298,10 +290,88 @@ def _render_readme(pm: dict[str, Any]) -> str:
         "Load with the official LeRobot factory (see docs/official-lerobot-plugin.md).\n\n"
         f"The runner URL is read from `${pm['runner']['runner_url_env']}` at runtime "
         "and is never stored here.\n\n"
-        "Verify integrity with `lerobot-coreai verify-lerobot-plugin-artifact`.\n"
-        "This artifact proves **factory/protocol** compatibility and **checksum "
-        "integrity** only — NOT cryptographic authenticity, official lerobot-eval, "
-        "task success, or physical safety.\n")
+        "Verify with `lerobot-coreai verify-lerobot-plugin-artifact` (reports are "
+        "written OUTSIDE this sealed artifact).\n"
+        "Proves **factory/protocol** compatibility and **checksum integrity** only — "
+        "NOT cryptographic authenticity, official lerobot-eval, task success, or "
+        "physical safety.\n")
+
+
+# MARK: - Semantic cross-binding (v1.3.8, lerobot-free)
+
+def verify_artifact_semantics(out: Path) -> dict[str, str]:
+    """Cross-bind config/plugin-manifest/coreai-manifest/inventory/processors.
+
+    Returns a name->status map ("passed" | "failed: …" | "not_verified: …").
+    Absent/unknowable properties are "not_verified", never silently "passed".
+    """
+    from lerobot_coreai.action_contract import parse_action_contract_from_manifest
+    from lerobot_coreai.manifest import LeRobotCoreAIManifest
+    checks: dict[str, str] = {}
+
+    def c(name, cond, reason=""):
+        checks[name] = "passed" if cond else f"failed: {reason}"
+
+    cfg = json.loads((out / CONFIG_FILENAME).read_text())
+    pm = json.loads((out / PLUGIN_MANIFEST_FILENAME).read_text())
+    coreai = json.loads((out / MANIFEST_FILENAME).read_text())
+    inventory = json.loads((out / INVENTORY_FILENAME).read_text())
+    # Parse the action contract via the manifest OBJECT (same path as build), so
+    # feature-derived shapes are read consistently with plugin_artifact_manifest.
+    coreai_obj = LeRobotCoreAIManifest.from_dict(coreai)
+
+    # processor contract schema + exact ownership.
+    proc = _manifest_processor_contract(coreai)
+    try:
+        jsonschema.validate(proc, PROCESSOR_CONTRACT_SCHEMA)
+        c("processor_contract_schema", True)
+    except Exception as exc:  # noqa: BLE001
+        c("processor_contract_schema", False, str(exc))
+    c("processor_ownership_exact", manifest_declares_coreai_ownership(coreai),
+      "manifest lacks exact CoreAI ownership")
+
+    # action contract equality: plugin manifest vs parsed CoreAI manifest.
+    contract = parse_action_contract_from_manifest(coreai_obj).to_dict()
+    c("action_contract_equality", pm.get("action_contract") == contract,
+      f"{pm.get('action_contract')} != {contract}")
+
+    # config expectations vs manifest.
+    c("config_action_dim", cfg.get("expected_action_dim") == contract["action_dim"],
+      f"{cfg.get('expected_action_dim')} != {contract['action_dim']}")
+    expected_h = contract["horizon"] if contract["representation"] == "chunk" else None
+    c("config_action_horizon", cfg.get("expected_action_horizon") == expected_h,
+      f"{cfg.get('expected_action_horizon')} != {expected_h}")
+    robot_type = (coreai.get("robot", {}) or {}).get("type")
+    c("config_robot_type", cfg.get("expected_robot_type") == robot_type,
+      f"{cfg.get('expected_robot_type')} != {robot_type}")
+    c("protocol_equality",
+      pm.get("runner", {}).get("minimum_runner_protocol") == cfg.get("minimum_runner_protocol"),
+      "minimum_runner_protocol differs between plugin manifest and config")
+
+    # files/roles ↔ inventory.
+    inv_roles = {e["role"]: e["path"] for e in inventory["files"]}
+    role_ok = all(inv_roles.get(r) == f for r, f in _ROLE_FILE.items())
+    c("inventory_role_file_mapping", role_ok, f"role→file mismatch: {inv_roles}")
+    pm_files = set(pm.get("files", {}).values()) - {INVENTORY_FILENAME}
+    c("manifest_files_in_inventory", pm_files <= set(inv_roles.values()),
+      f"plugin manifest files not all inventoried: {pm_files}")
+
+    # processor step structure vs identity contract (step-empty pipelines).
+    for fn, key in ((PREPROCESSOR_FILENAME, "preprocessor"),
+                    (POSTPROCESSOR_FILENAME, "postprocessor")):
+        try:
+            steps = json.loads((out / fn).read_text()).get("steps", None)
+            c(f"processor_steps_empty:{key}", steps == [],
+              f"{key} is not step-empty (identity contract requires no steps)")
+        except Exception as exc:  # noqa: BLE001
+            c(f"processor_steps_empty:{key}", False, str(exc))
+
+    # feature semantics: shapes verifiable from the manifest; dtype/names/units/
+    # layout are recorded as not_verified (config PolicyFeatures don't carry them).
+    checks["feature_dtype"] = "not_verified: config features carry no dtype"
+    checks["feature_action_names_order"] = "not_verified: manifest declares no action names"
+    checks["feature_image_layout_range"] = "not_verified: no image features declared"
+    return checks
 
 
 # MARK: - Verify
@@ -310,12 +380,14 @@ def _render_readme(pm: dict[str, Any]) -> str:
 class VerifyResult:
     ok: bool
     checks: dict[str, str] = field(default_factory=dict)
+    semantics: dict[str, str] = field(default_factory=dict)
     claims: dict[str, bool] = field(default_factory=dict)
     plugin_manifest: dict[str, Any] | None = None
     artifact_root_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"ok": self.ok, "checks": self.checks, "claims": self.claims}
+        return {"ok": self.ok, "checks": self.checks, "semantics": self.semantics,
+                "claims": self.claims}
 
 
 def _safe_name(name: str) -> bool:
@@ -324,55 +396,54 @@ def _safe_name(name: str) -> bool:
 
 
 def verify_plugin_artifact(artifact_dir: str, *, deep: bool = True,
-                           write_report: bool = False) -> VerifyResult:
-    """Verify a canonical plugin artifact, fail-closed.
+                           report_dir: str | None = None) -> VerifyResult:
+    """Verify a canonical plugin artifact, fail-closed. Never writes into it.
 
-    Separates INTEGRITY (structure + inventory + checksums + no-tamper, unsigned)
-    from AUTHENTICITY (cryptographic signature — always False here). ``deep=True``
-    adds lerobot-dependent checks (config parse, processor reload, ownership,
-    version binding vs installed).
+    Reports (when ``report_dir`` is given) are written OUTSIDE the sealed artifact,
+    so verification is idempotent and the artifact root never changes.
     """
     out = Path(artifact_dir)
     checks: dict[str, str] = {}
+    integrity_ok = True
 
     def ok(name: str, cond: bool, reason: str = "") -> bool:
         checks[name] = "passed" if cond else f"failed: {reason}"
         return cond
 
-    integrity_ok = True
-
-    # --- structural presence ---
-    required = list(_CONTENT_ROLES) + [INVENTORY_FILENAME, CHECKSUMS_FILENAME]
+    required = list(_CONTENT_FILES) + [INVENTORY_FILENAME, CHECKSUMS_FILENAME]
     for fn in required:
         if not ok(f"present:{fn}", (out / fn).exists(), "missing"):
             integrity_ok = False
     if not integrity_ok:
-        return _finish(out, False, checks, None, None, write_report)
+        return _finish(out, False, checks, {}, None, None, report_dir)
 
-    # --- parse inventory + manifest, schema-validate ---
     try:
         inventory = json.loads((out / INVENTORY_FILENAME).read_text())
         jsonschema.validate(inventory, PLUGIN_ARTIFACT_INVENTORY_SCHEMA)
         ok("inventory_schema", True)
     except Exception as exc:  # noqa: BLE001
         ok("inventory_schema", False, str(exc))
-        return _finish(out, False, checks, None, None, write_report)
+        return _finish(out, False, checks, {}, None, None, report_dir)
     try:
         pm = json.loads((out / PLUGIN_MANIFEST_FILENAME).read_text())
         jsonschema.validate(pm, PLUGIN_ARTIFACT_MANIFEST_SCHEMA)
         ok("plugin_manifest_schema", True)
     except Exception as exc:  # noqa: BLE001
         ok("plugin_manifest_schema", False, str(exc))
-        return _finish(out, False, checks, None, None, write_report)
+        return _finish(out, False, checks, {}, None, None, report_dir)
 
     inv_paths = [e["path"] for e in inventory["files"]]
+    inv_roles = [e["role"] for e in inventory["files"]]
 
-    # --- path safety (before opening anything by inventory path) ---
-    path_ok = all(_safe_name(p) for p in inv_paths)
-    integrity_ok &= ok("inventory_paths_safe", path_ok, "unsafe path in inventory")
+    # uniqueness (paths + roles) — schema uniqueItems covers whole entries only.
+    integrity_ok &= ok("inventory_unique_paths", len(inv_paths) == len(set(inv_paths)),
+                       "duplicate path")
+    integrity_ok &= ok("inventory_unique_roles", len(inv_roles) == len(set(inv_roles)),
+                       "duplicate role")
+    integrity_ok &= ok("inventory_paths_safe", all(_safe_name(p) for p in inv_paths),
+                       "unsafe path in inventory")
 
-    # --- no symlinks / no undeclared files ---
-    declared = set(inv_paths) | _NON_CONTENT
+    declared = set(inv_paths) | _INTEGRITY_FILES
     escape_ok, undeclared_ok = True, True
     for p in out.iterdir():
         if p.is_symlink():
@@ -383,7 +454,6 @@ def verify_plugin_artifact(artifact_dir: str, *, deep: bool = True,
     integrity_ok &= ok("no_symlinks", escape_ok, "symlink present")
     integrity_ok &= ok("no_undeclared_files", undeclared_ok, "undeclared file present")
 
-    # --- every declared content file present + digest + size match ---
     for e in inventory["files"]:
         if not _safe_name(e["path"]):
             continue
@@ -391,74 +461,72 @@ def verify_plugin_artifact(artifact_dir: str, *, deep: bool = True,
         if not fp.exists():
             integrity_ok &= ok(f"inv:{e['path']}", False, "missing")
             continue
-        digest = _sha256_file(fp)
-        size = fp.stat().st_size
-        good = (digest == e["sha256"] and size == e["size_bytes"]
-                and _SHA256_RE.match(e["sha256"]))
+        digest, size = _sha256_file(fp), fp.stat().st_size
+        good = (digest == e["sha256"] and size == e["size_bytes"])
         integrity_ok &= ok(f"inv:{e['path']}", bool(good),
                            f"{digest}/{size} != {e['sha256']}/{e['size_bytes']}")
 
-    # --- artifact_root recompute ---
-    recomputed = _artifact_root_sha256(inventory["files"])
-    integrity_ok &= ok("artifact_root_sha256", recomputed == inventory["artifact_root_sha256"],
-                       f"{recomputed} != {inventory['artifact_root_sha256']}")
+    integrity_ok &= ok("artifact_root_sha256",
+                       _artifact_root_sha256(inventory["files"]) == inventory["artifact_root_sha256"],
+                       "root digest mismatch")
 
-    # --- checksums.json == inventory content set, exactly ---
     try:
         recorded = json.loads((out / CHECKSUMS_FILENAME).read_text())
-    except Exception as exc:  # noqa: BLE001
-        recorded = None
-        integrity_ok &= ok("checksums_parse", False, str(exc))
-    if recorded is not None:
         inv_map = {e["path"]: e["sha256"] for e in inventory["files"]}
-        exact = set(recorded) == set(inv_map)
-        integrity_ok &= ok("checksums_exact_coverage", exact,
+        integrity_ok &= ok("checksums_exact_coverage", set(recorded) == set(inv_map),
                            f"{sorted(recorded)} != {sorted(inv_map)}")
-        digests_ok = all(recorded.get(k) == v for k, v in inv_map.items())
-        integrity_ok &= ok("checksums_match_inventory", digests_ok, "digest mismatch")
-        malformed = [k for k, v in recorded.items() if not _SHA256_RE.match(str(v))]
-        integrity_ok &= ok("checksums_well_formed", not malformed,
-                           f"malformed digests: {malformed}")
+        integrity_ok &= ok("checksums_match_inventory",
+                           all(recorded.get(k) == v for k, v in inv_map.items()),
+                           "digest mismatch")
+        integrity_ok &= ok("checksums_well_formed",
+                           all(_SHA256_RE.match(str(v)) for v in recorded.values()),
+                           "malformed digest")
+    except Exception as exc:  # noqa: BLE001
+        integrity_ok &= ok("checksums_parse", False, str(exc))
 
-    # --- source reference: manifest_sha matches embedded file; external pinned ---
+    # source provenance.
     ref = pm["source_coreai_artifact_reference"]
     man_sha = _sha256_file(out / MANIFEST_FILENAME)
-    integrity_ok &= ok("source_manifest_sha", ref["manifest_sha256"] == man_sha,
-                       f"{ref['manifest_sha256']} != {man_sha}")
+    integrity_ok &= ok("source_manifest_sha", ref["embedded_manifest_sha256"] == man_sha,
+                       "embedded manifest sha mismatch")
     if ref["mode"] == "external":
-        integrity_ok &= ok("external_reference_pinned",
-                           bool(ref.get("revision")) and bool(_SHA256_RE.match(ref["manifest_sha256"])),
-                           "external reference missing revision / valid sha256")
+        integrity_ok &= ok("external_resolved_commit",
+                           bool(ref.get("resolved_commit_sha")
+                                and _COMMIT_RE.match(ref["resolved_commit_sha"] or "")),
+                           "external reference missing/invalid resolved_commit_sha")
 
-    # --- no forbidden claims; no secrets ---
-    claims_block = pm.get("claims", {})
-    integrity_ok &= ok("no_forbidden_claims",
-                       all(claims_block.get(k) is not True for k in _FORBIDDEN_TRUE),
-                       "a forbidden claim is asserted true")
+    # secrets across ALL declared JSON + README URL scan.
     secret_free = True
-    for name in (CONFIG_FILENAME, PLUGIN_MANIFEST_FILENAME):
+    for name in _JSON_CONTENT:
         hit = _find_secret(json.loads((out / name).read_text()))
         if hit:
             secret_free = False
             checks[f"secret:{name}"] = f"failed: {hit}"
+    if _CREDENTIAL_URL_RE.search((out / README_FILENAME).read_text()):
+        secret_free = False
+        checks["secret:README.md"] = "failed: credential-in-URL"
     integrity_ok &= ok("no_secrets", secret_free, "secret detected")
 
-    processor_ok = False
-    if deep:
-        integrity_ok, processor_ok = _verify_deep(out, pm, checks, ok, integrity_ok)
+    # --- semantics (lerobot-free cross-binding) ---
+    semantics = verify_artifact_semantics(out)
+    semantics_ok = all(v == "passed" or v.startswith("not_verified")
+                       for v in semantics.values())
+    integrity_ok &= ok("semantics", semantics_ok, "semantic cross-binding failed")
 
-    authenticity_ok = False  # no signature integration yet (v1.3.9). Honest.
-    return _finish(out, integrity_ok, checks, pm,
-                   inventory.get("artifact_root_sha256"), write_report,
-                   authenticity=authenticity_ok, processor_contract=processor_ok)
+    processor_ok = manifest_declares_coreai_ownership(
+        json.loads((out / MANIFEST_FILENAME).read_text()))
+
+    if deep:
+        integrity_ok = _verify_deep(out, pm, checks, ok, integrity_ok)
+
+    return _finish(out, integrity_ok, checks, semantics, pm,
+                   inventory.get("artifact_root_sha256"), report_dir,
+                   processor_contract=processor_ok, semantics_verified=semantics_ok)
 
 
 def _verify_deep(out, pm, checks, ok, integrity_ok):
-    """lerobot-dependent checks: version binding, config parse, processors, ownership."""
-    # version binding.
     ok_ver, reason = check_version_compatibility(pm["versions"], _installed_versions(True))
     integrity_ok &= ok("version_compatibility", ok_ver, reason)
-    # config parses.
     try:
         import lerobot_policy_coreai_bridge  # noqa: F401
         from lerobot.configs.policies import PreTrainedConfig
@@ -468,7 +536,6 @@ def _verify_deep(out, pm, checks, ok, integrity_ok):
                            "coreai_artifact not empty")
     except Exception as exc:  # noqa: BLE001
         integrity_ok &= ok("config_parses", False, str(exc))
-    # processors reload.
     try:
         from lerobot.processor import (
             PolicyProcessorPipeline, batch_to_transition, policy_action_to_transition,
@@ -483,37 +550,31 @@ def _verify_deep(out, pm, checks, ok, integrity_ok):
         integrity_ok &= ok("processors_reload", True)
     except Exception as exc:  # noqa: BLE001
         integrity_ok &= ok("processors_reload", False, str(exc))
-    # processor contract (exact v2 ownership semantics).
-    processor_ok = False
-    try:
-        m = json.loads((out / MANIFEST_FILENAME).read_text())
-        processor_ok = manifest_declares_coreai_ownership(m)
-        integrity_ok &= ok("processor_contract", processor_ok,
-                           "manifest lacks exact CoreAI processor ownership")
-    except Exception as exc:  # noqa: BLE001
-        integrity_ok &= ok("processor_contract", False, str(exc))
-    return integrity_ok, processor_ok
+    return integrity_ok
 
 
-def _finish(out, integrity_ok, checks, pm, root_sha, write_report,
-            *, authenticity=False, processor_contract=False):
+def _finish(out, integrity_ok, checks, semantics, pm, root_sha, report_dir,
+            *, authenticity=False, processor_contract=False, semantics_verified=False):
     claims = {
         "integrity_verified": bool(integrity_ok),
         "authenticity_verified": bool(authenticity),
         "processor_contract_verified": bool(processor_contract),
-        "factory_b1_certified": False,      # promoted only by the signed cert (v1.3.9)
+        "semantics_verified": bool(semantics_verified),
+        "factory_b1_certified": False,      # promoted only by the signed cert (v1.3.10)
         "official_eval_certified": False,
         "proves_physical_safety": False,
     }
-    result = VerifyResult(ok=bool(integrity_ok), checks=checks, claims=claims,
-                          plugin_manifest=pm, artifact_root_sha256=root_sha)
-    if write_report:
-        report = {"schema_version": REPORT_SCHEMA_VERSION,
-                  "artifact_root_sha256": root_sha, "checks": checks, "claims": claims}
+    result = VerifyResult(ok=bool(integrity_ok), checks=checks, semantics=semantics,
+                          claims=claims, plugin_manifest=pm, artifact_root_sha256=root_sha)
+    if report_dir:
+        rd = Path(report_dir)
+        rd.mkdir(parents=True, exist_ok=True)
+        report = {"schema_version": REPORT_SCHEMA_VERSION, "artifact_root_sha256": root_sha,
+                  "checks": checks, "semantics": semantics, "claims": claims}
         jsonschema.validate(report, PLUGIN_ARTIFACT_VERIFICATION_REPORT_SCHEMA)
-        (Path(out) / VERIFICATION_REPORT_FILENAME).write_text(json.dumps(report, indent=2))
-        (Path(out) / "plugin_artifact_verification_report.md").write_text(
-            _render_report_md(report))
+        (rd / "plugin_artifact_verification_report.json").write_text(
+            json.dumps(report, indent=2))
+        (rd / "plugin_artifact_verification_report.md").write_text(_render_report_md(report))
     return result
 
 
@@ -524,8 +585,8 @@ def _render_report_md(report: dict) -> str:
     for k, v in report["claims"].items():
         lines.append(f"- **{k}**: {v}")
     lines += ["", "## Checks", ""]
-    for k, v in report["checks"].items():
-        lines.append(f"- {'✓' if v == 'passed' else '✗'} {k}: {v}")
-    lines += ["", "_Integrity = unsigned checksum consistency. Authenticity requires "
-              "a trusted signature (not yet issued)._"]
+    for k, v in {**report["checks"], **report.get("semantics", {})}.items():
+        lines.append(f"- {'✓' if v == 'passed' else ('~' if v.startswith('not_verified') else '✗')} {k}: {v}")
+    lines += ["", "_Integrity = unsigned checksum + semantic consistency. Authenticity "
+              "requires a trusted signature (not yet issued)._"]
     return "\n".join(lines) + "\n"

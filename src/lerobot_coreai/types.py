@@ -30,6 +30,13 @@ class RunnerCapabilities:
     # v1.3.6: protocols the runner declares itself backward-compatible with, so a
     # newer major (e.g. coreai-runner.v3) can still be accepted by a v2 plugin.
     backward_compatible_with: tuple[str, ...] = ()
+    # v1.3.8: batch protocol foundation (no B>1 execution yet). These describe how
+    # the runner batches and where inference state lives, so a future batched
+    # runtime never mixes sessions. None means "not announced".
+    action_batching_semantics: str | None = None   # "native" | "split_and_stack"
+    inference_state_scope: str | None = None        # stateless|request_scoped|session_scoped|global
+    supports_session_ids: bool = False
+    reset_scope: str | None = None                   # "global" | "session" | ...
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
