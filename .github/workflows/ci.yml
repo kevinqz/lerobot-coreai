@@ -18,3 +18,26 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
       - run: pytest
+
+  lerobot-compat:
+    # v1.1.2: prove the LeRobot 0.6.x compatibility claim in CI, not just docs.
+    # LeRobot (and its torch dependency) is heavy, so this runs as its own job on
+    # Python 3.12 only — the only version the [lerobot] extra installs on.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[lerobot,test]"
+      - name: LeRobot compatibility certificate (strict)
+        run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-compat
+      - name: Bridge + compat tests
+        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lerobot-compatibility-report
+          path: reports/lerobot-compat
