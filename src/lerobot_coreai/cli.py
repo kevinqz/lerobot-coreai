@@ -825,6 +825,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_pc.add_argument("--json", action="store_true")
     p_pc.set_defaults(func=cmd_policy_card)
 
+    # --- compare-v2 (v1.2.6) — processor-inclusive parity via official loader ---
+    p_cmp2 = sub.add_parser("compare-v2",
+                            help="Processor-inclusive PyTorch vs CoreAI parity (v1.2.6)")
+    p_cmp2.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
+    p_cmp2.add_argument("--coreai.policy.path", dest="coreai_policy_path", required=True)
+    p_cmp2.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_cmp2.add_argument("--runner.url", dest="runner_url", default=None)
+    p_cmp2.add_argument("--max-frames", dest="max_frames", type=int, default=32)
+    p_cmp2.add_argument("--strict-processors", dest="strict_processors", action="store_true")
+    p_cmp2.add_argument("--output-dir", dest="output_dir", default=None)
+    p_cmp2.add_argument("--json", action="store_true")
+    p_cmp2.set_defaults(func=cmd_compare_v2)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -863,7 +876,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, lerobot-compat-check --contract, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, lerobot-compat-check --contract, compare, compare-v2, export.",
         file=sys.stderr,
     )
     return 1
@@ -3275,6 +3288,52 @@ def cmd_policy_card(args: argparse.Namespace) -> int:
     else:
         print(f"Policy card written to {args.output}")
     return 0
+
+
+# MARK: - compare-v2 (v1.2.6 — processor-inclusive parity)
+
+def cmd_compare_v2(args: argparse.Namespace) -> int:
+    """Processor-inclusive PyTorch-vs-CoreAI parity. Sends no robot/sim action."""
+    import json as _json
+
+    from .compare_v2 import CompareV2Config, run_compare_v2
+    from .errors import CoreAIPolicyError
+    from .processor_contract import ProcessorContractError
+
+    config = CompareV2Config(
+        torch_policy_path=args.torch_policy_path,
+        coreai_policy_path=args.coreai_policy_path,
+        dataset_repo_id=args.dataset_repo_id,
+        runner_url=getattr(args, "runner_url", None),
+        max_frames=getattr(args, "max_frames", 32),
+        strict_processors=getattr(args, "strict_processors", False),
+        output_dir=Path(args.output_dir) if getattr(args, "output_dir", None) else None,
+    )
+    try:
+        report = run_compare_v2(config)
+    except ProcessorContractError as e:
+        print(f"error: {e}")
+        return 1
+    except (CoreAIPolicyError, ImportError) as e:
+        print(f"error: compare-v2 needs the [lerobot] extra, a source policy, and "
+              f"a reachable runner: {e}")
+        return 1
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    m = report["metrics"]
+    print("lerobot-coreai compare-v2")
+    print("=" * 50)
+    print(f"frames_compared: {m.get('frames_compared')}  shape_match: {m.get('shape_match')}"
+          f"  finite: {m.get('finite')}")
+    print(f"mae: {m.get('mae')}  max_abs_error: {m.get('max_abs_error')}"
+          f"  cosine: {m.get('cosine_similarity')}")
+    print("=" * 50)
+    print("Parity computed on final actions." if report["ok"]
+          else "compare-v2 FAILED (load / processors / shape / finite).")
+    return 0 if report["ok"] else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
