@@ -27,21 +27,24 @@ def _check(name: str, passed: bool, severity: str = "required",
 
 
 def _dataset_importable() -> bool:
-    """True if the LeRobotDataset module is discoverable.
+    """True if the LeRobotDataset module ships with the installed LeRobot.
 
-    Uses ``find_spec`` rather than importing — LeRobot 0.6.x's dataset module
-    pulls heavy optional deps (av/torchcodec) at import time that need not be
-    present to confirm shape compatibility. LeRobot 0.6.x moved this out of the
-    old ``lerobot.common`` namespace to ``lerobot.datasets``.
+    Checks the filesystem under ``lerobot.__path__`` rather than importing the
+    module (or even its parent package): LeRobot 0.6.x's dataset package pulls
+    heavy optional media deps (av/torchcodec) at import time that need not be
+    present to confirm the module ships. LeRobot 0.6.x moved this out of the old
+    ``lerobot.common`` namespace to ``lerobot.datasets``.
     """
-    import importlib.util
-    for path in ("lerobot.datasets.lerobot_dataset",
-                 "lerobot.common.datasets.lerobot_dataset"):
-        try:
-            if importlib.util.find_spec(path) is not None:
+    import os
+    try:
+        import lerobot  # top-level import is light and already required elsewhere
+    except Exception:
+        return False
+    rels = ("datasets/lerobot_dataset.py", "common/datasets/lerobot_dataset.py")
+    for base in list(getattr(lerobot, "__path__", []) or []):
+        for rel in rels:
+            if os.path.exists(os.path.join(base, rel)):
                 return True
-        except Exception:
-            continue
     return False
 
 
