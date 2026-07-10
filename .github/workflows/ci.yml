@@ -70,7 +70,40 @@ jobs:
       - run: pip install "lerobot[dataset,evaluation]==0.6.0"
       - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: Official rollout readiness (mandatory)
-        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
+        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v --basetemp=reports/official-rollout-stable
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-rollout-stable-evidence
+          path: reports/official-rollout-stable
+
+  lerobot-rollout-dev:
+    # v1.3.13: rollout gate on the pinned 0.6.1-dev target. continue-on-error so a
+    # DEVELOPMENT-only incompatibility doesn't block the release — but inside the
+    # job the rollout may NOT skip (COREAI_REQUIRE_ROLLOUT=1), and evidence is
+    # uploaded even on failure.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    env:
+      COREAI_REQUIRE_ROLLOUT: "1"
+      LEROBOT_DEV_REF: "e40b58a8dfa9e7b86918c374791599d070518d11"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[test,signing]"
+      - run: pip install "lerobot[dataset,evaluation] @ git+https://github.com/huggingface/lerobot.git@${LEROBOT_DEV_REF}"
+      - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
+      - name: Official rollout readiness (dev, mandatory-in-job)
+        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v --basetemp=reports/official-rollout-dev
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-rollout-dev-evidence
+          path: reports/official-rollout-dev
 
   lerobot-dev:
     # v1.2.4: DEVELOPMENT target. Post-0.6.0 LeRobot, PINNED to an exact ref

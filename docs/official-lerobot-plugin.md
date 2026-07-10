@@ -410,17 +410,47 @@ typed, and batching is proven **multimodal** with processors actually executed.
   native `required_slot_isolation` to `independent` (matching the runtime), with
   regressions for artifact `shared`/`unknown` and string `"false"`/`"4"`.
 
+## v1.3.13 — real rollout evidence + dual-target gate
+
+- **Measurements → evaluator → checks** (not caller booleans) — `RolloutMeasurements`
+  captures the run (request bodies, done mask, terminate_at, required keys);
+  `evaluate_rollout_measurements` **derives** every check (exact request count,
+  cumulative done, `first_done == terminate_at-1`, queue refill, wire validity, no
+  leakage). The report builder consumes a `RolloutEvaluation`, so a caller can no
+  longer hand-write a passing report.
+- **Real, required hashes** — the readiness report (schema **v2**) binds real
+  `artifact_root` / `batch_contract` / `runner_capabilities` / `preprocessor` /
+  `postprocessor` sha256 (each `^sha256:[0-9a-f]{64}$`, placeholders rejected) plus
+  order-sensitive per-request hashes.
+- **Persisted evidence bundle** — `write_evidence_bundle` writes
+  `official_rollout_readiness_report.json/md`, `official_rollout_trace.jsonl`, and
+  `checksums.json` per case (single B=1, native B=2/4, split B=2/4), **even on
+  failure** (`failed_stage` + `errors`). CI uploads the bundles.
+- **Dual-target gate** — `lerobot-rollout-stable` (0.6.0, blocking) and
+  `lerobot-rollout-dev` (pinned 0.6.1-dev, `continue-on-error` but the rollout may
+  **not skip** inside the job, `COREAI_REQUIRE_ROLLOUT=1`); both upload evidence
+  with `if: always()`.
+- **RunnerCapabilities v2 object-typing** — `capabilities()` rejects non-object
+  `supports`/`action_batching`/`inference_state`, a non-string `protocol_version`,
+  and a `backward_compatible_with` that isn't `list[str]` (a bare string no longer
+  becomes a char tuple).
+- **Fixture feature semantics** — the wire check asserts exact `state [.,A]` and
+  image `[.,C,H,W]` shapes; the report marks `fixture_feature_semantics_verified`
+  true and `universal_feature_contract_verified` **false** (honest).
+
 ## Not yet
 
-- **Processor-stage vocabulary as a typed enum** — the stage string is recorded and
-  cross-bound; a closed `ObservationStage` enum replacing the last
-  `raw_lerobot_observation` string is v1.3.13.
-- **Single canonical BatchContract v3 schema file** shared verbatim by
-  `lerobot-coreai.schema.json` / `action-contract.schema.json` / plugin — today the
-  runtime parser + plugin artifact schema are strict and the public action-contract
-  schema matches native isolation; unifying into one file is v1.3.13.
-- **Dev-target rollout gate** — the mandatory rollout job runs on stable (0.6.0);
-  gating it on the pinned 0.6.1-dev is v1.3.13.
+- **Processor-stage vocabulary as a typed enum** (`ObservationStage`/`ActionStage`)
+  replacing the last `raw_lerobot_observation` string — v1.3.14 (churny naming
+  refactor across every manifest + processor-ownership string; isolated to reduce
+  regression surface).
+- **Single canonical BatchContract v3 schema file** shared verbatim across
+  `lerobot-coreai.schema.json` / `action-contract.schema.json` / plugin — the
+  runtime parser + plugin artifact schema are strict and the public schema matches
+  native isolation; unifying into one file is v1.3.14.
+- **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** so
+  `semantic_completeness_verified`/`universal_feature_contract_verified` can be
+  true — v1.3.14.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

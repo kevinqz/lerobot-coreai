@@ -114,7 +114,21 @@ class RunnerClient:
         """
         resp = self._get("v1/capabilities")
         data = self._parse_json(resp)
-        supports = data.get("supports", {})
+        if not isinstance(data, dict):
+            raise RunnerProtocolError("capabilities response must be a JSON object.")
+        # v1.3.13: nested blocks must be objects; malformed types fail at the
+        # boundary rather than surfacing later as AttributeError / char-tuples.
+        for key in ("supports", "action_batching", "inference_state"):
+            if key in data and data[key] is not None and not isinstance(data[key], dict):
+                raise RunnerProtocolError(f"capabilities {key!r} must be an object.")
+        pv = data.get("protocol_version")
+        if pv is not None and not isinstance(pv, str):
+            raise RunnerProtocolError("protocol_version must be a string.")
+        bcw = data.get("backward_compatible_with")
+        if bcw is not None and (not isinstance(bcw, list)
+                                or any(not isinstance(x, str) for x in bcw)):
+            raise RunnerProtocolError("backward_compatible_with must be list[str].")
+        supports = data.get("supports", {}) or {}
         batching = data.get("action_batching", {}) or {}
         inference = data.get("inference_state", {}) or {}
         encodings = data.get("observation_encodings") or ()

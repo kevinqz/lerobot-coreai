@@ -34,10 +34,15 @@ from lerobot.processor import (  # noqa: E402
 )
 from lerobot.utils.import_utils import register_third_party_plugins  # noqa: E402
 
+from lerobot_coreai.runner import capabilities_sha256  # noqa: E402
 from lerobot_policy_coreai_bridge import build_plugin_artifact  # noqa: E402
 from lerobot_policy_coreai_bridge.rollout_evidence import (  # noqa: E402
-    build_rollout_readiness_report,
+    RolloutMeasurements, _sha256_file, build_rollout_readiness_report,
+    evaluate_rollout_measurements, write_evidence_bundle,
 )
+
+_REQUIRED_OBS = ("observation.state", "observation.images.front",
+                 "observation.images.wrist")
 
 _REQUIRE = os.environ.get("COREAI_REQUIRE_ROLLOUT") == "1"
 try:
@@ -259,12 +264,45 @@ def _assert_wire(bodies, native, B):
             assert leak not in obs, f"label {leak!r} leaked to the runner"
         if native and B > 1:
             assert body["options"]["batch_size"] == B
-            assert len(obs["observation.state"]) == B
+            assert len(obs["observation.state"]) == B and len(obs["observation.state"][0]) == A
+            # images are [B, C, H, W] (fixture feature semantics, P1.9)
+            fr = obs["observation.images.front"]
+            assert len(fr) == B and len(fr[0]) == C and len(fr[0][0]) == H \
+                and len(fr[0][0][0]) == W
             assert isinstance(obs["task"], list) and len(obs["task"]) == B
         else:
             assert "batch_size" not in body.get("options", {}) or B == 1
             assert len(obs["observation.state"]) == A          # single sample
+            fr = obs["observation.images.front"]
+            assert len(fr) == C and len(fr[0]) == H and len(fr[0][0]) == W
             assert isinstance(obs["task"], str)
+
+
+def _evidence(tmp_path, out, state, art, policy, B, mode, terminate_ats):
+    """Build measurements -> evaluate -> real-hash report -> persisted bundle."""
+    seq = out["action"].shape[1]
+    inv = json.loads((art / "plugin_artifact_inventory.json").read_text())
+    pm = json.loads((art / "plugin_artifact_manifest.json").read_text())
+    caps_sha = (capabilities_sha256(policy._capabilities)
+                if policy._capabilities is not None else "sha256:" + "e" * 64)
+    m = RolloutMeasurements(
+        batch_size=B, mode=mode, sequence_length=seq, horizon=HORIZON,
+        terminate_at=tuple(terminate_ats), request_bodies=tuple(state.bodies),
+        done_mask=tuple(tuple(int(x) for x in row) for row in out["done"].int().tolist()),
+        required_obs_keys=_REQUIRED_OBS)
+    ev = evaluate_rollout_measurements(m)
+    report = build_rollout_readiness_report(
+        ev, m, environment={"lerobot": "0.6.x"},
+        artifact_root_sha256=inv["artifact_root_sha256"],
+        batch_contract_sha256=pm["batch_contract_sha256"],
+        runner_capabilities_sha256=caps_sha,
+        preprocessor_sha256=_sha256_file(art / "policy_preprocessor.json"),
+        postprocessor_sha256=_sha256_file(art / "policy_postprocessor.json"))
+    bundle = tmp_path / "evidence" / f"{mode}-b{B}"
+    write_evidence_bundle(str(bundle), report, m)
+    assert (bundle / "official_rollout_readiness_report.json").exists()
+    assert (bundle / "checksums.json").exists()
+    return ev, report
 
 
 @pytest.mark.parametrize("B,terminate_ats", [(1, [8]), (2, [3, 8]), (4, [2, 4, 6, 8])])
@@ -278,20 +316,12 @@ def test_official_rollout_native(tmp_path, monkeypatch, B, terminate_ats):
         assert out["action"].shape[0] == B and out["action"].shape[-1] == A
         assert seq == MAX_STEPS
         _assert_done_mask(out["done"], terminate_ats)
-        expected_requests = math.ceil(seq / HORIZON)        # native: one per refill
-        assert state.n == expected_requests, (state.n, expected_requests)
+        assert state.n == math.ceil(seq / HORIZON)          # native: one per refill
         _assert_wire(state.bodies, native=True, B=B)
-        report = build_rollout_readiness_report(
-            lerobot_version="0.6.x", lerobot_commit=None, batch_size=B,
-            mode=("single_only" if B == 1 else "native_batch"), sequence_length=seq,
-            horizon=HORIZON, request_count=state.n,
-            artifact_root_sha256="sha256:" + "0" * 64,
-            batch_contract_sha256="sha256:" + "0" * 64,
-            runner_capabilities_sha256="sha256:" + "0" * 64,
-            checks={"official_rollout_called": True,
-                    "all_environments_reached_done": True,
-                    "done_mask_cumulative": True, "queue_refilled": seq > HORIZON,
-                    "wire_payload_valid": True, "request_count_exact": True})
+        eff_mode = "single_only" if B == 1 else "native_batch"
+        ev, report = _evidence(tmp_path, out, state, art, policy, B, eff_mode,
+                               terminate_ats)
+        assert ev.passed, (ev.failed_stage, ev.errors)
         assert report["claims"]["official_rollout_pipeline_smoke_passed"] is True
         assert report["claims"]["official_eval_certified"] is False
     finally:
@@ -311,6 +341,9 @@ def test_official_rollout_split(tmp_path, monkeypatch, B, terminate_ats):
         _assert_done_mask(out["done"], terminate_ats)
         assert state.n == B * math.ceil(seq / HORIZON)      # split: B per refill
         _assert_wire(state.bodies, native=False, B=B)
+        ev, report = _evidence(tmp_path, out, state, art, policy, B,
+                               "split_and_stack", terminate_ats)
+        assert ev.passed, (ev.failed_stage, ev.errors)
     finally:
         server.__exit__()
         venv.close()
