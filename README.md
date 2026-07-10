@@ -10,8 +10,9 @@ Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, sh
 
 > **Same LeRobot workflow. CoreAI runtime.**
 
-> **Current:** `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, and `shadow` mode (motor-blocked).
-> `select_action()` returns raw action (LeRobot 0.6.0 semantics). `predict_action()` for dict+metadata.
+> **Current:** `inspect`, `doctor`, `predict`, `rollout --mode dry_run`, `shadow` (motor-blocked), `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, `sim` (simulator-only egress), the safety/governance chain (`supervisor-check`, `profile-*`, `safety-gate`, `safety-regression`, `approval-request`/`approve-bundle`/`verify-approval`, `release-readiness`), and — since v1.0.0 — `real --mode guarded` (guarded real egress) with `verify-real-session`.
+> Up to v0.9.3 **no robot commands are ever sent**; v1.0.0 introduces real egress **only** through `real --mode guarded`, behind every gate. This is guarded real egress, not native LeRobot robot integration, and proves nothing about physical safety.
+> `select_action()` returns raw action (LeRobot 0.6.x semantics). `predict_action()` for dict+metadata.
 
 ---
 
@@ -192,6 +193,7 @@ v1.0.3 adds an external-http controller capability contract: in guarded mode the
 v1.0.4 adds real observation config (`--obs.config` / `--obs.*`, required for non-mock adapters) and evidence cross-binding (the run's policy/robot type must match the bundle's `sim_report`).
 v1.0.5 adds per-step real-session metrics (`real_metrics.json/csv/md`: latency, effective fps, missed deadlines) and report/session redaction (`--redact-runner-url` / `--redact-operator` / `--redact-paths`).
 v1.0.6 adds an arming manifest (`real_arming_manifest.json/md`: the armed envelope — limits, attestations, and SHA256 bindings of the readiness report / approval / safety profile, written before the first action) and operator abort controls (SIGINT / `--abort-file <path>` polled each step → e-stop + `operator_abort` stop reason).
+v1.0.7 is a docs-consistency release: the README command surface and `docs/lerobot-compatibility.md` now reflect the full v0.9/v1.0 chain (guarded real egress exists via `real --mode guarded`; still not native LeRobot robot integration, still no physical-safety claim).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

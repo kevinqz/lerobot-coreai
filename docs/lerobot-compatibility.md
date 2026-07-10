@@ -13,9 +13,9 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 | `select_action(batch)` raw action | ✅ | Matches LeRobot 0.6 semantics |
 | `LeRobotDataset` eval | ✅ | Uses public dataset constructor (since v0.4) |
 | PyTorch/CoreAI compare | ⚠️ | Experimental source policy loader (since v0.5) |
-| Native LeRobot policy registry | ❌ | Not yet registered as upstream policy type |
+| Native LeRobot policy registry | ❌ | Not registered upstream as `policy_type="coreai"` |
 | Training | ❌ | Train with LeRobot; run with CoreAI |
-| Robot hardware | ❌ until v1.0 | No real robot egress yet |
+| Robot hardware | ⚠️ | v1.0.0 adds guarded real egress through `real --mode guarded` (loopback external-http / mock only); not native LeRobot robot integration |
 
 ## Implemented
 
@@ -65,12 +65,16 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 - **v0.8**: sim mode (action egress to simulator only)
 - **v0.8.1**: gymnasium simulator adapter (`[sim]` extra)
 - **v0.8.2**: sim analytics — CSV exports, markdown summaries, failure taxonomy
-- **v0.8.3** (current): sim quality gates + sim-regression harness
+- **v0.8.3**: sim quality gates + sim-regression harness
+- **v0.8.4**: sim reproducibility bundle (`package-sim-run` / `verify-sim-bundle`)
+- **v0.9.0–0.9.4**: runtime safety supervisor, robot-family safety profiles + calibration, supervisor quality gates + regression, operator approval + release readiness
+- **v1.0.0**: guarded real mode — first real-egress path, only via `real --mode guarded`, behind every gate, through the `RealEgressGuard`
+- **v1.0.1–1.0.6**: guarded-real hardening — bearer auth + loopback canonicalization, `verify-real-session` offline audit, external-http controller capability contract, observation config + evidence cross-binding, per-step metrics + report redaction, arming manifest + operator abort (SIGINT / `--abort-file`)
 
 ## Hardware
 
-- v0.8 has **zero** code paths for sending robot commands
-- Shadow mode blocks all action egress via `ActionBlocker`
-- Sim mode sends actions to a simulator via `SimEgress`; robot egress always raises
-- No serial, dynamixel, feetech, motor bus, or teleop imports
+- Up to **v0.9.3** there are **zero** code paths for sending robot commands
+- **v1.0.0** introduces guarded real egress — the *only* path is `real --mode guarded` through the `RealEgressGuard`, reachable only after preflight + supervisor + deadman + rate-limit gates pass. The `external-http` adapter is loopback-only; the `mock` adapter touches no hardware.
+- Dry-run and shadow mode still block all action egress; sim mode sends actions to a simulator via `SimEgress`, never a robot
+- Still no serial, dynamixel, feetech, motor bus, or teleop imports — guarded real egress is a loopback/operator-controlled HTTP boundary, **not** the native LeRobot robot stack, and proves nothing about physical safety
 - Verified by automated tests (`test_no_hardware_actuation.py`, `test_shadow_no_actuation.py`, `test_sim_no_robot_actuation.py`)
