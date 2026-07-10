@@ -500,16 +500,45 @@ of trusting the report that contains it.
   `measurements`+`bundle_manifest`), exact bundle-manifest content coverage, and a
   recursive secret scan over the report + measurements.
 
+## v1.3.16 — evidence closure
+
+Every byte the offline verifier reads is now schema-checked before access and
+cross-bound; the verifier cannot crash on a malformed bundle.
+
+- **Closed raw schema + no-crash** — `measurements.json` (and trace events) have
+  closed schemas (`MEASUREMENTS_SCHEMA`); `replay_rollout_evidence` validates the
+  raw against it and wraps derivation in try/except, so a malformed bundle returns
+  a **structured failure**, never an uncaught exception.
+- **`observation_sha256` recomputed** — the wire check re-derives each request's
+  `options.observation_sha256` from the sent observation and requires it to match;
+  it also validates `observation_encoding`, `protocol_version`, and the
+  single/split-must-not-send-`batch_size` rule.
+- **Strict response validation** — `_response_valid` requires exactly `[H,A]` /
+  `[B,H,A]`, exact horizon/dim, finiteness, non-ragged, and a closed `{action}` key
+  set **before** the chain reconstruction (which is additionally index-guarded).
+- **Trace is a verified source** — the verifier parses `official_rollout_trace.jsonl`
+  and requires `index==0..N-1` and `trace hashes == report hashes == recomputed raw
+  hashes` (a trace that contradicts the report/measurements fails).
+- **Matrix v2 target binding** — the matrix root binds `target` + `passed` +
+  bundle root (a target/pass flip changes it), and the verifier requires
+  `matrix.target` to equal **every** case's report environment target.
+- **Exact actual-file coverage** — the case directory's real file set must equal the
+  expected set (report/md/trace/measurements/bundle_manifest/checksums) — no extra,
+  hidden, nested, or symlinked files.
+- **Full-bundle secret scan** — report + measurements are scanned for sensitive
+  keys / credential URLs.
+
 ## Not yet
 
-- **Queue-refill event instrumentation** (`ActionQueueObserver`) vs. the
-  request-count proxy — v1.3.16.
-- **Failure-evidence v2** (schema-valid, per-stage envelope with checksums) —
-  v1.3.16.
+- **Queue-refill event instrumentation** (`ActionQueueObserver` emitting
+  reset/empty/refill/validated/committed/popped) so the queue lifecycle is proven
+  by events, not the `ceil(seq/H)` proxy — v1.3.17.
+- **Failure-evidence v2** (schema-valid, per-stage envelope with checksums + bundle
+  root, representable in the matrix) — v1.3.17.
 - **Processor-stage typed enum** + single canonical BatchContract v3 schema file,
   **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
   `universal_feature_contract_verified` true), stable **wheel-distribution digest** —
-  v1.3.16.
+  v1.3.17.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so
