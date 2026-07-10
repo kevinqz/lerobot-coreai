@@ -741,6 +741,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_vsig.add_argument("--json", action="store_true")
     p_vsig.set_defaults(func=cmd_verify_signature)
 
+    # --- release-check (v1.2.1) — release channel governance ---
+    p_rel = sub.add_parser("release-check",
+                           help="Check an artifact against a release channel policy (v1.2.1)")
+    p_rel.add_argument("--artifact-dir", dest="artifact_dir", required=True)
+    p_rel.add_argument("--artifact-type", dest="artifact_type", default="bridge_benchmark")
+    p_rel.add_argument("--channel", dest="channel", default="internal",
+                       help="dev | internal | public-demo | research | guarded-real-evidence")
+    p_rel.add_argument("--release-policy", dest="release_policy", default=None,
+                       help="Override the built-in channel policy with a JSON file")
+    p_rel.add_argument("--provenance", dest="provenance", default=None)
+    p_rel.add_argument("--signature", dest="signature", default=None)
+    p_rel.add_argument("--trust-policy", dest="trust_policy", default=None)
+    p_rel.add_argument("--output-dir", dest="output_dir", default=None)
+    p_rel.add_argument("--json", action="store_true")
+    p_rel.set_defaults(func=cmd_release_check)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -779,7 +795,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2975,6 +2991,58 @@ def cmd_verify_signature(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Signature verified." if result.ok else "Signature verification FAILED.")
     return 0 if result.ok else 1
+
+
+# MARK: - release-check (v1.2.1 — release channel governance)
+
+def cmd_release_check(args: argparse.Namespace) -> int:
+    """Check an artifact against a release channel policy. Fail-closed."""
+    import json as _json
+
+    from .release_governance import (
+        build_release_markdown, default_policy, evaluate_release, load_release_policy,
+    )
+    from .trust_policy import load_trust_policy
+
+    if getattr(args, "release_policy", None):
+        policy = load_release_policy(Path(args.release_policy))
+    else:
+        try:
+            policy = default_policy(args.channel)
+        except ValueError as e:
+            print(f"error: {e}")
+            return 1
+
+    trust = load_trust_policy(Path(args.trust_policy)) \
+        if getattr(args, "trust_policy", None) else None
+
+    report = evaluate_release(
+        Path(args.artifact_dir), artifact_type=args.artifact_type, policy=policy,
+        signature=Path(args.signature) if getattr(args, "signature", None) else None,
+        provenance=Path(args.provenance) if getattr(args, "provenance", None) else None,
+        trust_policy=trust)
+
+    if getattr(args, "output_dir", None):
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "release_check_report.json", "w") as f:
+            _json.dump(report, f, indent=2)
+        (out / "release_check_report.md").write_text(build_release_markdown(report))
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    print(f"lerobot-coreai release-check ({report['channel']})")
+    print("=" * 50)
+    for c in report["checks"]:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']}{detail}")
+    print("=" * 50)
+    print(f"Release-approved for channel {report['channel']!r}." if report["ok"]
+          else f"NOT release-approved for channel {report['channel']!r}.")
+    return 0 if report["ok"] else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
