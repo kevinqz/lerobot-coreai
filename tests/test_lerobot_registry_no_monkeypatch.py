@@ -25,9 +25,13 @@ def test_import_does_not_patch_factory():
     factory = _factory()
     if factory is None:
         pytest.skip("lerobot not installed")
-    # The original get_policy_class must still reject an unknown local type.
+    # Importing the base registry module must not blanket-patch the factory:
+    # a genuinely-unregistered type must still be rejected. (Note: the official
+    # companion plugin, if installed, legitimately registers "coreai_bridge" via
+    # register_subclass — that is not this module's doing, so we probe a name
+    # that no package registers.)
     with pytest.raises(Exception):
-        factory.get_policy_class(BRIDGE_POLICY_TYPE)
+        factory.get_policy_class("definitely-not-a-registered-policy-xyz")
 
 
 @pytest.mark.skipif(_factory() is None, reason="lerobot not installed")

@@ -41,6 +41,8 @@ jobs:
         run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py tests/test_source_loader_v2.py tests/test_compare_v2.py tests/test_processor_contract.py
       - name: Official out-of-tree plugin tests (lerobot installed)
         run: pytest packages/lerobot_policy_coreai_bridge/tests
+      - name: Plugin compatibility profile (installed)
+        run: lerobot-coreai lerobot-compat-check --plugin --output-dir reports/lerobot-stable
       - uses: actions/upload-artifact@v4
         if: always()
         with:

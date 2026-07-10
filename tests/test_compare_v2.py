@@ -51,6 +51,17 @@ def test_gates_pass_and_fail():
     assert gates_bad["mean_mae"]["passed"] is False
 
 
+def test_configured_gate_with_missing_metric_fails_not_omitted():
+    # cosine is None when norms are zero; a configured gate must FAIL, not vanish.
+    metrics = compute_compare_metrics([[0.0, 0.0]], [[0.0, 0.0]])
+    cfg = CompareV2Config(torch_policy_path="t", coreai_policy_path="c",
+                          dataset_repo_id="d", min_cosine_similarity=0.999)
+    gates = evaluate_gates(metrics, cfg)
+    assert "min_cosine_similarity" in gates
+    assert gates["min_cosine_similarity"]["passed"] is False
+    assert gates["min_cosine_similarity"]["reason"] == "metric_unavailable"
+
+
 def test_report_schema_valid_and_parity_requires_gates():
     cfg = CompareV2Config(torch_policy_path="t", coreai_policy_path="c",
                           dataset_repo_id="d")

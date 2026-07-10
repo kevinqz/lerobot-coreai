@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/lerobot-plugin-compatibility-report.schema.json",
+  "title": "lerobot-coreai official plugin compatibility report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "profile", "plugin_installed", "levels", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.plugin_compat.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "profile": {"type": "string", "const": "official_plugin"},
+    "plugin_installed": {"type": "boolean"},
+    "levels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["passed", "partial", "failed", "not_tested", "not_applicable"]
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["upstream_native", "supports_training", "official_eval_certified",
+                   "proves_physical_safety"],
+      "properties": {
+        "official_plugin_registered": {"type": "boolean"},
+        "upstream_native": {"type": "boolean", "const": false},
+        "supports_training": {"type": "boolean", "const": false},
+        "official_eval_certified": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

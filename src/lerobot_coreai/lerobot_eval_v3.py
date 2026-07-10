@@ -129,19 +129,31 @@ def run_eval_v3(config: EvalV3Config) -> dict[str, Any]:
     from . import coreai_observation_serialization as _obs_ser
     from .policy import CoreAIPolicy
 
-    policy = CoreAIPolicy.from_pretrained(config.policy_path, runner_url=config.runner_url)
+    policy = (CoreAIPolicy.from_pretrained(config.policy_path, runner_url=config.runner_url,
+                                           revision=config.policy_revision)
+              if config.policy_revision
+              else CoreAIPolicy.from_pretrained(config.policy_path,
+                                                runner_url=config.runner_url))
     contract = parse_action_contract_from_manifest(policy.manifest)
     expected_dim = contract.action_dim
 
     frames = _load_frames(config)
+    # Honor --episodes when the frames carry episode_index.
+    if config.episodes is not None:
+        wanted = set(config.episodes)
+        frames = [f for f in frames
+                  if not isinstance(f, dict) or f.get("episode_index") in wanted]
     records: list[dict[str, Any]] = []
-    current_episode = None
+    _UNSET = object()
+    current_episode = _UNSET
     for i, item in enumerate(frames):
         ep = item.get("episode_index") if isinstance(item, dict) else None
         if ep != current_episode:
-            policy.reset()  # reset at each episode boundary (and at the start)
+            policy.reset()  # reset at the start and at each episode boundary
             current_episode = ep
-        obs = _obs_ser.serialize_observation(dict(item)) if isinstance(item, dict) else item
+        # Feed only the declared observation inputs — never the ground-truth action.
+        obs = (_obs_ser.serialize_observation(_obs_ser.extract_observation(dict(item), policy.manifest))
+               if isinstance(item, dict) else item)
         rec: dict[str, Any] = {"index": i, "episode_index": ep,
                                "action_generated": False, "action_valid": False,
                                "latency_ms": None, "detail": ""}

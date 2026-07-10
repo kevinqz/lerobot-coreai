@@ -20,8 +20,16 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     """LeRobot config for a CoreAI-backed bridge policy (runtime-only)."""
 
     coreai_artifact: str = ""
+    coreai_revision: str | None = None
     runner_url_env: str = "COREAI_RUNNER_URL"
     action_horizon: int = 1
+    # Cross-binding expectations verified against the loaded CoreAI manifest.
+    expected_robot_type: str | None = None
+    expected_action_dim: int | None = None
+    expected_action_horizon: int | None = None
+    # Batch handling: "single_only" (v1.3.1) raises clearly on B>1;
+    # "split_and_stack" is reserved for v1.3.2.
+    batch_mode: str = "single_only"
     # The CoreAI runtime device is separate from the torch host device. The
     # inherited `device` (default from PreTrainedConfig) stays a real torch
     # device so make_policy's `policy.to(cfg.device)` works; runtime_device
