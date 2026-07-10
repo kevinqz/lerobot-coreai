@@ -96,15 +96,40 @@ def test_build_persists_no_local_path(tmp_path):
     assert cfg["runner_url_env"] == "COREAI_RUNNER_URL"
 
 
-def test_verify_passes_and_writes_report(tmp_path):
+def test_verify_passes_and_writes_report_outside(tmp_path):
     out = _build(tmp_path)
-    res = verify_plugin_artifact(str(out), deep=True, write_report=True)
+    rdir = tmp_path / "reports"
+    res = verify_plugin_artifact(str(out), deep=True, report_dir=str(rdir))
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
     assert res.claims["integrity_verified"] is True
     assert res.claims["authenticity_verified"] is False   # unsigned
     assert res.claims["processor_contract_verified"] is True
+    assert res.claims["semantics_verified"] is True
     assert res.claims["official_eval_certified"] is False
-    assert (out / "plugin_artifact_verification_report.json").exists()
+    # report is OUTSIDE the sealed artifact.
+    assert (rdir / "plugin_artifact_verification_report.json").exists()
+    assert not (out / "plugin_artifact_verification_report.json").exists()
+
+
+def test_verify_is_idempotent(tmp_path):
+    out = _build(tmp_path)
+    root1 = json.loads((out / "plugin_artifact_inventory.json").read_text())["artifact_root_sha256"]
+    files_before = sorted(p.name for p in out.iterdir())
+    verify_plugin_artifact(str(out), deep=True, report_dir=str(tmp_path / "r1"))
+    verify_plugin_artifact(str(out), deep=True, report_dir=str(tmp_path / "r2"))
+    root2 = json.loads((out / "plugin_artifact_inventory.json").read_text())["artifact_root_sha256"]
+    assert root1 == root2
+    assert sorted(p.name for p in out.iterdir()) == files_before   # artifact untouched
+
+
+def test_semantics_detects_config_mismatch(tmp_path):
+    from lerobot_policy_coreai_bridge.artifact import verify_artifact_semantics
+    out = _build(tmp_path)
+    p = out / "config.json"
+    d = json.loads(p.read_text()); d["expected_action_dim"] = 999
+    p.write_text(json.dumps(d))
+    sem = verify_artifact_semantics(out)
+    assert sem["config_action_dim"].startswith("failed")
 
 
 # --- integrity: tamper / coverage / traversal ---
@@ -180,26 +205,30 @@ def test_build_fails_with_wrong_returns(tmp_path):
 
 # --- source provenance ---
 
-def test_external_reference_requires_revision(tmp_path):
+def test_external_reference_requires_resolved_commit(tmp_path):
+    # a mutable ref like "main" without a resolved commit sha is refused.
     with pytest.raises(ArtifactError):
-        build_plugin_artifact(_src(tmp_path), str(tmp_path / "p"), external=True)
+        build_plugin_artifact(_src(tmp_path), str(tmp_path / "p"), external=True,
+                              requested_ref="main")
 
 
-def test_external_reference_records_manifest_sha(tmp_path):
+def test_external_reference_records_resolved_commit(tmp_path):
     out = tmp_path / "p"
+    sha = "a" * 40
     build_plugin_artifact(_src(tmp_path), str(out), external=True,
-                          external_revision="abc123")
-    pm = json.loads((out / "plugin_artifact_manifest.json").read_text())
-    ref = pm["source_coreai_artifact_reference"]
-    assert ref["mode"] == "external" and ref["revision"] == "abc123"
-    assert ref["manifest_sha256"].startswith("sha256:")
+                          requested_ref="main", resolved_commit_sha=sha)
+    ref = json.loads((out / "plugin_artifact_manifest.json").read_text())[
+        "source_coreai_artifact_reference"]
+    assert ref["mode"] == "external" and ref["requested_ref"] == "main"
+    assert ref["resolved_commit_sha"] == sha
+    assert ref["embedded_manifest_sha256"].startswith("sha256:")
     assert verify_plugin_artifact(str(out), deep=True).ok
 
 
-def test_external_sha_mismatch_fails(tmp_path):
+def test_external_invalid_commit_fails(tmp_path):
     with pytest.raises(ArtifactError):
         build_plugin_artifact(_src(tmp_path), str(tmp_path / "p"), external=True,
-                              external_revision="r", external_sha256="sha256:" + "0" * 64)
+                              requested_ref="main", resolved_commit_sha="not-a-sha")
 
 
 # --- version binding (pure) ---

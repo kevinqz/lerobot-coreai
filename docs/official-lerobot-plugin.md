@@ -254,13 +254,53 @@ made structurally, semantically, and (partly) cryptographically trustworthy:
   integrity/authenticity/processor-contract claims; `factory_b1_certified` stays
   `false` (promoted only by the signed certificate, v1.3.9).
 
+## v1.3.8 — artifact semantic closure + batch protocol foundation
+
+Before batching multiplies the artifact, its **contracts** are cross-bound and its
+**state semantics** are pinned (still B=1):
+
+- **Schemas enforced** — the embedded processor contract is validated against
+  `PROCESSOR_CONTRACT_SCHEMA` (previously defined but unused); the action contract
+  has a strict schema (`representation` enum, `horizon≥1`, `single⇒horizon=1`); and
+  `claims` is closed (`additionalProperties:false`, forbidden claims `const:false`,
+  `official_plugin_factory_compatible` ∈ {null, false}).
+- **Cross-file semantic closure** — `verify_artifact_semantics` reconciles
+  `config.json` ↔ `plugin_artifact_manifest.json` ↔ `lerobot-coreai.json` ↔
+  inventory ↔ processors: action contract/dim/horizon equality, robot type, runner
+  minimum protocol, role→file mapping, and step-empty processor structure vs the
+  identity contract. Unknowable properties (dtype/names/units/layout, which config
+  `PolicyFeature`s don't carry) are reported **`not_verified`**, never silently
+  `passed`.
+- **Canonical inventory** — unique paths and roles, a closed role enum, exact
+  role→filename mapping, and a root digest that binds `path`+`role`+`sha256`+
+  `size_bytes` + `artifact_root_algorithm` (so a future signature authenticates
+  role semantics, not just bytes).
+- **Reports outside the artifact** — `verify … --output-dir` writes the report
+  externally; the sealed artifact is never modified, so verification is
+  **idempotent** (root digest unchanged across repeated runs).
+- **Full secret scan** — every declared JSON file is scanned; a sensitive key with
+  **any** non-empty value (including dict/list) fails, plus credential-bearing
+  URLs; normal public repo URLs pass.
+- **Immutable provenance** — `source_coreai_artifact_reference` records
+  `requested_ref` + `resolved_commit_sha` (40-hex) + `embedded_manifest_sha256`;
+  external release references require a resolved commit (a mutable `main` alone
+  fails).
+- **Batch protocol foundation (no B>1)** — `RunnerCapabilities` gains
+  `action_batching.semantics` and `inference_state.{scope,supports_session_ids,
+  reset_scope}`; a pure `select_batch_execution_mode(config, capabilities)` encodes
+  the rules (native requires native support; split allowed for
+  stateless/request-scoped, or session-scoped **with** session ids; **global
+  forbids split**; unknown scope fails). No batched inference is implemented — this
+  stabilizes the contract so v1.3.9 batching is mechanical and cannot mix sessions.
+
 ## Not yet
 
+- Batched runtime **B=2/B=4** (native + split-and-stack, per the v1.3.8 state
+  contract) — v1.3.9.
 - Signed **compatibility certificate v2** that promotes `plugin_compat` levels
   (`policy_factory` / `processor_pipeline`) from hash-bound, signed evidence —
-  v1.3.9. `authenticity_verified` stays `false` until then.
-- Full batched evaluation (`batch_size > 1`) — v1.3.8.
-- Compare/eval temporal evidence hardening — v1.3.10.
+  v1.3.10. `authenticity_verified` stays `false` until then.
+- Compare/eval temporal evidence hardening — v1.3.11.
 - Official `lerobot-eval` end-to-end certification — v1.4.0; Apple CoreAI runtime
   certification — v1.4.1.
 
