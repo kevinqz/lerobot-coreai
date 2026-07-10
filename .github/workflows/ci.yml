@@ -19,10 +19,9 @@ jobs:
       - run: pip install -e ".[test]"
       - run: pytest
 
-  lerobot-compat:
-    # v1.1.2: prove the LeRobot 0.6.x compatibility claim in CI, not just docs.
-    # LeRobot (and its torch dependency) is heavy, so this runs as its own job on
-    # Python 3.12 only — the only version the [lerobot] extra installs on.
+  lerobot-stable:
+    # v1.2.4: STABLE target. LeRobot 0.6.0 is the blocking, certified target.
+    # Pinned to the exact stable release, not the moving range.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -31,13 +30,44 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[lerobot,test]"
-      - name: LeRobot compatibility certificate (strict)
-        run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-compat
-      - name: Bridge + compat + registry tests
-        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py
+      - run: pip install -e ".[test,signing]"
+      - run: pip install "lerobot==0.6.0"
+      - name: LeRobot shape certificate (strict, v0)
+        run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-stable
+      - name: LeRobot contract report (strict, v1 levels)
+        run: lerobot-coreai lerobot-compat-check --contract --strict --output-dir reports/lerobot-stable
+      - name: Bridge + compat + registry + contract tests
+        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lerobot-compatibility-report
-          path: reports/lerobot-compat
+          name: lerobot-stable-compatibility-report
+          path: reports/lerobot-stable
+
+  lerobot-dev:
+    # v1.2.4: DEVELOPMENT target. Post-0.6.0 LeRobot, PINNED to an exact ref
+    # (never a moving @main). Non-blocking — it produces an artifact and signal
+    # without gating the release. Repin LEROBOT_DEV_REF to a chosen main commit
+    # once a specific post-0.6.0 commit is selected for certification.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    env:
+      LEROBOT_DEV_REF: "v0.6.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[test,signing]"
+      - run: pip install "git+https://github.com/huggingface/lerobot.git@${LEROBOT_DEV_REF}"
+      - name: LeRobot contract report (dev, v1 levels)
+        run: lerobot-coreai lerobot-compat-check --contract --output-dir reports/lerobot-dev
+      - name: Dev contract tests
+        run: pytest tests/test_lerobot_dev_contract.py tests/test_lerobot_contracts.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lerobot-dev-compatibility-report
+          path: reports/lerobot-dev

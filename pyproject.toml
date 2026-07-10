@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-coreai"
-version = "1.2.3"
+version = "1.2.4"
 description = "Apple CoreAI runtime backend for LeRobot policies."
 readme = "README.md"
 license = "Apache-2.0"
@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "httpx>=0.27",
     "jsonschema>=4.0",
+    "packaging>=21",
 ]
 
 [project.optional-dependencies]
