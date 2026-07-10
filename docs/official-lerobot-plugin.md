@@ -105,13 +105,32 @@ Real discovery is proven in a clean subprocess (`test_discovery.py`):
 `register_third_party_plugins()` finds `coreai_bridge` without a manual import.
 The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
 
+## v1.3.3 — local artifacts, negotiated codec, validated outputs
+
+- **Local manifests** — `load_manifest`/`resolve_manifest` accept an HF repo id,
+  a local directory, or a local `lerobot-coreai.json` file. Local sources never
+  touch the network, and a local-looking path that doesn't exist **fails**
+  instead of falling back to the Hub (records `source_kind` + `sha256`).
+- **Observation codec** — the transport emits `nested_json_v1` (plain JSON lists)
+  by default; `typed_array_envelope_v1` (`{"__array__",dtype,shape}`) is only used
+  when explicitly selected. Shape is validated against the manifest **before**
+  encoding, so the envelope can never mask a mismatch; the shape audit + payload
+  `sha256` are recorded.
+- **Strict action outputs** — `normalize_and_validate_action_chunk` rejects
+  ragged / rank-4 / non-finite / wrong-dim/horizon Runner outputs;
+  `predict_action_chunk` and `select_action` both route through it.
+- **Fully fail-closed cross-binding** — `expected_robot_type` (like action_dim)
+  now fails when the manifest declares no robot type.
+
 ## Not yet
 
-- Full batched evaluation (`batch_size > 1`) — v1.3.3.
+- Full batched evaluation (`batch_size > 1`) — v1.3.4.
 - Real serializable `PolicyProcessorPipeline` + canonical Hub artifact layout
-  (`config.json` / `policy_preprocessor.json` / …) — v1.3.3.
-- Live end-to-end `make_policy` → processors → fake-HTTP-runner test (the
-  current factory tests still bind via a fake `CoreAIPolicy`) — v1.3.3.
+  (`config.json` / `policy_preprocessor.json` / …) — v1.3.4 (LeRobot's
+  `PolicyProcessorPipeline` has a non-trivial serialization API that warrants its
+  own PR).
+- Live end-to-end `make_policy` → processors → fake-HTTP-runner test (factory
+  tests still bind via a fake `CoreAIPolicy`) — v1.3.4.
 - Official `lerobot-eval` end-to-end certification — v1.4.0.
 
 Guarded real egress remains a separately enforced runtime.

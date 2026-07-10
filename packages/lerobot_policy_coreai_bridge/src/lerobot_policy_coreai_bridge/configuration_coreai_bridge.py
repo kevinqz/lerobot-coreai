@@ -27,9 +27,12 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     expected_robot_type: str | None = None
     expected_action_dim: int | None = None
     expected_action_horizon: int | None = None
-    # Batch handling: "single_only" (v1.3.1) raises clearly on B>1;
-    # "split_and_stack" is reserved for v1.3.2.
+    # Batch handling: "single_only" raises clearly on B>1;
+    # "split_and_stack" is reserved for v1.3.4.
     batch_mode: str = "single_only"
+    # Observation transport encoding: "auto" (default -> nested_json_v1),
+    # "nested_json_v1", or "typed_array_envelope_v1" (only if the runner announces it).
+    observation_encoding: str = "auto"
     # The CoreAI runtime device is separate from the torch host device. The
     # inherited `device` (default from PreTrainedConfig) stays a real torch
     # device so make_policy's `policy.to(cfg.device)` works; runtime_device
@@ -59,3 +62,8 @@ class CoreAIBridgeConfig(PreTrainedConfig):
 
     def get_scheduler_preset(self):
         return None
+
+    def observation_encoding_or_default(self) -> str:
+        """Resolve "auto" to the safe default (nested_json_v1)."""
+        return "nested_json_v1" if self.observation_encoding == "auto" \
+            else self.observation_encoding

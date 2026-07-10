@@ -2,11 +2,11 @@
 #
 # Canonical sentence: Same LeRobot workflow. CoreAI runtime.
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 
 from .policy import CoreAIPolicy
 from .config import CoreAIRuntimeConfig, CoreAIPolicyConfig
-from .manifest import LeRobotCoreAIManifest, load_manifest
+from .manifest import LeRobotCoreAIManifest, load_manifest, resolve_manifest
 from .runner import RunnerClient
 from .types import ActionPredictRequest, ActionPredictResponse, RunnerHealth, RunnerCapabilities
 from .errors import (
@@ -32,6 +32,7 @@ __all__ = [
     "CoreAIPolicyConfig",
     "LeRobotCoreAIManifest",
     "load_manifest",
+    "resolve_manifest",
     "RunnerClient",
     "ActionPredictRequest",
     "ActionPredictResponse",

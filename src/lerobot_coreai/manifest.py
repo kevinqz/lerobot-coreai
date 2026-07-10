@@ -242,20 +242,94 @@ def derive_model_id(repo_id: str) -> str:
     )
 
 
-def load_manifest(repo_id: str, *, revision: str = "main") -> LeRobotCoreAIManifest:
-    """Download and validate lerobot-coreai.json from a Hugging Face artifact repo.
+def _looks_local(source: str) -> bool:
+    """True if a source string is a filesystem path, not an HF repo id.
 
-    Args:
-        repo_id: HF repo id (e.g. 'kevinqz/EVO1-SO100-CoreAI').
-        revision: HF revision (default 'main').
-
-    Returns:
-        Parsed and validated manifest.
-
-    Raises:
-        ManifestError: If the file is missing or fails validation.
-        DownloadError: If the download fails.
+    HF repo ids look like ``org/name`` (no leading ./ ~ / and not absolute). A
+    local path is absolute or starts with ./ ../ ~ — those must NEVER silently
+    fall back to the Hugging Face Hub.
     """
+    import os
+    return (source.startswith(("/", "./", "../", "~"))
+            or os.path.isabs(source))
+
+
+def resolve_manifest(source: str, *, revision: str = "main"):
+    """Resolve a manifest from a local dir/file or an HF repo (discriminated).
+
+    Returns ``(manifest, source_kind, sha256, network_accessed)``. Local sources
+    never touch the network; a nonexistent local-looking path fails rather than
+    falling back to the Hub.
+    """
+    from pathlib import Path
+
+    from .errors import DownloadError
+
+    p = Path(source).expanduser()
+    # 1. Existing local directory or file.
+    if p.is_dir():
+        mpath = p / MANIFEST_FILENAME
+        if not mpath.is_file():
+            raise ManifestError(
+                f"{MANIFEST_FILENAME} not found in local directory {p}.",
+                repo_id=source)
+        data = json.loads(mpath.read_bytes())
+        return (LeRobotCoreAIManifest.from_dict(data), "local_directory",
+                _sha256_bytes(mpath.read_bytes()), False)
+    if p.is_file():
+        raw = p.read_bytes()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ManifestError(f"{p} is not valid JSON: {e}") from e
+        return (LeRobotCoreAIManifest.from_dict(data), "local_file",
+                _sha256_bytes(raw), False)
+    # 2. Local-looking but nonexistent → fail closed (no silent HF fallback).
+    if _looks_local(source):
+        raise ManifestError(
+            f"local manifest path does not exist: {source} (refusing to fall "
+            "back to the Hugging Face Hub for a local-looking path).",
+            repo_id=source)
+
+    # 3. HF repo id.
+    url = HF_RAW_BASE.format(repo=source, filename=MANIFEST_FILENAME)
+    url = url.replace("/resolve/main/", f"/resolve/{revision}/")
+    try:
+        resp = httpx.get(url, timeout=30, follow_redirects=True)
+    except httpx.RequestError as e:
+        raise DownloadError(f"Failed to fetch {MANIFEST_FILENAME} from {source}: {e}") from e
+    if resp.status_code == 404:
+        raise ManifestError(
+            f"{MANIFEST_FILENAME} not found in {source}. "
+            f"This repo may not be a CoreAI-backed LeRobot artifact.", repo_id=source)
+    if resp.status_code != 200:
+        raise DownloadError(
+            f"HTTP {resp.status_code} fetching {MANIFEST_FILENAME} from {source}")
+    try:
+        data = resp.json()
+    except json.JSONDecodeError as e:
+        raise ManifestError(f"{MANIFEST_FILENAME} in {source} is not valid JSON: {e}") from e
+    return (LeRobotCoreAIManifest.from_dict(data), "hf_repo",
+            _sha256_bytes(resp.content), True)
+
+
+def _sha256_bytes(data: bytes) -> str:
+    import hashlib
+    return f"sha256:{hashlib.sha256(data).hexdigest()}"
+
+
+def load_manifest(repo_id: str, *, revision: str = "main") -> LeRobotCoreAIManifest:
+    """Load + validate lerobot-coreai.json from a local dir/file or HF repo.
+
+    Local paths (absolute, ./, ../, ~, or an existing path) are read from disk
+    with no network access; a local-looking path that doesn't exist fails rather
+    than falling back to the Hub. Everything else is treated as an HF repo id.
+    """
+    manifest, _kind, _sha, _net = resolve_manifest(repo_id, revision=revision)
+    return manifest
+
+
+def _load_manifest_from_hf(repo_id: str, *, revision: str = "main") -> LeRobotCoreAIManifest:
     from .errors import DownloadError
 
     url = HF_RAW_BASE.format(repo=repo_id, filename=MANIFEST_FILENAME)
