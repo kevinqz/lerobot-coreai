@@ -95,6 +95,12 @@ def _sha256_file(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
+def _sha256_obj(obj: Any) -> str:
+    """Canonical sha256 of a JSON-serializable object (sorted keys)."""
+    canon = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canon.encode()).hexdigest()
+
+
 def _artifact_root_sha256(entries: list[dict]) -> str:
     """Root digest over sorted full entries (path, role, sha256, size) + algorithm."""
     canon = json.dumps(
@@ -188,8 +194,10 @@ def build_plugin_artifact(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    from lerobot_coreai.action_contract import parse_action_contract_from_manifest
+    from lerobot_coreai.action_contract import (
+        parse_action_contract_from_manifest, parse_batch_contract_from_manifest)
     contract = parse_action_contract_from_manifest(manifest)
+    batch_contract = parse_batch_contract_from_manifest(manifest)
 
     # 1. config.json — coreai_artifact="" (root); env-var NAME only; cpu device.
     cfg = CoreAIBridgeConfig(
@@ -244,6 +252,12 @@ def build_plugin_artifact(
         "runner": {"runner_url_env": runner_url_env,
                    "minimum_runner_protocol": minimum_runner_protocol},
         "action_contract": contract.to_dict(),
+        "batch_contract": batch_contract.to_dict(),
+        "batch_contract_sha256": _sha256_obj(batch_contract.to_dict()),
+        "processor_stage_contract": {
+            "observation_input_stage": batch_contract.observation_stage,
+            "action_output_stage": "postprocessed_environment_action.v1",
+        },
         "source_coreai_artifact_reference": source_ref,
         "claims": {"official_plugin_factory_compatible": None,
                    "official_eval_certified": False, "upstream_native": False,
@@ -305,7 +319,8 @@ def verify_artifact_semantics(out: Path) -> dict[str, str]:
     Returns a name->status map ("passed" | "failed: …" | "not_verified: …").
     Absent/unknowable properties are "not_verified", never silently "passed".
     """
-    from lerobot_coreai.action_contract import parse_action_contract_from_manifest
+    from lerobot_coreai.action_contract import (
+        parse_action_contract_from_manifest, parse_batch_contract_from_manifest)
     from lerobot_coreai.manifest import LeRobotCoreAIManifest
     checks: dict[str, str] = {}
 
@@ -334,6 +349,19 @@ def verify_artifact_semantics(out: Path) -> dict[str, str]:
     contract = parse_action_contract_from_manifest(coreai_obj).to_dict()
     c("action_contract_equality", pm.get("action_contract") == contract,
       f"{pm.get('action_contract')} != {contract}")
+
+    # batch contract equality + hash (v1.3.11): the plugin manifest must record the
+    # SAME batch contract the CoreAI manifest declares, hash-bound.
+    batch = parse_batch_contract_from_manifest(coreai_obj).to_dict()
+    c("batch_contract_equality", pm.get("batch_contract") == batch,
+      f"{pm.get('batch_contract')} != {batch}")
+    c("batch_contract_sha256", pm.get("batch_contract_sha256") == _sha256_obj(batch),
+      "batch_contract_sha256 mismatch")
+    # processor stage: input stage must match the batch contract's observation_stage.
+    stage = pm.get("processor_stage_contract", {})
+    c("processor_stage_binding",
+      stage.get("observation_input_stage") == batch.get("observation_stage"),
+      f"{stage.get('observation_input_stage')} != {batch.get('observation_stage')}")
 
     # config expectations vs manifest.
     c("config_action_dim", cfg.get("expected_action_dim") == contract["action_dim"],

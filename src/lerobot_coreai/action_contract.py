@@ -191,13 +191,23 @@ def parse_action_contract_from_manifest(manifest) -> ActionContract:
 
 
 def _int_ge1(value: Any, name: str, default: int = 1) -> int:
-    try:
-        v = int(value if value is not None else default)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} is not an integer: {exc}") from exc
-    if v < 1:
-        raise ValueError(f"{name} must be >= 1, got {v}.")
-    return v
+    if value is None:
+        value = default
+    # No str->int coercion (P1.2): a JSON "4" is a contract error, not an int.
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be a JSON integer, got {type(value).__name__}.")
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1, got {value}.")
+    return value
+
+
+def _strict_contract_bool(value: Any, name: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"{name} must be a JSON boolean, got {type(value).__name__} {value!r}.")
+    return value
 
 
 def parse_batch_contract_from_manifest(manifest) -> BatchContract:
@@ -242,13 +252,22 @@ def parse_batch_contract_from_manifest(manifest) -> BatchContract:
         for s in scopes:
             if s not in _VALID_STATE_SCOPES:
                 raise ValueError(f"split allowed scope {s!r} not in {_VALID_STATE_SCOPES}.")
+        native_supported = _strict_contract_bool(
+            native.get("supported", False), "native_batch.supported")
+        split_supported = _strict_contract_bool(
+            split.get("supported", False), "client_split.supported")
+        # v1.3.11 (P1.1): the runtime only certifies INDEPENDENT native slots.
+        if native_supported and slot_iso != "independent":
+            raise ValueError(
+                "native_batch.required_slot_isolation must be 'independent' when "
+                f"native batch is supported, got {slot_iso!r}.")
         return BatchContract(
             schema_version=explicit.get("schema_version", BATCH_CONTRACT_SCHEMA_VERSION),
-            native_supported=bool(native.get("supported", False)),
+            native_supported=native_supported,
             native_max_batch_size=_int_ge1(native.get("max_batch_size"),
                                            "native_batch.max_batch_size"),
             native_slot_isolation=slot_iso,
-            split_supported=bool(split.get("supported", False)),
+            split_supported=split_supported,
             split_max_batch_size=_int_ge1(split.get("max_batch_size"),
                                           "client_split.max_batch_size"),
             split_allowed_scopes=scopes,
