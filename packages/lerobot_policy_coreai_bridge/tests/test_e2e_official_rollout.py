@@ -170,14 +170,18 @@ def _handler(state):
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
+            idx = state.n            # deterministic, index-dependent (WS E, P1.5)
             state.bodies.append(body)
             state.n += 1
             opts = body.get("options", {})
             if "batch_size" in opts:
                 b = int(opts["batch_size"])
-                action = [[[0.0] * A for _ in range(HORIZON)] for _ in range(b)]
+                action = [[[float(idx * 10000 + s * 1000 + h * 100 + a)
+                            for a in range(A)] for h in range(HORIZON)]
+                          for s in range(b)]
             else:
-                action = [[0.0] * A for _ in range(HORIZON)]
+                action = [[float(idx * 10000 + h * 100 + a) for a in range(A)]
+                          for h in range(HORIZON)]
             resp = {"action": action}
             state.responses.append(resp)
             return self._j(200, resp)
@@ -242,16 +246,17 @@ def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
     assert verified.ok, verified.checks
     inv = json.loads((art / "plugin_artifact_inventory.json").read_text())
     pm = json.loads((art / "plugin_artifact_manifest.json").read_text())
+    target = os.environ.get("COREAI_ROLLOUT_TARGET", "local")
     m = RolloutMeasurements(
         batch_size=B, mode=mode, sequence_length=out["action"].shape[1], horizon=HORIZON,
-        terminate_at=tuple(terminate_ats), request_bodies=tuple(state.bodies),
-        response_bodies=tuple(state.responses),
+        action_dim=A, terminate_at=tuple(terminate_ats),
+        request_bodies=tuple(state.bodies), response_bodies=tuple(state.responses),
         done_mask=tuple(tuple(int(x) for x in r) for r in out["done"].int().tolist()),
         final_action=out["action"].to("cpu").tolist(), required_obs_keys=tuple(_FIXTURE),
         fixture_contract=_FIXTURE)
-    ev = evaluate_rollout_measurements(m, action_dim=A)
+    ev = evaluate_rollout_measurements(m)
     report = build_rollout_readiness_report(
-        ev, m, environment=capture_environment_identity("stable"),
+        ev, m, environment=capture_environment_identity(target),
         artifact_root_sha256=inv["artifact_root_sha256"],
         batch_contract_sha256=pm["batch_contract_sha256"],
         runner_capabilities_sha256=capabilities_sha256(policy._capabilities),
@@ -321,7 +326,7 @@ def test_matrix_and_offline_verify(tmp_path, monkeypatch):
             cases_meta[case] = {"passed": ev.passed, "bundle_root_sha256": root}
         finally:
             server.__exit__(); venv.close()
-    write_matrix_manifest(str(ev_dir), "stable", cases_meta)
+    write_matrix_manifest(str(ev_dir), os.environ.get("COREAI_ROLLOUT_TARGET", "local"), cases_meta)
 
     res = verify_official_rollout_evidence(str(ev_dir), require_complete_matrix=True)
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
@@ -347,7 +352,7 @@ def test_missing_case_fails_verify(tmp_path, monkeypatch):
         _, _, root = _evidence(ev_dir, out, state, art, policy, 2, "native_batch", [3, 8])
     finally:
         server.__exit__(); venv.close()
-    write_matrix_manifest(str(ev_dir), "stable",
+    write_matrix_manifest(str(ev_dir), os.environ.get("COREAI_ROLLOUT_TARGET", "local"),
                           {"native_batch-b2": {"passed": True, "bundle_root_sha256": root}})
     # only one case present -> incomplete matrix fails.
     assert not verify_official_rollout_evidence(str(ev_dir),

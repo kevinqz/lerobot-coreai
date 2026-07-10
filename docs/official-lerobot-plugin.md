@@ -470,15 +470,46 @@ producer is no longer trusted.
   recomputable root, and `write_failure_evidence` for stage exceptions. Both CI
   rollout jobs generate, **verify offline**, and upload the bundle.
 
+## v1.3.15 — semantic evidence replay + matrix/bundle hardening
+
+The verifier now **re-derives** every passing claim from recorded raw data instead
+of trusting the report that contains it.
+
+- **Semantic replay** — each case bundle persists `measurements.json` (canonical raw
+  requests/responses/done-mask/final-action/fixture); `lerobot_coreai.rollout_replay.
+  replay_rollout_evidence` re-derives the full check set (lerobot-free) and matches
+  it to the report's checks/claims and recomputed request/response/final/done hashes.
+  The plugin evaluator and the verifier share ONE `derive_checks` engine.
+- **Response → final-action chain** — the fake runner returns deterministic,
+  index-dependent actions; the replay reconstructs `final_action` from the responses
+  via the temporal-queue transpose and requires an exact, finite match (a response
+  reorder or chain break fails).
+- **Restored wire validation** — the derived `wire_payload_valid` again requires the
+  exact observation key set, **no** `action`/`reward`/`done`/`success`/`index`/
+  `timestamp` leakage, correct `task` type/length, `batch_size`, and encoding/hash
+  options — plus per-feature fixture shapes.
+- **Target identity fixed** — `capture_environment_identity`/`write_matrix_manifest`
+  take the target from `COREAI_ROLLOUT_TARGET` (the dev bundle is no longer
+  mislabeled `stable`); the readiness environment records it.
+- **Matrix ↔ case binding** — the verifier compares each matrix entry's
+  `bundle_root_sha256` + `passed` to the **independently** verified case root/result,
+  requires the matrix case set to equal the verified bundles, and recomputes the
+  matrix root.
+- **Bundle security** — path-traversal / absolute / symlink rejection before opening
+  any manifest/checksum path, exact checksum coverage (`report`+`md`+`trace`+
+  `measurements`+`bundle_manifest`), exact bundle-manifest content coverage, and a
+  recursive secret scan over the report + measurements.
+
 ## Not yet
 
-- **Processor-stage vocabulary as a typed enum** (`ObservationStage`/`ActionStage`)
-  replacing the last `raw_lerobot_observation` string, and a **single canonical
-  BatchContract v3 schema file** shared verbatim across all consumers — churny
-  naming/schema refactors, isolated to reduce regression surface — v1.3.15.
-- **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** so
-  `universal_feature_contract_verified` can be true — v1.3.15.
-- **Queue-refill event instrumentation** (vs. the request-count proxy) — v1.3.15.
+- **Queue-refill event instrumentation** (`ActionQueueObserver`) vs. the
+  request-count proxy — v1.3.16.
+- **Failure-evidence v2** (schema-valid, per-stage envelope with checksums) —
+  v1.3.16.
+- **Processor-stage typed enum** + single canonical BatchContract v3 schema file,
+  **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
+  `universal_feature_contract_verified` true), stable **wheel-distribution digest** —
+  v1.3.16.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

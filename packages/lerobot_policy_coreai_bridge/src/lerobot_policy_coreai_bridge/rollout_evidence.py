@@ -72,6 +72,7 @@ class RolloutMeasurements:
     mode: str
     sequence_length: int
     horizon: int
+    action_dim: int
     terminate_at: tuple[int, ...]
     request_bodies: tuple[dict, ...]
     response_bodies: tuple[dict, ...]
@@ -79,6 +80,20 @@ class RolloutMeasurements:
     final_action: Any                       # nested list [B, seq, A]
     required_obs_keys: tuple[str, ...] = ()
     fixture_contract: dict = field(default_factory=dict)   # {key: expected per-sample shape}
+
+    def to_raw(self) -> dict:
+        """Canonical, replayable raw record (persisted as measurements.json)."""
+        return {
+            "batch_size": self.batch_size, "mode": self.mode,
+            "sequence_length": self.sequence_length, "horizon": self.horizon,
+            "action_dim": self.action_dim, "terminate_at": list(self.terminate_at),
+            "request_bodies": list(self.request_bodies),
+            "response_bodies": list(self.response_bodies),
+            "done_mask": [list(r) for r in self.done_mask],
+            "final_action": self.final_action,
+            "required_obs_keys": list(self.required_obs_keys),
+            "fixture_contract": dict(self.fixture_contract),
+        }
 
 
 @dataclass(frozen=True)
@@ -92,107 +107,25 @@ class RolloutEvaluation:
     failed_stage: str | None = None
 
 
-def _done_cumulative(done) -> bool:
-    for row in done:
-        seen = False
-        for v in row:
-            if v:
-                seen = True
-            elif seen:
-                return False
-    return True
-
-
-def _first_done_matches(done, terminate_at) -> bool:
-    for i, ta in enumerate(terminate_at):
-        row, fd = done[i], ta - 1
-        if any(row[:fd]) or not all(row[fd:]):
-            return False
-    return True
-
-
-def _per_sample_shape(v):
-    if isinstance(v, list):
-        s = [len(v)]
-        cur = v
-        while cur and isinstance(cur[0], list):
-            s.append(len(cur[0]))
-            cur = cur[0]
-        return s
-    return []
-
-
-def _fixture_semantics_ok(bodies, native, B, fixture) -> bool:
-    if not fixture:
-        return False
-    for body in bodies:
-        obs = body.get("observation", {})
-        for key, per_sample in fixture.items():
-            if key not in obs:
-                return False
-            shape = _per_sample_shape(obs[key])
-            expected = ([B] + list(per_sample)) if (native and B > 1) else list(per_sample)
-            if shape != expected:
-                return False
-    return True
-
-
-def _response_chain_ok(responses, requests, native, B, seq, horizon, A) -> bool:
-    if len(responses) != len(requests) or not responses:
-        return False
-    for r in responses:
-        act = r.get("action")
-        shape = _per_sample_shape(act)
-        if native and B > 1:
-            if len(shape) != 3 or shape[0] != B or shape[-1] != A:
-                return False
-        else:
-            if len(shape) != 2 or shape[-1] != A:      # [H, A]
-                return False
-    return True
-
-
-def evaluate_rollout_measurements(m: RolloutMeasurements, *, action_dim: int) -> RolloutEvaluation:
-    predictions = math.ceil(m.sequence_length / m.horizon)
-    native = m.mode == "native_batch"
-    expected_requests = (m.batch_size * predictions) if m.mode == "split_and_stack" \
-        else predictions
-    req_count = len(m.request_bodies)
+def evaluate_rollout_measurements(m: RolloutMeasurements) -> RolloutEvaluation:
+    """Derive checks via the SAME base engine the offline verifier replays with."""
+    from lerobot_coreai.rollout_replay import derive_checks
+    raw = m.to_raw()
+    checks = derive_checks(raw)
     req_hashes = tuple(canonical_json_sha256(b) for b in m.request_bodies)
     resp_hashes = tuple(canonical_json_sha256(b) for b in m.response_bodies)
-
-    checks = {
-        "official_rollout_called": req_count > 0,
-        "all_environments_reached_done": all(any(r) for r in m.done_mask),
-        "done_mask_cumulative": _done_cumulative(m.done_mask),
-        "done_mask_matches_terminate_at": _first_done_matches(m.done_mask, m.terminate_at),
-        "queue_refilled": predictions > 1,
-        "wire_payload_valid": all(
-            k in b.get("observation", {}) for b in m.request_bodies
-            for k in m.required_obs_keys) and bool(m.request_bodies),
-        "request_count_exact": req_count == expected_requests,
-        "response_action_chain_valid": _response_chain_ok(
-            m.response_bodies, m.request_bodies, native, m.batch_size,
-            m.sequence_length, m.horizon, action_dim),
-        "fixture_feature_semantics_verified": _fixture_semantics_ok(
-            m.request_bodies, native, m.batch_size, m.fixture_contract),
-    }
-    assert set(checks) == set(REQUIRED_CHECKS), "check set drifted from schema"
-    errors = []
-    if req_count != expected_requests:
-        errors.append(f"request_count {req_count} != {expected_requests}")
-    failed = None
-    for stage, key in (("done_mask_validation", "done_mask_matches_terminate_at"),
-                       ("request_accounting", "request_count_exact"),
-                       ("response_chain", "response_action_chain_valid"),
-                       ("fixture_semantics", "fixture_feature_semantics_verified")):
-        if not checks[key]:
-            failed = stage
-            break
+    failed = next((stage for stage, key in (
+        ("done_mask_validation", "done_mask_matches_terminate_at"),
+        ("request_accounting", "request_count_exact"),
+        ("response_chain", "response_action_chain_valid"),
+        ("wire_validation", "wire_payload_valid"),
+        ("fixture_semantics", "fixture_feature_semantics_verified"))
+        if not checks[key]), None)
     return RolloutEvaluation(
-        passed=all(checks.values()), checks=checks, request_count=req_count,
+        passed=all(checks.values()), checks=checks, request_count=len(m.request_bodies),
         ordered_request_sha256s=req_hashes, ordered_response_sha256s=resp_hashes,
-        errors=tuple(errors), failed_stage=failed)
+        errors=() if failed is None else (f"failed_stage={failed}",),
+        failed_stage=failed)
 
 
 # MARK: - report + bundle
@@ -275,13 +208,17 @@ def write_evidence_bundle(out_dir: str, report: dict, measurements: RolloutMeasu
     out.mkdir(parents=True, exist_ok=True)
     (out / "official_rollout_readiness_report.json").write_text(json.dumps(report, indent=2))
     (out / "official_rollout_readiness_report.md").write_text(render_readiness_md(report))
+    # Raw, canonical, REPLAYABLE record (v1.3.15) — the offline verifier re-derives
+    # every semantic check from this, never trusting the report's own booleans.
+    (out / "measurements.json").write_text(json.dumps(measurements.to_raw(), indent=2))
     with open(out / "official_rollout_trace.jsonl", "w") as fh:
         for j, (rq, rs) in enumerate(zip(measurements.request_bodies,
                                          measurements.response_bodies)):
             fh.write(json.dumps({"index": j, "request_sha256": canonical_json_sha256(rq),
                                  "response_sha256": canonical_json_sha256(rs)}) + "\n")
     content = ["official_rollout_readiness_report.json",
-               "official_rollout_readiness_report.md", "official_rollout_trace.jsonl"]
+               "official_rollout_readiness_report.md", "official_rollout_trace.jsonl",
+               "measurements.json"]
     files = {f: _sha256_file(out / f) for f in content}
     bundle_root = canonical_json_sha256(sorted(files.items()))
     manifest = {"schema_version": BUNDLE_MANIFEST_SCHEMA_VERSION,

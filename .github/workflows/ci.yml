@@ -72,7 +72,7 @@ jobs:
       - name: Official rollout readiness (mandatory)
         run: |
           mkdir -p reports/official-rollout-stable
-          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-stable COREAI_ROLLOUT_LEROBOT_SOURCE=pypi pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
+          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-stable COREAI_ROLLOUT_LEROBOT_SOURCE=pypi COREAI_ROLLOUT_TARGET=stable pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
       - name: Verify rollout evidence offline (independent)
         run: lerobot-coreai verify-official-rollout-evidence --bundle reports/official-rollout-stable --require-complete-matrix
       - uses: actions/upload-artifact@v4
@@ -104,7 +104,7 @@ jobs:
       - name: Official rollout readiness (dev, mandatory-in-job)
         run: |
           mkdir -p reports/official-rollout-dev
-          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-dev COREAI_ROLLOUT_LEROBOT_SOURCE=git pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
+          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-dev COREAI_ROLLOUT_LEROBOT_SOURCE=git COREAI_ROLLOUT_TARGET=development pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
       - name: Verify rollout evidence offline (independent)
         run: lerobot-coreai verify-official-rollout-evidence --bundle reports/official-rollout-dev --require-complete-matrix
       - uses: actions/upload-artifact@v4
