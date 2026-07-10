@@ -161,6 +161,42 @@ BUNDLE_MANIFEST_SCHEMA = {
     },
 }
 
+MEASUREMENTS_SCHEMA_VERSION = "lerobot-coreai.official_rollout_measurements.v1"
+MEASUREMENTS_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["batch_size", "mode", "sequence_length", "horizon", "action_dim",
+                 "terminate_at", "request_bodies", "response_bodies", "done_mask",
+                 "final_action", "required_obs_keys", "fixture_contract"],
+    "properties": {
+        "batch_size": {"type": "integer", "minimum": 1},
+        "mode": {"enum": ["single_only", "native_batch", "split_and_stack"]},
+        "sequence_length": {"type": "integer", "minimum": 1},
+        "horizon": {"type": "integer", "minimum": 1},
+        "action_dim": {"type": "integer", "minimum": 1},
+        "terminate_at": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "request_bodies": {"type": "array", "items": {"type": "object"}},
+        "response_bodies": {"type": "array", "items": {"type": "object"}},
+        "done_mask": {"type": "array",
+                      "items": {"type": "array", "items": {"type": "integer"}}},
+        "final_action": {"type": "array"},
+        "required_obs_keys": {"type": "array", "items": {"type": "string"}},
+        "fixture_contract": {"type": "object"},
+    },
+}
+
+TRACE_EVENT_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["index", "request_sha256", "response_sha256"],
+    "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "request_sha256": _SHA256, "response_sha256": _SHA256,
+    },
+}
+
 MATRIX_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",

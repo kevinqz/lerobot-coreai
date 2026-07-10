@@ -247,8 +247,12 @@ def write_matrix_manifest(matrix_dir: str, target: str, cases: dict[str, dict]) 
     """Aggregate per-case {passed, bundle_root_sha256} into a matrix + root."""
     out = Path(matrix_dir)
     out.mkdir(parents=True, exist_ok=True)
+    # v1.3.16 (P1.1): the matrix root binds target + passed + bundle root, so a
+    # target/pass flip changes the root (not just the bundle-root list).
     root = canonical_json_sha256(
-        sorted((c, v["bundle_root_sha256"]) for c, v in cases.items()))
+        {"schema_version": MATRIX_SCHEMA_VERSION, "target": target,
+         "cases": sorted((c, bool(v["passed"]), v["bundle_root_sha256"])
+                         for c, v in cases.items())})
     mx = {"schema_version": MATRIX_SCHEMA_VERSION, "target": target,
           "cases": cases, "matrix_root_sha256": root}
     (out / "official_rollout_matrix_manifest.json").write_text(json.dumps(mx, indent=2))

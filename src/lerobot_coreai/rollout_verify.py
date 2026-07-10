@@ -121,6 +121,29 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str |
        and _scan_secret(json.loads((case_dir / MEASUREMENTS_FILE).read_text())) is None,
        "secret detected")
 
+    # exact actual-file coverage (v1.3.16, P1.6): no extras/hidden/dirs.
+    actual = {p.name for p in case_dir.iterdir()}
+    expected_files = set(_CONTENT) | {BUNDLE_MANIFEST_FILE, CHECKSUMS_FILE}
+    ok("exact_file_coverage", actual == expected_files,
+       f"unexpected files: {sorted(actual ^ expected_files)}")
+
+    # trace cross-binding (P1.2): trace hashes must equal report + recomputed.
+    try:
+        events = [json.loads(ln) for ln in
+                  (case_dir / TRACE_FILE).read_text().splitlines() if ln.strip()]
+        raw = json.loads((case_dir / MEASUREMENTS_FILE).read_text())
+        tr_req = [e.get("request_sha256") for e in events]
+        tr_resp = [e.get("response_sha256") for e in events]
+        idx_ok = [e.get("index") for e in events] == list(range(len(events)))
+        rep_req = report["observation"]["ordered_request_sha256s"]
+        rep_resp = report["action"]["ordered_response_sha256s"]
+        raw_req = [canonical_json_sha256(b) for b in raw["request_bodies"]]
+        ok("trace_cross_binding",
+           idx_ok and tr_req == rep_req == raw_req and tr_resp == rep_resp,
+           "trace does not match report/measurements")
+    except Exception as exc:  # noqa: BLE001
+        ok("trace_cross_binding", False, str(exc))
+
     # SEMANTIC replay (v1.3.15): re-derive every check from raw records.
     rep = replay_rollout_evidence(str(case_dir))
     ok("semantic_replay", rep.ok, "; ".join(rep.errors)[:200])
@@ -179,11 +202,14 @@ def verify_official_rollout_evidence(
             jsonschema.validate(mx, MATRIX_SCHEMA)
         except Exception as exc:  # noqa: BLE001
             return VerifyEvidenceResult(False, {**checks, "matrix_schema": f"failed: {exc}"})
-        all_ok &= ok("matrix_root",
-                     canonical_json_sha256(sorted(
-                         (c, v["bundle_root_sha256"]) for c, v in mx["cases"].items()))
-                     == mx["matrix_root_sha256"], "matrix root mismatch")
-        # v1.3.15: matrix entries must match INDEPENDENTLY verified case roots/results.
+        # v1.3.16: root binds target + passed + bundle root (a target/pass flip
+        # changes the root).
+        recomputed = canonical_json_sha256(
+            {"schema_version": mx["schema_version"], "target": mx["target"],
+             "cases": sorted((c, bool(v["passed"]), v["bundle_root_sha256"])
+                             for c, v in mx["cases"].items())})
+        all_ok &= ok("matrix_root", recomputed == mx["matrix_root_sha256"],
+                     "matrix root mismatch")
         all_ok &= ok("matrix_case_set", set(mx["cases"]) == set(case_roots),
                      "matrix cases != verified case bundles")
         for c, entry in mx["cases"].items():
@@ -191,6 +217,17 @@ def verify_official_rollout_evidence(
                          case_roots.get(c) == entry["bundle_root_sha256"]
                          and case_results.get(c) == entry["passed"],
                          "matrix entry != verified case")
+        # matrix.target must equal every case's report environment target (P1.1).
+        target_ok = True
+        for c in mx["cases"]:
+            try:
+                env_t = json.loads(
+                    (root / c / REPORT_FILE).read_text())["environment"]["target"]
+                target_ok &= (env_t == mx["target"])
+            except Exception:  # noqa: BLE001
+                target_ok = False
+        all_ok &= ok("matrix_target_binding", target_ok,
+                     "matrix.target != a case environment target")
     elif require_complete_matrix:
         all_ok &= ok("matrix_present", False, f"{MATRIX_FILE} missing")
 
