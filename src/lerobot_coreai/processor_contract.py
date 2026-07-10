@@ -57,11 +57,18 @@ class ProcessorContractError(Exception):
 
 def parse_processor_contract_from_manifest(manifest, *, strict: bool = False) -> ProcessorContract:
     """Parse a processor contract; fail closed on ambiguity under strict mode."""
-    block = None
+    # Precedence: v1 contracts.processor → v0 top-level processor_contract.
+    contracts = None
     if isinstance(manifest, dict):
-        block = manifest.get("processor_contract")
+        contracts = manifest.get("contracts")
     else:
-        block = getattr(manifest, "processor_contract", None)
+        contracts = getattr(manifest, "contracts", None)
+    block = contracts.get("processor") if isinstance(contracts, dict) else None
+    if not isinstance(block, dict):
+        if isinstance(manifest, dict):
+            block = manifest.get("processor_contract")
+        else:
+            block = getattr(manifest, "processor_contract", None)
 
     if not isinstance(block, dict):
         contract = ProcessorContract()

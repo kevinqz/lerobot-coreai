@@ -202,6 +202,16 @@ class LeRobotCoreAIManifest:
         )
 
     @property
+    def contracts(self) -> dict[str, Any]:
+        """The optional machine-readable contracts block (v1.2.8+), or {}.
+
+        Holds ``action`` / ``batch`` / ``processor`` sub-contracts. Absent in v0
+        manifests; parsers fall back to inference when a sub-contract is missing.
+        """
+        c = self.raw.get("contracts")
+        return c if isinstance(c, dict) else {}
+
+    @property
     def lerobot_version_supported(self) -> str:
         """The LeRobot version this artifact was exported against."""
         return self.framework_version

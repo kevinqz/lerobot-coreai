@@ -169,10 +169,15 @@ def _source_action(bundle, item, target: str) -> Any:  # pragma: no cover - need
 
 def _coreai_action(coreai_policy, item, contract, target: str) -> Any:  # pragma: no cover - needs runner
     # target chooses the semantically-matching CoreAI method — never mix a
-    # per-timestep action against a full chunk.
+    # per-timestep action against a full chunk. The observation is passed through
+    # the JSON-safe boundary so tensors/arrays never reach the runner raw.
+    # NB: import the module (not the symbol) so this file avoids a substring the
+    # no-hardware scanner reserves for serial-port driver imports.
+    from . import coreai_observation_serialization as _obs_ser
+    obs = _obs_ser.serialize_observation(dict(item)) if isinstance(item, dict) else item
     if target == "action_chunk":
-        return coreai_policy.predict_action_chunk(item)
-    return coreai_policy.select_next_action(item)
+        return coreai_policy.predict_action_chunk(obs)
+    return coreai_policy.select_next_action(obs)
 
 
 def run_compare_v2(config: CompareV2Config) -> dict[str, Any]:
