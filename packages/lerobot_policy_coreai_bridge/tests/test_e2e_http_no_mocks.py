@@ -71,11 +71,12 @@ def _write_artifact(tmp_path):
 class _RunnerState:
     """Mutable server config + captured wire payloads (thread-shared)."""
     def __init__(self, *, protocol="coreai-runner.v2", encodings=("nested_json_v1",),
-                 action=None, capabilities_status=200):
+                 action=None, capabilities_status=200, backward_compatible_with=()):
         self.protocol = protocol
         self.encodings = list(encodings)
         self.action = action or [[float(i)] * ACTION_DIM for i in range(HORIZON)]
         self.capabilities_status = capabilities_status
+        self.backward_compatible_with = list(backward_compatible_with)
         self.last_predict_body = None
         self.predict_count = 0
 
@@ -105,6 +106,7 @@ def _make_handler(state: _RunnerState):
                     "supports": {"action": True},
                     "protocol_version": state.protocol,
                     "observation_encodings": state.encodings,
+                    "backward_compatible_with": state.backward_compatible_with,
                     "action_batching": {"supported": False, "max_batch_size": 1},
                 })
             return self._json(404, {"error": {"message": "not found"}})
@@ -202,8 +204,9 @@ def test_e2e_wire_payload_is_correct(tmp_path, monkeypatch):
 
 
 def test_e2e_negotiated_protocol_uses_announced_version(tmp_path, monkeypatch):
-    # runner announces v3 -> the request must carry v3, not a hardcoded v2.
-    state = _RunnerState(protocol="coreai-runner.v3")
+    # runner announces v3 (declaring back-compat) -> request carries v3, not v2.
+    state = _RunnerState(protocol="coreai-runner.v3",
+                         backward_compatible_with=("coreai-runner.v2",))
     policy, server = _load_policy(tmp_path, monkeypatch, state)
     try:
         policy.select_action({"observation.state": torch.zeros(1, ACTION_DIM)})
@@ -262,7 +265,7 @@ def test_e2e_missing_protocol_without_legacy_fails(tmp_path, monkeypatch):
 def test_e2e_missing_protocol_with_legacy_opt_in_succeeds(tmp_path, monkeypatch):
     state = _RunnerState(protocol=None)
     policy, server = _load_policy(tmp_path, monkeypatch, state,
-                                  allow_legacy_runner_protocol=True)
+                                  runtime_binding_mode="legacy")
     try:
         with pytest.warns(RuntimeWarning):
             action = policy.select_action(

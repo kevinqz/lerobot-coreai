@@ -21,6 +21,7 @@ class _Caps:
     protocol_version: str | None = None
     supports_batch: bool = False
     max_batch_size: int | None = None
+    backward_compatible_with: tuple = ()
 
 
 def test_auto_picks_first_common_encoding():
@@ -81,11 +82,27 @@ def test_protocol_v2_negotiates_and_uses_announced_version():
     assert neg.legacy is False
 
 
-def test_newer_protocol_is_accepted():
+def test_newer_protocol_without_backward_compat_fails():
+    # v1.3.6: a higher major must NOT be accepted blindly (may be breaking).
     caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
                  protocol_version="coreai-runner.v3")
+    with pytest.raises(CoreAIPolicyError):
+        negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
+
+
+def test_newer_protocol_with_backward_compat_is_accepted():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="coreai-runner.v3",
+                 backward_compatible_with=("coreai-runner.v2",))
     neg = negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
     assert neg.protocol_version == "coreai-runner.v3"
+
+
+def test_wrong_family_fails():
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1,),
+                 protocol_version="malicious-runner.v2")
+    with pytest.raises(CoreAIPolicyError):
+        negotiate_runner_protocol(requested_encoding="auto", capabilities=caps)
 
 
 def test_lower_protocol_fails():

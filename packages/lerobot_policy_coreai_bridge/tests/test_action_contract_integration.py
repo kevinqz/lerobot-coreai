@@ -36,12 +36,12 @@ def _obs():
 
 
 def test_chunk_contract_respected():
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=_Fake(horizon=3))
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=_Fake(horizon=3))
     assert p.predict_action_chunk(_obs()).shape == (1, 3, 7)
 
 
 def test_single_contract_respected():
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(),
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"),
                            coreai_policy=_Fake(representation="single", horizon=1))
     # A single-action policy returns [A]; the plugin normalizes to [1,1,A] then
     # select_action yields [1,A].
@@ -51,14 +51,14 @@ def test_single_contract_respected():
 def test_wrong_horizon_from_runner_fails():
     # Manifest says horizon 3, but the runner returns 8 rows -> fail closed.
     fake = _Fake(horizon=3, chunk=[[0.0] * 7 for _ in range(8)])
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=fake)
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=fake)
     with pytest.raises(CoreAIPolicyError):
         p.predict_action_chunk(_obs())
 
 
 def test_wrong_action_dim_from_runner_fails():
     fake = _Fake(horizon=3, action_dim=7, chunk=[[0.0] * 9 for _ in range(3)])
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=fake)
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=fake)
     with pytest.raises(CoreAIPolicyError):
         p.predict_action_chunk(_obs())
 
@@ -71,7 +71,7 @@ def test_runner_options_carry_encoding_and_hash():
             captured.update(runner_options or {})
             return self._chunk
 
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=_Capture(horizon=3))
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=_Capture(horizon=3))
     p.predict_action_chunk(_obs())
     assert captured["observation_encoding"] == "nested_json_v1"
     assert captured["protocol_version"] == "coreai-runner.v2"

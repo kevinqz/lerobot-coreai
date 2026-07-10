@@ -49,7 +49,7 @@ def test_get_policy_class_resolves():
 # --- Constructor accepts LeRobot make_policy kwargs ---
 
 def test_ctor_accepts_dataset_kwargs():
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=_FakeCoreAI(),
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=_FakeCoreAI(),
                            dataset_stats={"x": 1}, dataset_meta=object())
     assert p.dataset_stats == {"x": 1}
 
@@ -60,7 +60,8 @@ def test_from_pretrained_binds_runner(monkeypatch):
     monkeypatch.setenv("COREAI_RUNNER_URL", "http://127.0.0.1:8710")
     cfg = CoreAIBridgeConfig(coreai_artifact="kevinqz/EVO1-SO100-CoreAI",
                              expected_action_dim=7, expected_action_horizon=3,
-                             expected_robot_type="so100")
+                             expected_robot_type="so100",
+                             runtime_binding_mode="in_memory")
     with patch("lerobot_coreai.policy.CoreAIPolicy.from_pretrained",
                return_value=_FakeCoreAI()):
         policy = CoreAIBridgePolicy.from_pretrained("kevinqz/EVO1-SO100-CoreAI", config=cfg)
@@ -95,7 +96,7 @@ def test_batch_size_gt_1_fails_clearly():
 
 
 def test_action_tensor_on_policy_device():
-    p = CoreAIBridgePolicy(CoreAIBridgeConfig(), coreai_policy=_FakeCoreAI())
+    p = CoreAIBridgePolicy(CoreAIBridgeConfig(runtime_binding_mode="in_memory"), coreai_policy=_FakeCoreAI())
     a = p.select_action({"observation.state": torch.zeros(1, 7)})
     assert a.device == p._sentinel.device
     chunk = p.predict_action_chunk({"observation.state": torch.zeros(1, 7)})

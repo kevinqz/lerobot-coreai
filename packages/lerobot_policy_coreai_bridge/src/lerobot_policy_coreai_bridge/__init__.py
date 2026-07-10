@@ -6,15 +6,33 @@
 # factory. Runtime-only: it does not train. `policy_type="coreai"` is NOT
 # registered — only "coreai_bridge".
 
+__version__ = "1.3.6"
+
 from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 from .modeling_coreai_bridge import CoreAIBridgePolicy
-from .processor_coreai_bridge import make_coreai_bridge_pre_post_processors
-
-__version__ = "1.3.5"
+from .processor_coreai_bridge import (
+    make_coreai_bridge_pre_post_processors,
+    save_coreai_bridge_processors,
+)
 
 __all__ = [
     "POLICY_TYPE",
     "CoreAIBridgeConfig",
     "CoreAIBridgePolicy",
     "make_coreai_bridge_pre_post_processors",
+    "save_coreai_bridge_processors",
+    "build_plugin_artifact",
+    "verify_plugin_artifact",
 ]
+
+
+def build_plugin_artifact(*args, **kwargs):
+    """Lazy proxy to artifact.build_plugin_artifact (imports lerobot on call)."""
+    from .artifact import build_plugin_artifact as _impl
+    return _impl(*args, **kwargs)
+
+
+def verify_plugin_artifact(*args, **kwargs):
+    """Lazy proxy to artifact.verify_plugin_artifact."""
+    from .artifact import verify_plugin_artifact as _impl
+    return _impl(*args, **kwargs)

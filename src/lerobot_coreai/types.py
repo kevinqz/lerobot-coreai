@@ -27,6 +27,9 @@ class RunnerCapabilities:
     observation_encodings: tuple[str, ...] = ()
     supports_batch: bool = False
     max_batch_size: int | None = None
+    # v1.3.6: protocols the runner declares itself backward-compatible with, so a
+    # newer major (e.g. coreai-runner.v3) can still be accepted by a v2 plugin.
+    backward_compatible_with: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
