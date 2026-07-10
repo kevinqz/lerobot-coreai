@@ -30,9 +30,15 @@ from lerobot.processor import (  # noqa: E402
 )
 from lerobot.utils.import_utils import register_third_party_plugins  # noqa: E402
 
-# lerobot_eval imports `datasets` at module load; skip cleanly if it's absent
-# (the CI lerobot jobs install it explicitly so these tests actually run).
-rollout = pytest.importorskip("lerobot.scripts.lerobot_eval").rollout
+# lerobot_eval imports `datasets`/`av` at module load; those pull the heavy media
+# stack. Skip the whole module cleanly when they're absent (importorskip re-raises
+# on a mismatched-name ImportError under pytest 8, so skip explicitly). This E2E
+# runs where the full LeRobot stack is present (locally); CI gating of it lands
+# with the deliberate media-stack addition in v1.3.12.
+try:
+    from lerobot.scripts.lerobot_eval import rollout  # noqa: E402
+except ImportError as _exc:  # pragma: no cover
+    pytest.skip(f"lerobot_eval unavailable ({_exc})", allow_module_level=True)
 
 from lerobot_policy_coreai_bridge import build_plugin_artifact  # noqa: E402
 
