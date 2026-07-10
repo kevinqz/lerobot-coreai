@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-coreai"
-version = "1.1.7"
+version = "1.2.0"
 description = "Apple CoreAI runtime backend for LeRobot policies."
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,12 +48,18 @@ sim = [
     # Optional gymnasium simulator adapter for sim mode (v0.8.1).
     "gymnasium>=0.29",
 ]
+signing = [
+    # Optional Ed25519 artifact signing / verification (v1.2.0).
+    "cryptography>=41",
+]
 all = [
-    "lerobot-coreai[lerobot,fabric,camera,sim]",
+    "lerobot-coreai[lerobot,fabric,camera,sim,signing]",
 ]
 test = [
     "pytest>=7",
     "pytest-cov>=4",
+    # Signing is exercised in CI, so the crypto backend is a test dependency.
+    "cryptography>=41",
 ]
 
 [project.scripts]

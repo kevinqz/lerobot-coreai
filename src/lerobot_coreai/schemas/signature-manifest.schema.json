@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/signature-manifest.schema.json",
+  "title": "lerobot-coreai signature manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "signature_algorithm", "signer",
+               "signed_payload", "signature", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.signature.v0"},
+    "signature_algorithm": {"type": "string", "const": "ed25519"},
+    "signed_at": {"type": "string"},
+    "signer": {
+      "type": "object",
+      "required": ["public_key", "key_fingerprint"],
+      "properties": {
+        "name": {"type": ["string", "null"]},
+        "public_key": {"type": "string"},
+        "key_fingerprint": {"type": "string"}
+      }
+    },
+    "signed_payload": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "signature": {"type": "string"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_physical_safety", "authorizes_robot_actuation"],
+      "properties": {
+        "proves_signature_valid_if_verified": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

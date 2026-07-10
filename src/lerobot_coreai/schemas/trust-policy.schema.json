@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/trust-policy.schema.json",
+  "title": "lerobot-coreai trust policy",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "trusted_keys"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.trust_policy.v0"},
+    "trusted_keys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fingerprint"],
+        "properties": {
+          "name": {"type": "string"},
+          "fingerprint": {"type": "string"}
+        }
+      }
+    },
+    "required_artifacts": {"type": "array", "items": {"type": "string"}},
+    "forbidden_claims": {"type": "array", "items": {"type": "string"}}
+  }
+}
