@@ -33,8 +33,9 @@ class CoreAIBridgeConfig(PreTrainedConfig):
     # Batch handling (v1.3.9): "single_only" | "native_batch" | "split_and_stack"
     # | "auto". B>1 requires a batch-capable, safely-scoped runner.
     batch_mode: str = "single_only"
-    # Optional client-side cap; the effective max is min(artifact, config, runner).
+    # Optional client-side caps; effective maxima are computed per mode (v1.3.10).
     max_batch_size: int | None = None
+    max_split_requests: int | None = None
     # Observation transport encoding: "auto" (default -> nested_json_v1),
     # "nested_json_v1", or "typed_array_envelope_v1" (only if the runner announces it).
     observation_encoding: str = "auto"
@@ -64,6 +65,14 @@ class CoreAIBridgeConfig(PreTrainedConfig):
             raise ValueError(
                 f"runtime_binding_mode must be one of {self._VALID_BINDING_MODES}, "
                 f"got {self.runtime_binding_mode!r}.")
+        _valid_batch_modes = ("single_only", "native_batch", "split_and_stack", "auto")
+        if self.batch_mode not in _valid_batch_modes:
+            raise ValueError(
+                f"batch_mode must be one of {_valid_batch_modes}, got {self.batch_mode!r}.")
+        for name in ("max_batch_size", "max_split_requests"):
+            v = getattr(self, name)
+            if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
+                raise ValueError(f"{name} must be a positive int or None, got {v!r}.")
         # Reconcile the deprecated action_horizon alias with the source of truth.
         if (self.expected_action_horizon is not None
                 and self.action_horizon != 1

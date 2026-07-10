@@ -33,7 +33,11 @@ class RunnerCapabilities:
     # v1.3.8: batch protocol foundation. v1.3.9: state_isolation gates native B>1.
     # None means "not announced" (fail-closed for B>1).
     action_batching_semantics: str | None = None   # "native" | "split_and_stack"
-    action_batching_state_isolation: str | None = None  # stateless|request_scoped|per_slot|shared|unknown
+    action_batching_state_isolation: str | None = None  # legacy alias for slot_isolation
+    # v1.3.10: slot_isolation (independent|shared|unknown) is SEPARATE from state
+    # scope — native B>1 requires "independent" (per-slot), which request_scoped
+    # state lifetime alone does not prove.
+    action_batching_slot_isolation: str | None = None
     inference_state_scope: str | None = None        # stateless|request_scoped|session_scoped|global
     supports_session_ids: bool = False
     reset_scope: str | None = None                   # none|request|session|all_sessions|global

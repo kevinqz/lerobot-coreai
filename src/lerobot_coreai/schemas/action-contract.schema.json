@@ -60,30 +60,61 @@
     "batch_contract": {
       "type": "object",
       "required": [
-        "policy_supports_batch",
-        "max_batch_size",
-        "fallback"
+        "schema_version",
+        "native_batch",
+        "client_split",
+        "fallback",
+        "queue"
       ],
       "properties": {
         "schema_version": {
           "type": "string"
         },
-        "policy_supports_batch": {
-          "type": "boolean"
-        },
-        "supported_client_modes": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "native_batch",
-              "split_and_stack"
-            ]
+        "native_batch": {
+          "type": "object",
+          "required": [
+            "supported",
+            "max_batch_size"
+          ],
+          "properties": {
+            "supported": {
+              "type": "boolean"
+            },
+            "max_batch_size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required_slot_isolation": {
+              "type": "string",
+              "enum": [
+                "independent",
+                "shared",
+                "unknown"
+              ]
+            }
           }
         },
-        "max_batch_size": {
-          "type": "integer",
-          "minimum": 1
+        "client_split": {
+          "type": "object",
+          "required": [
+            "supported",
+            "max_batch_size"
+          ],
+          "properties": {
+            "supported": {
+              "type": "boolean"
+            },
+            "max_batch_size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "allowed_state_scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         },
         "fallback": {
           "type": "string",
@@ -92,14 +123,25 @@
             "reject"
           ]
         },
-        "queue_layout": {
-          "type": "string",
-          "enum": [
-            "time_major_batched"
-          ]
+        "queue": {
+          "type": "object",
+          "properties": {
+            "layout": {
+              "type": "string",
+              "enum": [
+                "time_major_batched"
+              ]
+            },
+            "commit_semantics": {
+              "type": "string",
+              "enum": [
+                "atomic_queue_commit"
+              ]
+            }
+          }
         },
-        "requires_atomic_commit": {
-          "type": "boolean"
+        "observation_stage": {
+          "type": "string"
         }
       }
     },

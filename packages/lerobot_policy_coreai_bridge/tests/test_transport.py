@@ -82,3 +82,43 @@ def test_only_manifest_features_kept():
              "observation.unexpected": torch.zeros(1, 3), "task": ["t"]}
     obs, _ = prepare_single_coreai_observation(batch, _Manifest())
     assert "observation.unexpected" not in obs
+
+
+# --- v1.3.10: strict runtime validation + canonical batch hash ---
+
+class _ReqFeat:
+    def __init__(self, shape, required=True):
+        self.shape = shape
+        self.required = required
+
+
+class _ReqManifest:
+    observation_features = {"observation.state": _ReqFeat([7], required=True),
+                            "task": _ReqFeat(None, required=False)}
+
+
+def test_task_none_fails():
+    batch = {"observation.state": torch.zeros(1, 7), "task": [None]}
+    with pytest.raises(CoreAIPolicyError):
+        prepare_single_coreai_observation(batch, _ReqManifest())
+
+
+def test_task_int_fails():
+    batch = {"observation.state": torch.zeros(1, 7), "task": [42]}
+    with pytest.raises(CoreAIPolicyError):
+        prepare_single_coreai_observation(batch, _ReqManifest())
+
+
+def test_missing_required_feature_fails():
+    batch = {"task": ["only task, no state"]}
+    with pytest.raises(CoreAIPolicyError):
+        prepare_single_coreai_observation(batch, _ReqManifest())
+
+
+def test_canonical_batch_hash_is_order_sensitive():
+    from lerobot_policy_coreai_bridge.transport import canonical_batch_sha256
+    a = canonical_batch_sha256(2, ["sha256:aa", "sha256:bb"], "split_and_stack")
+    b = canonical_batch_sha256(2, ["sha256:bb", "sha256:aa"], "split_and_stack")
+    assert a != b                                   # order matters
+    assert a != "sha256:aa"                          # not just the first sample
+    assert a == canonical_batch_sha256(2, ["sha256:aa", "sha256:bb"], "split_and_stack")

@@ -363,8 +363,12 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             chunks.append(chunk[0])                     # [H, A]
             sample_shas.append(sha)
         stacked = torch.stack(chunks, dim=0)            # [B, H, A]
-        self.last_observation_sha256 = sample_shas[0] if sample_shas else None
-        self.last_observation_audit = {"batch_size": b, "sample_sha256": sample_shas}
+        from .transport import canonical_batch_sha256
+        # Order-sensitive batch hash (P1.11) — NOT just the first sample's hash.
+        self.last_observation_sha256 = canonical_batch_sha256(
+            b, sample_shas, "split_and_stack")
+        self.last_observation_audit = {"batch_size": b, "mode": "split_and_stack",
+                                       "sample_sha256": sample_shas}
         return stacked
 
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> torch.Tensor:

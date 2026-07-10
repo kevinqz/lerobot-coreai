@@ -328,15 +328,58 @@ Batching arrives, restricted to runners that can prove requests don't mix state
   and split B=2/B=4 (B requests) through `make_policy`/`make_pre_post_processors`
   against a real batch-capable HTTP runner, on 0.6.0 + 0.6.1-dev.
 
+## v1.3.10 — authoritative batch contracts + multimodal readiness
+
+The batch contract becomes the authority, the runner's capabilities are strictly
+typed, and batching is proven **multimodal** with processors actually executed.
+
+- **`BatchContract` v3** — native and split modeled **apart** (`native_batch` /
+  `client_split` each with their own `supported` + `max_batch_size`;
+  `required_slot_isolation`, `allowed_state_scopes`, `queue.commit_semantics`,
+  `observation_stage`). Only an **authoritative** v3 contract can gate B>1; legacy
+  v0/v2 blocks stay readable for B=1 but cannot certify batching.
+- **Contract is authoritative** — `select_batch_execution_mode` now enforces
+  `native_supported` / `split_supported` / `fallback` (`reject` blocks auto→split)
+  / queue layout / commit semantics, not just `max_batch_size`.
+- **Separate mode limits** — native effective max = `min(artifact native, config,
+  runner native)`; split effective max = `min(artifact split, config,
+  max_split_requests)`. The runner's **native** max never caps split-and-stack.
+- **Slot isolation ≠ state scope** — native B>1 requires
+  `slot_isolation == 'independent'` (per-slot), distinct from
+  `inference_state.scope` lifetime.
+- **Strict capabilities** — the parser rejects a JSON string `"false"`
+  (`bool("false")` is `True`!), an invalid `max_batch_size`, and unknown types at
+  the earliest boundary; a canonical `capabilities_sha256` fingerprint is exposed.
+- **Runtime observation validation** — required manifest features must be present
+  in each request; a `task` must already **be** a string (never coerce
+  `None`/`int`/`dict`).
+- **Order-sensitive split hash** — the split path's batch hash is
+  `canonical_batch_sha256(batch_size, ordered_sample_hashes, mode)`, not the first
+  sample's hash.
+- **Multimodal E2E, processors executed** (`tests/test_e2e_multimodal.py`) —
+  `observation.state` + two cameras (`front`/`wrist`) + `task`, B=1/2/4, native and
+  split, run as `post(policy.select_action(pre(batch)))` (the processors are
+  **executed**, not just loaded) against a real batch-capable HTTP runner on
+  0.6.0 + 0.6.1-dev.
+
 ## Not yet
 
+- **Processor-stage vocabulary** — formalize `observation_stage` into a typed set
+  (`lerobot_policy_preprocessor_output.v1`, …) and cross-bind it end to end. The
+  v3 contract records the field; the exact-string enforcement is v1.3.11.
+- **Real `LeRobotDatasetMetadata`** fixtures — close `feature_dtype` /
+  `action_names_order` / `image_layout_range` so `semantic_completeness_verified`
+  can be `true` for a certified fixture (v1.3.11).
+- **Official `lerobot-eval` rollout readiness** — call the real
+  `lerobot.scripts.lerobot_eval.rollout` over a deterministic `SyncVectorEnv`
+  (env processors, done-masking, async episode ends) — v1.3.11.
 - **Session-scoped / global batching** — requires a per-slot session lifecycle
   (create / session-ids / reset / close) + transaction/rollback protocol; deferred
   until that contract exists. Only stateless/request-scoped B>1 is supported.
 - Signed **compatibility certificate v2** that promotes `plugin_compat` levels
   (`policy_factory` / `processor_pipeline`) from hash-bound, signed evidence —
-  v1.3.10. `authenticity_verified` stays `false` until then.
-- Compare/eval temporal evidence hardening — v1.3.11.
+  v1.3.12. `authenticity_verified` stays `false` until then.
+- Compare/eval temporal evidence hardening — v1.3.13.
 - Official `lerobot-eval` end-to-end certification — v1.4.0; Apple CoreAI runtime
   certification — v1.4.1.
 
