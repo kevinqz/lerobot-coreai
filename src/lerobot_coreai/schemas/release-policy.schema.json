@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/release-policy.schema.json",
+  "title": "lerobot-coreai release policy",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "channel"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.release_policy.v0"},
+    "channel": {"type": "string"},
+    "required_reports": {"type": "array", "items": {"type": "string"}},
+    "require_signature": {"type": "boolean"},
+    "require_no_overclaims": {"type": "boolean"},
+    "require_no_raw_secrets": {"type": "boolean"},
+    "allow_real_session_artifacts": {"type": "boolean"},
+    "allow_external_http_artifacts": {"type": "boolean"},
+    "require_guarded_real_evidence": {"type": "boolean"}
+  }
+}
