@@ -659,6 +659,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev2.add_argument("--json", action="store_true")
     p_ev2.set_defaults(func=cmd_eval_v2)
 
+    # --- obs-bridge-check (v1.1.5) — observation pipeline bridge ---
+    p_obc = sub.add_parser("obs-bridge-check",
+                           help="Check a LeRobot frame maps to the CoreAI observation (v1.1.5)")
+    p_obc.add_argument("--policy.path", dest="policy_path", required=True)
+    p_obc.add_argument("--runner.url", dest="runner_url", default=None)
+    p_obc.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_obc.add_argument("--frame-index", dest="frame_index", type=int, default=0)
+    p_obc.add_argument("--obs.config", dest="observation_config", default=None)
+    p_obc.add_argument("--obs.image-key", dest="obs_image_key", default=None)
+    p_obc.add_argument("--obs.state-key", dest="obs_state_key", default=None)
+    p_obc.add_argument("--obs.task", dest="obs_task", default=None)
+    p_obc.add_argument("--obs.require-state", dest="obs_require_state", action="store_true")
+    p_obc.add_argument("--obs.require-task", dest="obs_require_task", action="store_true")
+    p_obc.add_argument("--obs.required-keys", dest="obs_required_keys", default=None)
+    p_obc.add_argument("--obs.drop-unknown-keys", dest="obs_drop_unknown_keys",
+                       action="store_true")
+    p_obc.add_argument("--output-dir", dest="output_dir", default=None)
+    p_obc.add_argument("--json", action="store_true")
+    p_obc.set_defaults(func=cmd_obs_bridge_check)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -697,7 +717,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2606,6 +2626,80 @@ def cmd_eval_v2(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Feature mapping coherent." if report["ok"] else "Feature mapping FAILED.")
     print("Proves observation mapping only — not task success or physical safety.")
+    return 0 if report["ok"] else 1
+
+
+# MARK: - obs-bridge-check (v1.1.5 — observation pipeline bridge)
+
+def _obs_config_from_args(args) -> "object":
+    """Build an ObservationAdapterConfig from --obs.* flags / --obs.config file."""
+    import json as _json
+
+    from .observation_adapters import ObservationAdapterConfig
+    data = {}
+    if getattr(args, "observation_config", None):
+        data = _json.loads(Path(args.observation_config).read_text())
+    kwargs = {}
+    for k in ("image_key", "state_key", "task", "require_task", "require_state",
+              "required_keys", "drop_unknown_keys"):
+        if k in data:
+            kwargs[k] = data[k]
+    if getattr(args, "obs_image_key", None) is not None:
+        kwargs["image_key"] = args.obs_image_key
+    if getattr(args, "obs_state_key", None) is not None:
+        kwargs["state_key"] = args.obs_state_key
+    if getattr(args, "obs_task", None) is not None:
+        kwargs["task"] = args.obs_task
+    if getattr(args, "obs_require_state", False):
+        kwargs["require_state"] = True
+    if getattr(args, "obs_require_task", False):
+        kwargs["require_task"] = True
+    if getattr(args, "obs_required_keys", None):
+        kwargs["required_keys"] = [k.strip() for k in args.obs_required_keys.split(",")]
+    if getattr(args, "obs_drop_unknown_keys", False):
+        kwargs["drop_unknown_keys"] = True
+    return ObservationAdapterConfig(**kwargs)
+
+
+def cmd_obs_bridge_check(args: argparse.Namespace) -> int:
+    """Check a LeRobot frame maps onto the CoreAI observation. Sends no action."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .obs_bridge import evaluate_obs_bridge, load_dataset_frame
+    from .obs_pipeline_report import write_obs_bridge_report
+    from .policy import CoreAIPolicy
+
+    try:
+        policy = CoreAIPolicy.from_pretrained(args.policy_path, validate_runner=False)
+        raw = load_dataset_frame(args.dataset_repo_id, getattr(args, "frame_index", 0))
+    except (CoreAIPolicyError, ImportError) as e:
+        print(f"error: obs-bridge-check needs the policy manifest and the "
+              f"[lerobot] extra + dataset access: {e}")
+        return 1
+
+    report = evaluate_obs_bridge(
+        raw, _obs_config_from_args(args), manifest=policy.manifest,
+        policy_path=args.policy_path, input_source="LeRobotDataset",
+        frame_index=getattr(args, "frame_index", 0))
+
+    if getattr(args, "output_dir", None):
+        write_obs_bridge_report(Path(args.output_dir), report)
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    print("lerobot-coreai obs-bridge-check")
+    print("=" * 50)
+    for c in report["checks"]:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']} ({c['severity']}){detail}")
+    print("=" * 50)
+    print("Observation mapping valid for this frame." if report["ok"]
+          else "Observation mapping FAILED.")
+    print("Proves this sample's mapping only — not task success or physical safety.")
     return 0 if report["ok"] else 1
 
 
