@@ -214,15 +214,53 @@ The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
   that the transport allowlist drops), negotiated protocol/encoding/hash in
   `options`, and fail-closed feature mismatch. Runs on 0.6.0 (blocking) + 0.6.1-dev.
 
+## v1.3.7 — artifact integrity + processor-contract hardening
+
+Before batching multiplies the artifact, the object being replicated/certified is
+made structurally, semantically, and (partly) cryptographically trustworthy:
+
+- **Typed inventory + exact checksums** — `plugin_artifact_inventory.json` lists
+  every content file (`path`/`role`/`sha256`/`size_bytes`) plus an
+  `artifact_root_sha256`. Verification requires `checksums.json` to **exactly**
+  cover the inventory (missing/extra/malformed entries fail), every declared file
+  to match digest+size, no **undeclared** file in the dir, and no symlink.
+- **Path-traversal guard** — inventory paths must be simple basenames; `..`,
+  absolute paths, and symlinks are rejected **before** any file is opened.
+- **Integrity ≠ authenticity** — the verifier reports `integrity_verified`
+  (unsigned checksum consistency) separately from `authenticity_verified`, which
+  stays **false** until a trusted signature is issued (signing lands in v1.3.9).
+- **Strict JSON schemas** (`artifact_schemas.py`, `additionalProperties:false`)
+  for the plugin manifest, inventory, processor contract, and verification report.
+- **Processor contract v2** — step-empty (identity) processors are permitted
+  **only** when the manifest declares `owner=coreai_runner` on both ends AND
+  `observation_input.expects=="raw_lerobot_observation"` AND
+  `action_output.returns=="postprocessed_environment_action"`. Owner-correct but
+  wrong `expects`/`returns` fails. The direct
+  `make_coreai_bridge_pre_post_processors(config)` (no artifact evidence) now
+  **fails closed** instead of silently synthesizing identity processors.
+- **Version binding** — `check_version_compatibility` enforces artifact core/plugin
+  **lockstep**, installed core/plugin not older than the artifact and same major,
+  and (deep) installed LeRobot sharing the recorded major.minor.
+- **Honest provenance** — `source_coreai_artifact_reference` (renamed) records the
+  embedded manifest `sha256`; `external` mode requires an immutable `revision`, and
+  a supplied `external_sha256` that disagrees with the embedded manifest fails.
+- **Structured secret scan** — recursively refuses non-empty values under
+  `token`/`secret`/`password`/`api_key`/`authorization`/`bearer` keys and
+  credential-bearing URLs (`scheme://user:pass@…`); public repo URLs pass.
+- **Bidirectional feature binding** — additionally, every **required** manifest
+  observation feature must be present in `cfg.input_features`.
+- **Evidence report** — `verify … --report` writes
+  `plugin_artifact_verification_report.json/md` (schema-valid), separating
+  integrity/authenticity/processor-contract claims; `factory_b1_certified` stays
+  `false` (promoted only by the signed certificate, v1.3.9).
+
 ## Not yet
 
-- Formal `plugin_factory_e2e_report.json/md/jsonl` evidence artifacts +
-  artifact-backed **promotion** of `plugin_compat` levels (`policy_factory` /
-  `processor_pipeline` are still reported `partial` by the import-driven profile).
-  The E2E itself is the evidence today (run in CI on both LeRobot targets); the
-  signed compatibility-certificate v2 that promotes levels by evidence hashes is
-  v1.3.9 per the roadmap.
-- Full batched evaluation (`batch_size > 1`) — v1.3.7.
+- Signed **compatibility certificate v2** that promotes `plugin_compat` levels
+  (`policy_factory` / `processor_pipeline`) from hash-bound, signed evidence —
+  v1.3.9. `authenticity_verified` stays `false` until then.
+- Full batched evaluation (`batch_size > 1`) — v1.3.8.
+- Compare/eval temporal evidence hardening — v1.3.10.
 - Official `lerobot-eval` end-to-end certification — v1.4.0; Apple CoreAI runtime
   certification — v1.4.1.
 

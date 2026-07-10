@@ -219,7 +219,9 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 shape = spec.get("shape")
             return tuple(shape) if shape else None
 
-        for key, feat in (config.input_features or {}).items():
+        cfg_inputs = config.input_features or {}
+        # Direction 1: every config input feature must be a declared observation.
+        for key, feat in cfg_inputs.items():
             if getattr(feat, "type", None) == FeatureType.ENV:
                 continue
             if key not in obs_feats:
@@ -231,6 +233,20 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             if m_shape is not None and f_shape and tuple(f_shape) != tuple(m_shape):
                 raise PluginBindingError(
                     f"input feature {key!r} shape {f_shape} != manifest {m_shape}.")
+        # Direction 2 (v1.3.7): every REQUIRED manifest observation feature must be
+        # present in the config inputs — a dataset/env that omits a required
+        # observation would silently under-feed the runner.
+        if cfg_inputs:
+            for name, spec in obs_feats.items():
+                if name == "task":
+                    continue
+                required = getattr(spec, "required", None)
+                if required is None and isinstance(spec, dict):
+                    required = spec.get("required", True)
+                if required and name not in cfg_inputs:
+                    raise PluginBindingError(
+                        f"required manifest observation {name!r} is missing from the "
+                        f"config input features {sorted(cfg_inputs)}.")
 
         action_feats = {k: f for k, f in (config.output_features or {}).items()
                         if getattr(f, "type", None) == FeatureType.ACTION}
@@ -260,7 +276,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         if b > 1 and self.config.batch_mode == "single_only":
             raise PluginBindingError(
                 f"coreai_bridge supports only batch_size=1 (got {b}); "
-                "batched evaluation lands in v1.3.6.")
+                "batched evaluation lands in v1.3.8.")
 
     def _tensor(self, action: Any) -> torch.Tensor:
         t = torch.as_tensor(action, dtype=torch.float32, device=self._sentinel.device)

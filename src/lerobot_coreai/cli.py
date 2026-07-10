@@ -919,6 +919,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify_plugin.add_argument("--artifact", dest="artifact", required=True)
     p_verify_plugin.add_argument("--shallow", action="store_true",
                                  help="Skip lerobot-dependent deep checks")
+    p_verify_plugin.add_argument("--report", action="store_true",
+                                 help="Write plugin_artifact_verification_report.json/md")
     p_verify_plugin.add_argument("--json", action="store_true")
     p_verify_plugin.set_defaults(func=cmd_verify_lerobot_plugin_artifact)
 
@@ -963,13 +965,16 @@ def cmd_verify_lerobot_plugin_artifact(args: argparse.Namespace) -> int:
         print("error: this command requires the companion package "
               "'lerobot_policy_coreai_bridge'.", file=sys.stderr)
         return 4
-    result = verify_plugin_artifact(args.artifact, deep=not args.shallow)
+    result = verify_plugin_artifact(args.artifact, deep=not args.shallow,
+                                    write_report=getattr(args, "report", False))
     if args.json:
         print(_json.dumps(result.to_dict(), indent=2))
     else:
         for name, status in result.checks.items():
             mark = "✓" if status == "passed" else "✗"
             print(f"  {mark} {name}: {status}")
+        print(f"integrity_verified={result.claims.get('integrity_verified')} "
+              f"authenticity_verified={result.claims.get('authenticity_verified')}")
         print(f"Artifact {'VERIFIED' if result.ok else 'FAILED verification'}.")
     return 0 if result.ok else 1
 

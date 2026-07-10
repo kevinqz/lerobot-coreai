@@ -31,6 +31,16 @@ from lerobot.processor import (
 PREPROCESSOR_FILENAME = f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
 POSTPROCESSOR_FILENAME = f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
 
+# Processor contract v2 (v1.3.7): step-empty (identity) pipelines are permitted
+# ONLY when the CoreAI runner owns BOTH ends with these exact semantics. Any other
+# semantics (e.g. "policy_preprocessed_observation", "normalized_action",
+# "latent_action") would require concrete processor steps — a step-empty pipeline
+# there would silently ship un-normalized data to the runner.
+PROCESSOR_CONTRACT_SCHEMA_V2 = "coreai-processor-contract.v2"
+IDENTITY_OBS_EXPECTS = "raw_lerobot_observation"
+IDENTITY_ACTION_RETURNS = "postprocessed_environment_action"
+_RUNNER = "coreai_runner"
+
 
 class ProcessorOwnershipError(RuntimeError):
     """Raised when the manifest does not declare CoreAI processor ownership."""
@@ -48,24 +58,32 @@ def _processor_contract(manifest: Any) -> dict:
 
 
 def manifest_declares_coreai_ownership(manifest: Any) -> bool:
-    """True iff the manifest declares coreai_runner owns pre- AND post-processing."""
+    """True iff the manifest cedes BOTH ends to the runner with identity semantics.
+
+    v1.3.7: the exact ``expects``/``returns`` values are required, not just the
+    owner. Owner-correct + wrong expects/returns is NOT identity-eligible.
+    """
     proc = _processor_contract(manifest)
     obs = proc.get("observation_input") if isinstance(proc, dict) else None
     act = proc.get("action_output") if isinstance(proc, dict) else None
     if not isinstance(obs, dict) or not isinstance(act, dict):
         return False
-    return obs.get("owner") == "coreai_runner" and act.get("owner") == "coreai_runner"
+    return (obs.get("owner") == _RUNNER and act.get("owner") == _RUNNER
+            and obs.get("expects") == IDENTITY_OBS_EXPECTS
+            and act.get("returns") == IDENTITY_ACTION_RETURNS)
 
 
 def require_coreai_processor_ownership(manifest: Any) -> None:
     """Fail closed unless the manifest explicitly cedes processing to the runner."""
     if not manifest_declares_coreai_ownership(manifest):
         raise ProcessorOwnershipError(
-            "identity processors require the manifest to declare "
-            "contracts.processor.observation_input.owner == 'coreai_runner' AND "
-            "contracts.processor.action_output.owner == 'coreai_runner'. "
-            "Ambiguous or absent ownership is refused (the runner would receive "
-            "un-normalized observations).")
+            "identity (step-empty) processors require the manifest to declare "
+            "contracts.processor with owner 'coreai_runner' on BOTH ends AND "
+            f"observation_input.expects == {IDENTITY_OBS_EXPECTS!r} AND "
+            f"action_output.returns == {IDENTITY_ACTION_RETURNS!r}. "
+            "Any other semantics require concrete processor steps; ambiguous or "
+            "absent ownership is refused (the runner would receive un-normalized "
+            "observations).")
 
 
 def build_coreai_bridge_processors() -> tuple[PolicyProcessorPipeline, PolicyProcessorPipeline]:
@@ -81,12 +99,20 @@ def build_coreai_bridge_processors() -> tuple[PolicyProcessorPipeline, PolicyPro
 
 
 def make_coreai_bridge_pre_post_processors(config: Any, dataset_stats: Any = None):
-    """Return (preprocessor, postprocessor) for the CoreAI bridge policy.
+    """Fail-closed (v1.3.7): building processors from scratch is not supported.
 
-    Real PolicyProcessorPipeline instances (step-empty). Signature matches the
-    official ``make_<name>_pre_post_processors(config, dataset_stats=None)``.
+    The official factory only uses this create-path when no ``pretrained_path`` is
+    set. A CoreAI bridge is runtime-only and always ships a canonical artifact, so
+    identity processors must come from a verified artifact (whose manifest declares
+    CoreAI ownership) via ``make_pre_post_processors(pretrained_path=...)``, NOT be
+    silently synthesized here without any ownership evidence.
     """
-    return build_coreai_bridge_processors()
+    raise ProcessorOwnershipError(
+        "coreai_bridge processors cannot be built from scratch without artifact "
+        "evidence. Package a canonical artifact "
+        "(`lerobot-coreai package-lerobot-plugin-artifact`) and load it via "
+        "make_pre_post_processors(pretrained_path=...), which reconstructs the "
+        "serialized PolicyProcessorPipeline files.")
 
 
 def save_coreai_bridge_processors(output_dir: str, *, manifest: Any = None) -> tuple[str, str]:
