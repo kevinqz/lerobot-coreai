@@ -34,8 +34,8 @@ jobs:
       - run: pip install -e ".[lerobot,test]"
       - name: LeRobot compatibility certificate (strict)
         run: lerobot-coreai lerobot-compat-check --strict --output-dir reports/lerobot-compat
-      - name: Bridge + compat tests
-        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py
+      - name: Bridge + compat + registry tests
+        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
