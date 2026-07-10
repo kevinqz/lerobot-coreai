@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/artifact-index.schema.json",
+  "title": "lerobot-coreai artifact index root",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "entries", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.artifact_index.v0"},
+    "created_at": {"type": "string"},
+    "entries": {"type": "array", "items": {"type": "string"}},
+    "claims": {
+      "type": "object",
+      "required": ["proves_physical_safety", "authorizes_robot_actuation"],
+      "properties": {
+        "proves_artifact_discovery": {"type": "boolean"},
+        "proves_physical_safety": {"type": "boolean", "const": false},
+        "authorizes_robot_actuation": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
