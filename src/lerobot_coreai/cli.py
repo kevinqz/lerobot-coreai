@@ -640,6 +640,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_lrc.add_argument("--json", action="store_true")
     p_lrc.set_defaults(func=cmd_lerobot_registry_check)
 
+    # --- eval-v2 (v1.1.4) — LeRobotDataset eval parity + feature mapping ---
+    p_ev2 = sub.add_parser("eval-v2",
+                           help="LeRobotDataset eval v2: auditable feature mapping (v1.1.4)")
+    p_ev2.add_argument("--policy.path", dest="policy_path", required=True)
+    p_ev2.add_argument("--runner.url", dest="runner_url", default=None)
+    p_ev2.add_argument("--dataset.repo_id", dest="dataset_repo_id", required=True)
+    p_ev2.add_argument("--episodes", dest="episodes", default=None,
+                       help="Comma-separated episode indices, e.g. 0,1")
+    p_ev2.add_argument("--max-frames", dest="max_frames", type=int, default=None)
+    p_ev2.add_argument("--task", dest="task", default=None,
+                       help="Task string supplied by config when the dataset lacks it")
+    p_ev2.add_argument("--strict-features", dest="strict_features", action="store_true",
+                       help="Fail on missing required key or shape mismatch")
+    p_ev2.add_argument("--fail-on-unknown", dest="fail_on_unknown", action="store_true",
+                       help="In strict mode, also fail on unexpected dataset features")
+    p_ev2.add_argument("--output-dir", dest="output_dir", default=None)
+    p_ev2.add_argument("--json", action="store_true")
+    p_ev2.set_defaults(func=cmd_eval_v2)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -678,7 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2537,6 +2556,56 @@ def cmd_lerobot_registry_check(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Local registry adapter OK." if report["ok"] else "Registry check FAILED.")
     print("Local adapter only — not upstream LeRobot registration.")
+    return 0 if report["ok"] else 1
+
+
+# MARK: - eval-v2 (v1.1.4 — LeRobotDataset eval parity + feature mapping)
+
+def cmd_eval_v2(args: argparse.Namespace) -> int:
+    """LeRobotDataset eval v2: build an auditable feature mapping. Sends no action."""
+    import json as _json
+
+    from .errors import CoreAIPolicyError
+    from .lerobot_eval_v2 import EvalV2Config, build_eval_v2_markdown, run_eval_v2
+
+    episodes = None
+    if getattr(args, "episodes", None):
+        episodes = [int(e.strip()) for e in args.episodes.split(",")]
+
+    config = EvalV2Config(
+        policy_path=args.policy_path,
+        dataset_repo_id=args.dataset_repo_id,
+        runner_url=getattr(args, "runner_url", None),
+        episodes=episodes,
+        max_frames=getattr(args, "max_frames", None),
+        strict_features=getattr(args, "strict_features", False),
+        fail_on_unknown=getattr(args, "fail_on_unknown", False),
+        task=getattr(args, "task", None),
+        output_dir=Path(args.output_dir) if getattr(args, "output_dir", None) else None,
+    )
+
+    try:
+        report = run_eval_v2(config)
+    except CoreAIPolicyError as e:
+        print(f"error: {e}")
+        return 1
+    except ImportError as e:
+        print(f"error: eval-v2 needs the [lerobot] extra and dataset access: {e}")
+        return 1
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    print("lerobot-coreai eval-v2")
+    print("=" * 50)
+    for c in report["checks"]:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']} ({c['severity']}){detail}")
+    print("=" * 50)
+    print("Feature mapping coherent." if report["ok"] else "Feature mapping FAILED.")
+    print("Proves observation mapping only — not task success or physical safety.")
     return 0 if report["ok"] else 1
 
 
