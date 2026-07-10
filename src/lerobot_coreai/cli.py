@@ -606,6 +606,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_vrs.add_argument("--json", action="store_true")
     p_vrs.set_defaults(func=cmd_verify_real_session)
 
+    # --- lerobot-bridge-check (v1.1.0) — local LeRobot bridge probe ---
+    p_lbc = sub.add_parser("lerobot-bridge-check",
+                           help="Probe the local LeRobot bridge for a CoreAI policy (v1.1.0)")
+    p_lbc.add_argument("--policy.path", dest="policy_path", required=True)
+    p_lbc.add_argument("--runner.url", dest="runner_url", default=None)
+    p_lbc.add_argument("--dataset.repo_id", dest="dataset_repo_id", default=None)
+    p_lbc.add_argument("--max-frames", dest="max_frames", type=int, default=None)
+    p_lbc.add_argument("--output-dir", dest="output_dir", default=None)
+    p_lbc.add_argument("--json", action="store_true")
+    p_lbc.set_defaults(func=cmd_lerobot_bridge_check)
+
     # --- compare (spec §12.7) — v0.3 ---
     p_compare = sub.add_parser("compare", help="Compare PyTorch vs CoreAI action parity on LeRobotDataset (v0.5)")
     p_compare.add_argument("--torch.policy.path", dest="torch_policy_path", required=True)
@@ -644,7 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, eval, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, eval, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2381,6 +2392,46 @@ def cmd_verify_real_session(args: argparse.Namespace) -> int:
     print("=" * 50)
     print("Real session verified." if result.ok else "Real session verification FAILED.")
     return 0 if result.ok else 1
+
+
+# MARK: - lerobot-bridge-check (v1.1.0 — local LeRobot bridge probe)
+
+def cmd_lerobot_bridge_check(args: argparse.Namespace) -> int:
+    """Probe the local LeRobot bridge for a CoreAI policy. Sends no robot action."""
+    import json as _json
+
+    from .lerobot_bridge import (
+        build_bridge_markdown, evaluate_bridge_check,
+    )
+
+    report = evaluate_bridge_check(
+        args.policy_path,
+        runner_url=getattr(args, "runner_url", None),
+        dataset_repo_id=getattr(args, "dataset_repo_id", None),
+        max_frames=getattr(args, "max_frames", None),
+    )
+
+    if getattr(args, "output_dir", None):
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "lerobot_bridge_report.json", "w") as f:
+            _json.dump(report, f, indent=2)
+        (out / "lerobot_bridge_report.md").write_text(build_bridge_markdown(report))
+
+    if args.json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    print("lerobot-coreai lerobot-bridge-check")
+    print("=" * 50)
+    for c in report["checks"]:
+        mark = "✓" if c["passed"] else "✗"
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        print(f"{mark} {c['name']} ({c['severity']}){detail}")
+    print("=" * 50)
+    print("Local LeRobot bridge OK." if report["ok"] else "LeRobot bridge check FAILED.")
+    print("Local bridge only — not upstream-native LeRobot integration.")
+    return 0 if report["ok"] else 1
 
 
 # MARK: - compare (v0.5 — PyTorch vs CoreAI action parity)
