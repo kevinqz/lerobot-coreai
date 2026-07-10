@@ -42,6 +42,7 @@ class RealPreflightConfig:
     robot_config: Path | None = None
     robot_endpoint: str | None = None
     robot_token: str | None = None
+    robot_auth_token_env: str | None = None
     operator: str | None = None
     max_steps: int | None = None
     duration_seconds: float | None = None
@@ -221,6 +222,7 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
         and config.max_steps is not None and config.fps is not None)
 
     # Robot adapter (preflight only — no connect/send).
+    external_http_section: dict[str, Any] | None = None
     try:
         adapter = build_robot_adapter(
             config.robot_adapter, config.robot_type,
@@ -236,13 +238,57 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
                "" if pf.get("ok") else str(pf))
             # v1.0.3: an external-http controller must satisfy the capability
             # contract, coherent with robot type / profile shape / fps.
+            # v1.1.1: and, in guarded mode, its /safety-state must be ready with
+            # e-stop armed, workspace clear, and no faults before any egress.
             if config.robot_adapter == "external-http" and pf.get("ok"):
-                from .external_http_contract import validate_controller_preflight
+                from .external_http_contract import (
+                    validate_controller_preflight, validate_controller_safety_state,
+                )
                 for name, ok, msg in validate_controller_preflight(
                         pf, robot_type=config.robot_type,
                         profile_action_shape=profile_action_shape,
                         requested_fps=config.fps):
                     _c(name, ok, msg)
+                ss = None
+                if guarded:
+                    ss = adapter.safety_state() if hasattr(adapter, "safety_state") else {}
+                    _c("external_controller_safety_state_reachable",
+                       bool(ss.get("ok")), "" if ss.get("ok") else str(ss))
+                    if ss.get("ok"):
+                        for name, ok, msg in validate_controller_safety_state(
+                                ss, robot_type=config.robot_type):
+                            _c(name, ok, msg)
+                # Report section (capabilities + safety-state + auth). Never the
+                # raw token — only a sha256 prefix.
+                from .robot_adapters import token_sha256_prefix
+                external_http_section = {
+                    "endpoint": config.robot_endpoint,
+                    "loopback_only": True,
+                    "capabilities": {
+                        "controller_schema_version": pf.get("controller_schema_version"),
+                        "robot_type": pf.get("robot_type"),
+                        "action_shape": pf.get("action_shape"),
+                        "max_fps": pf.get("max_fps"),
+                        "supports_stop": pf.get("supports_stop"),
+                        "supports_ready": pf.get("supports_ready"),
+                        "supports_observation": pf.get("supports_observation"),
+                        "supports_safety_state": pf.get("supports_safety_state"),
+                        "physical_estop_required": pf.get("physical_estop_required"),
+                    },
+                    "safety_state": ({
+                        "physical_estop_state": ss.get("physical_estop_state"),
+                        "workspace_state": ss.get("workspace_state"),
+                        "faults": ss.get("faults"),
+                        "ready": ss.get("ready"),
+                    } if ss and ss.get("ok") else None),
+                    "auth": {
+                        "enabled": bool(config.robot_token),
+                        "token_source": ("env" if config.robot_auth_token_env
+                                         else ("arg" if config.robot_token else None)),
+                        "token_env": config.robot_auth_token_env,
+                        "token_sha256_prefix": token_sha256_prefix(config.robot_token),
+                    },
+                }
     except CoreAIPolicyError as e:
         _c("robot_adapter_known", False, str(e))
 
@@ -286,4 +332,6 @@ def evaluate_real_preflight(config: RealPreflightConfig) -> RealPreflightResult:
             "authorizes_unrestricted_real_world_actuation": False,
         },
     }
+    if external_http_section is not None:
+        report["external_http"] = external_http_section
     return RealPreflightResult(ok=ok, checks=checks, report=report)

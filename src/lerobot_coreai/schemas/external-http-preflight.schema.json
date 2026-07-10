@@ -10,19 +10,26 @@
     "robot_type",
     "action_shape",
     "supports_stop",
-    "supports_ready"
+    "supports_ready",
+    "supports_observation",
+    "supports_safety_state",
+    "physical_estop_required",
+    "max_fps"
   ],
   "properties": {
     "ok": {"type": "boolean", "const": true},
     "controller_schema_version": {"type": "string", "const": "lerobot-coreai.external_http.v0"},
     "adapter": {"type": "string"},
+    "controller_name": {"type": "string"},
     "robot_type": {"type": "string"},
     "action_shape": {"type": "array", "items": {"type": "integer"}},
     "observation_keys": {"type": "array", "items": {"type": "string"}},
     "supports_stop": {"type": "boolean", "const": true},
     "supports_ready": {"type": "boolean", "const": true},
+    "supports_observation": {"type": "boolean"},
     "supports_safety_state": {"type": "boolean"},
     "physical_estop_required": {"type": "boolean"},
-    "max_fps": {"type": "number", "exclusiveMinimum": 0}
+    "max_fps": {"type": "number", "exclusiveMinimum": 0},
+    "notes": {"type": "string"}
   }
 }

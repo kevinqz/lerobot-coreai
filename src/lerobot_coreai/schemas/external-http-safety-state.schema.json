@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/external-http-safety-state.schema.json",
+  "title": "lerobot-coreai external-http controller safety state",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "ok",
+    "ready",
+    "robot_type",
+    "controller_connected",
+    "physical_estop_state",
+    "workspace_state",
+    "faults"
+  ],
+  "properties": {
+    "ok": {"type": "boolean", "const": true},
+    "ready": {"type": "boolean"},
+    "robot_type": {"type": "string"},
+    "controller_connected": {"type": "boolean"},
+    "physical_estop_state": {"type": "string", "enum": ["armed", "triggered", "unknown"]},
+    "workspace_state": {"type": "string", "enum": ["clear", "not_clear", "unknown"]},
+    "motors_powered": {"type": ["boolean", "null"]},
+    "faults": {"type": "array", "items": {"type": "string"}}
+  }
+}

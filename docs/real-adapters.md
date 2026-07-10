@@ -92,3 +92,12 @@ Unknown adapter names fail closed:
 ```
 Unknown or unimplemented robot adapter: 'so100'. Available: mock, external-http.
 ```
+
+## External-http controller contract (v1.1.1)
+
+The `external-http` adapter must point at an explicit loopback `http://` endpoint
+**with a port**, and — in guarded mode — the controller must satisfy the
+`GET /preflight` capability contract and a ready/safe `GET /safety-state` before
+any egress. Local auth is available via `--robot.auth-token-env` (the raw token
+is never persisted; only a `sha256:` prefix). See
+[external-http-controller-contract.md](external-http-controller-contract.md).

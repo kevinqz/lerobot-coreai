@@ -555,6 +555,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_real.add_argument("--robot.token", dest="robot_token",
                         help="Bearer token for external-http adapter (or "
                              "LEROBOT_COREAI_ROBOT_TOKEN env var)")
+    p_real.add_argument("--robot.auth-token-env", dest="robot_auth_token_env",
+                        help="Name of an env var holding the external-http auth "
+                             "token (indirection so the token never appears in "
+                             "argv). Fails closed if the named var is unset.")
     p_real.add_argument("--safety.profile", dest="safety_profile", required=True)
     p_real.add_argument("--readiness-report", dest="readiness_report", required=True)
     p_real.add_argument("--approval", dest="approval", required=True)
@@ -2286,9 +2290,21 @@ def cmd_release_readiness(args: argparse.Namespace) -> int:
 def cmd_real(args: argparse.Namespace) -> int:
     """Guarded real mode: preflight-only or a bounded guarded real session."""
     import json as _json
+    import os as _os
 
     from .errors import CoreAIPolicyError
     from .real_mode import RealModeConfig, run_real_mode
+
+    # v1.1.1: resolve --robot.auth-token-env by name; fail closed if unset.
+    robot_token = getattr(args, "robot_token", None)
+    token_env = getattr(args, "robot_auth_token_env", None)
+    if token_env:
+        resolved = _os.environ.get(token_env)
+        if not resolved:
+            print(f"error: --robot.auth-token-env names {token_env!r}, but that "
+                  f"environment variable is unset or empty.")
+            return 1
+        robot_token = resolved
 
     config = RealModeConfig(
         mode=args.mode,
@@ -2303,7 +2319,8 @@ def cmd_real(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir),
         robot_config=Path(args.robot_config) if getattr(args, "robot_config", None) else None,
         robot_endpoint=getattr(args, "robot_endpoint", None),
-        robot_token=getattr(args, "robot_token", None),
+        robot_token=robot_token,
+        robot_auth_token_env=token_env,
         operator=getattr(args, "operator", None),
         max_steps=getattr(args, "max_steps", None),
         duration_seconds=getattr(args, "duration_seconds", None),
