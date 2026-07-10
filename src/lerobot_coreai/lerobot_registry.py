@@ -81,6 +81,12 @@ def local_lerobot_registry_patch(registry: CoreAILeRobotRegistry | None = None):
     no-op over the factory (the local registry still works). This is a local,
     experimental adapter — NOT upstream-native registration.
     """
+    import warnings
+    warnings.warn(
+        "local_lerobot_registry_patch is deprecated as of v1.3.0: prefer the "
+        "official out-of-tree plugin 'lerobot_policy_coreai_bridge', which "
+        "registers via PreTrainedConfig.register_subclass with no monkeypatch.",
+        DeprecationWarning, stacklevel=2)
     reg = registry or CoreAILeRobotRegistry()
     if not reg.is_registered(BRIDGE_POLICY_TYPE):
         reg.register(BRIDGE_POLICY_TYPE)
