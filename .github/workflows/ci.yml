@@ -70,7 +70,9 @@ jobs:
       - run: pip install "lerobot[dataset,evaluation]==0.6.0"
       - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: Official rollout readiness (mandatory)
-        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v --basetemp=reports/official-rollout-stable
+        run: |
+          mkdir -p reports/official-rollout-stable
+          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-stable pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -98,7 +100,9 @@ jobs:
       - run: pip install "lerobot[dataset,evaluation] @ git+https://github.com/huggingface/lerobot.git@${LEROBOT_DEV_REF}"
       - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: Official rollout readiness (dev, mandatory-in-job)
-        run: pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v --basetemp=reports/official-rollout-dev
+        run: |
+          mkdir -p reports/official-rollout-dev
+          COREAI_ROLLOUT_EVIDENCE_DIR=reports/official-rollout-dev pytest packages/lerobot_policy_coreai_bridge/tests/test_e2e_official_rollout.py -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:

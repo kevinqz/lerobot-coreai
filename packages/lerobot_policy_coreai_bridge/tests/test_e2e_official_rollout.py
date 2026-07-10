@@ -17,6 +17,7 @@ import os
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -298,7 +299,8 @@ def _evidence(tmp_path, out, state, art, policy, B, mode, terminate_ats):
         runner_capabilities_sha256=caps_sha,
         preprocessor_sha256=_sha256_file(art / "policy_preprocessor.json"),
         postprocessor_sha256=_sha256_file(art / "policy_postprocessor.json"))
-    bundle = tmp_path / "evidence" / f"{mode}-b{B}"
+    base = os.environ.get("COREAI_ROLLOUT_EVIDENCE_DIR") or str(tmp_path / "evidence")
+    bundle = Path(base) / f"{mode}-b{B}"
     write_evidence_bundle(str(bundle), report, m)
     assert (bundle / "official_rollout_readiness_report.json").exists()
     assert (bundle / "checksums.json").exists()
