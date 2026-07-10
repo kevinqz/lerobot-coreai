@@ -54,6 +54,7 @@ class RealModeConfig:
     robot_config: Path | None = None
     robot_endpoint: str | None = None
     robot_token: str | None = None
+    robot_auth_token_env: str | None = None
     operator: str | None = None
     max_steps: int | None = None
     duration_seconds: float | None = None
@@ -105,6 +106,7 @@ def _preflight_config(config: RealModeConfig) -> RealPreflightConfig:
         approval=config.approval, bundle_dir=config.bundle_dir,
         robot_config=config.robot_config, robot_endpoint=config.robot_endpoint,
         robot_token=config.robot_token,
+        robot_auth_token_env=config.robot_auth_token_env,
         operator=config.operator, max_steps=config.max_steps,
         duration_seconds=config.duration_seconds, fps=config.fps,
         attest_real_hardware=config.attest_real_hardware,
@@ -248,10 +250,23 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
     profile = resolve_safety_profile(path=Path(config.safety_profile))
     supervisor = SafetySupervisor(profile, mode="enforce")
     acc = SafetyAccumulator(profile=profile.name, mode="enforce")
+
+    # Readiness / approval facts for the report — read before building the
+    # adapter so the controller can carry the approval id in its request headers.
+    ready = None
+    approval_valid = None
+    approval_id = None
+    try:
+        ap = json.loads(Path(config.approval).read_text())
+        approval_id = ap.get("approval_id")
+        approval_valid = True  # preflight already verified it
+    except Exception:
+        pass
+
     adapter = build_robot_adapter(
         config.robot_adapter, config.robot_type,
         endpoint=config.robot_endpoint, config=config.robot_config,
-        token=config.robot_token)
+        token=config.robot_token, session_id=session_id, approval_id=approval_id)
     deadman = DeadmanSwitch(timeout_s=config.deadman_timeout_s, enabled=deadman_enabled)
     rate_limiter = RateLimiter(fps=config.fps)
     trace = TraceWriter(output_dir / "real_trace.jsonl")
@@ -261,19 +276,9 @@ def run_real_mode(config: RealModeConfig) -> RealModeResult:
     guard = RealEgressGuard(supervisor, adapter, session, deadman, rate_limiter, trace,
                             allow_disabled_deadman=not deadman_enabled)
 
-    # Readiness / approval facts for the report.
-    ready = None
-    approval_valid = None
-    approval_id = None
     try:
         rr = json.loads(Path(config.readiness_report).read_text())
         ready = rr.get("ready")
-    except Exception:
-        pass
-    try:
-        ap = json.loads(Path(config.approval).read_text())
-        approval_id = ap.get("approval_id")
-        approval_valid = True  # preflight already verified it
     except Exception:
         pass
 

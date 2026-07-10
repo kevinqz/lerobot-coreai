@@ -68,3 +68,11 @@ Real mode never claims physical safety. The strongest true statement is:
 The statement that must never appear:
 
 > This proves the robot is physically safe.
+
+## External-http boundary (v1.1.1)
+
+When the adapter is `external-http`, guarded egress additionally requires the
+controller's `GET /safety-state` to report `ready`, `physical_estop_state=armed`,
+`workspace_state=clear`, and no `faults` — checked in preflight, before any
+action. Any `unknown`/`triggered`/`not_clear`/non-empty-faults value fails
+closed. See [external-http-controller-contract.md](external-http-controller-contract.md).

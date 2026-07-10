@@ -13,11 +13,22 @@ from importlib.resources import files
 from typing import Any
 
 EXTERNAL_HTTP_SCHEMA_VERSION = "lerobot-coreai.external_http.v0"
+EXTERNAL_HTTP_SAFETY_STATE_SCHEMA_VERSION = "lerobot-coreai.external_http_safety_state.v0"
+
+# Only these safety-state values are safe to proceed on. Anything else —
+# including "unknown" — fails closed.
+_ESTOP_OK = "armed"
+_WORKSPACE_OK = "clear"
 
 
 def _schema() -> dict[str, Any]:
     return json.loads(files("lerobot_coreai.schemas").joinpath(
         "external-http-preflight.schema.json").read_text())
+
+
+def _safety_state_schema() -> dict[str, Any]:
+    return json.loads(files("lerobot_coreai.schemas").joinpath(
+        "external-http-safety-state.schema.json").read_text())
 
 
 def validate_controller_preflight(
@@ -60,4 +71,58 @@ def validate_controller_preflight(
                    preflight.get("supports_stop") is True, ""))
     checks.append(("external_controller_supports_ready",
                    preflight.get("supports_ready") is True, ""))
+    # v1.1.1: observation, safety-state, and physical e-stop are required for a
+    # non-mock real controller. A controller that can't report its safety state
+    # or doesn't require a physical e-stop must never receive guarded actions.
+    checks.append(("external_controller_supports_observation",
+                   preflight.get("supports_observation") is True, ""))
+    checks.append(("external_controller_supports_safety_state",
+                   preflight.get("supports_safety_state") is True, ""))
+    checks.append(("external_controller_physical_estop_required",
+                   preflight.get("physical_estop_required") is True, ""))
+    return checks
+
+
+def validate_controller_safety_state(
+    safety_state: dict[str, Any], *, robot_type: str,
+) -> list[tuple[str, bool, str]]:
+    """Validate an external-http controller's /safety-state before guarded egress.
+
+    Returns a list of (check_name, passed, message). Fail-closed: a malformed
+    response, an unknown e-stop/workspace value, any fault, or a not-ready
+    controller all block. Never sends an action.
+    """
+    checks: list[tuple[str, bool, str]] = []
+    try:
+        import jsonschema
+        jsonschema.validate(safety_state, _safety_state_schema())
+        checks.append(("external_controller_safety_state_schema_valid", True, ""))
+    except Exception as e:
+        checks.append(("external_controller_safety_state_schema_valid", False,
+                       getattr(e, "message", str(e))))
+        return checks  # can't trust any field
+
+    ready = safety_state.get("ready") is True
+    checks.append(("external_controller_safety_state_ready", ready, ""))
+
+    st = safety_state.get("robot_type")
+    checks.append(("external_controller_safety_state_robot_type_matches",
+                   st == robot_type,
+                   "" if st == robot_type else f"controller {st} != {robot_type}"))
+
+    checks.append(("external_controller_connected",
+                   safety_state.get("controller_connected") is True, ""))
+
+    estop = safety_state.get("physical_estop_state")
+    checks.append(("external_controller_estop_armed", estop == _ESTOP_OK,
+                   "" if estop == _ESTOP_OK else f"physical_estop_state={estop!r}"))
+
+    workspace = safety_state.get("workspace_state")
+    checks.append(("external_controller_workspace_clear", workspace == _WORKSPACE_OK,
+                   "" if workspace == _WORKSPACE_OK else f"workspace_state={workspace!r}"))
+
+    faults = safety_state.get("faults")
+    faults_empty = isinstance(faults, list) and len(faults) == 0
+    checks.append(("external_controller_faults_empty", faults_empty,
+                   "" if faults_empty else f"faults={faults!r}"))
     return checks
