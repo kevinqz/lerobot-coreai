@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinqz/lerobot-coreai/main/src/lerobot_coreai/schemas/lerobot-eval-v2-report.schema.json",
+  "title": "lerobot-coreai LeRobot eval v2 report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "ok", "policy_path", "dataset_repo_id",
+               "feature_mapping", "claims"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "lerobot-coreai.lerobot_eval_v2.v0"},
+    "lerobot_coreai_version": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "policy_path": {"type": "string"},
+    "dataset_repo_id": {"type": "string"},
+    "strict": {"type": "boolean"},
+    "frames_evaluated": {"type": "integer", "minimum": 0},
+    "feature_mapping": {
+      "type": "object",
+      "required": ["schema_version", "features", "passed"],
+      "properties": {
+        "schema_version": {"type": "string",
+                           "const": "lerobot-coreai.lerobot_feature_mapping.v0"},
+        "strict": {"type": "boolean"},
+        "features": {"type": "object"},
+        "unknown_dataset_features": {"type": "array", "items": {"type": "string"}},
+        "problems": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "checks": {"type": "array"},
+    "claims": {
+      "type": "object",
+      "required": ["proves_task_success", "proves_physical_safety"],
+      "properties": {
+        "proves_observation_mapping_valid_for_sample": {"type": "boolean"},
+        "proves_task_success": {"type": "boolean", "const": false},
+        "proves_physical_safety": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}
