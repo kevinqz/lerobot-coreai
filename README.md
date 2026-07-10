@@ -2,13 +2,13 @@
 
 **Apple CoreAI runtime backend for LeRobot policies.**
 
-`lerobot-coreai` lets LeRobot-compatible policies run as Apple CoreAI `.aimodel` artifacts while keeping the LeRobot workflow intact: same policy concepts, same robot configs, same datasets, same observation/action features, same rollout language.
+`lerobot-coreai` is a **CoreAI runtime toolkit for LeRobot-shaped policy artifacts**: it runs LeRobot-compatible policies as Apple CoreAI `.aimodel` artifacts, with custom dataset replay, simulation, safety, governance, and guarded-real workflows. It reuses LeRobot *concepts* (policy shape, observation/action features, dataset access) — but it is **not** a drop-in for the official `lerobot-eval` / `lerobot-rollout` pipeline yet (the bridge is duck-typed and runtime-only, not a `PreTrainedPolicy`/`nn.Module`). See [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md) for exactly what is and isn't compatible today.
 
 Use **LeRobot** for recording, training, datasets, robots, processors, and PyTorch policy deployment.
 
 Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, shadow-run, simulate, or roll out a LeRobot policy through Apple CoreAI.
 
-> **Same LeRobot workflow. CoreAI runtime.**
+> **LeRobot-shaped custom workflows. CoreAI runtime.** (Official plugin/eval integration is on the roadmap — see the compatibility levels doc.)
 
 > **Current:** `inspect`, `doctor`, `predict`, `rollout --mode dry_run`, `shadow` (motor-blocked), `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, `sim` (simulator-only egress), the safety/governance chain (`supervisor-check`, `profile-*`, `safety-gate`, `safety-regression`, `approval-request`/`approve-bundle`/`verify-approval`, `release-readiness`), and — since v1.0.0 — `real --mode guarded` (guarded real egress) with `verify-real-session`.
 > Up to v0.9.3 **no robot commands are ever sent**; v1.0.0 introduces real egress **only** through `real --mode guarded`, behind every gate. This is guarded real egress, not native LeRobot robot integration, and proves nothing about physical safety.
@@ -207,6 +207,7 @@ v1.2.0 adds **signed provenance** (optional `[signing]` extra): `provenance-crea
 v1.2.1 adds **release channel governance** (`release-check`): per-channel policies (`dev`/`internal`/`public-demo`/`research`/`guarded-real-evidence`) that fail closed on missing required reports, a missing/invalid signature (when required), overclaims, raw secrets, or — on public channels — real-session/external-http artifacts; `guarded-real-evidence` requires the approval + readiness + verify-real-session chain. Overridable via `--release-policy`. See [docs/release-governance.md](docs/release-governance.md).
 v1.2.2 adds an **artifact index** (`artifact-index init/add/list/find/verify`): a local registry of signed/verified bundles. `add` fails closed on a tampered artifact, an overclaim, a raw secret, or an untrusted signer, sets `signature_verified` only after a real `verify-signature` pass, and refuses to silently overwrite an existing id; `verify` re-checks every indexed artifact for drift/tamper. See [docs/artifact-index.md](docs/artifact-index.md).
 v1.2.3 adds a **policy card generator** (`policy-card`): deterministic, honest model cards built from verified evidence (an artifact-index entry or direct report paths). It verifies the source bundle/index first, fails closed on tamper or overclaim, summarizes the compat/bridge/registry/eval-v2/obs/benchmark/provenance/signature/release evidence, and always includes the mandatory non-claims. See [docs/policy-card-generator.md](docs/policy-card-generator.md).
+v1.2.4 is a **compatibility-truth** release: a leveled contract report (`lerobot-compat-check --contract` → `lerobot_compatibility_report_v1.json/md`) that reports each rung of the official LeRobot contract separately and honestly (action semantics, plugin discovery, config registry, processor pipeline, official eval/rollout all reported `failed`/`not_supported` today, never assumed), a CI split into a blocking **stable** (LeRobot 0.6.0) job and a pinned, non-blocking **development** job, and corrected docs (removed "same LeRobot workflow intact"; documented the local opt-in `get_policy_class` patch and that `eval-v2` is feature-mapping only). See [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**

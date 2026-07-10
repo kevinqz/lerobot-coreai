@@ -81,11 +81,18 @@ def probe_lerobot() -> dict[str, Any]:
         return result
     result["available"] = True
     result["version"] = version
+    # Prefer packaging for correct handling of 0.6.1.dev0 / rc / +local; fall
+    # back to the tuple parser only if packaging is unavailable.
     try:
-        parsed = _parse_version(version)
-        result["in_range"] = LEROBOT_MIN <= parsed < LEROBOT_MAX_EXCLUSIVE
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version
+        result["in_range"] = Version(version) in SpecifierSet(">=0.6.0,<0.7.0")
     except Exception:
-        result["in_range"] = None
+        try:
+            parsed = _parse_version(version)
+            result["in_range"] = LEROBOT_MIN <= parsed < LEROBOT_MAX_EXCLUSIVE
+        except Exception:
+            result["in_range"] = None
     # Confirm the PreTrainedPolicy import path exists (we do NOT subclass it).
     try:  # pragma: no cover - only runs when lerobot is installed
         __import__("lerobot.common.policies.pretrained")

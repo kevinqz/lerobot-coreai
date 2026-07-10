@@ -44,12 +44,47 @@ LeRobot registry/factory. Train with LeRobot; run with CoreAI.
 - Installs `lerobot>=0.6.0,<0.7.0` (which pins torch, torchvision, numpy)
 - Enables `eval` (LeRobotDataset replay) and `compare` (PyTorch source policy loader)
 
-## API alignment with LeRobot 0.6.0
+## Stable vs development targets (v1.2.4)
 
-- `select_action(batch)` returns the **raw action** (matching LeRobot's `PreTrainedPolicy.select_action`)
-- `predict_action(batch)` is the richer helper returning `{"action": ..., "metadata": ...}`
-- No monkey-patching or factory integration with LeRobot
-- No use of LeRobot private/internal submodule paths
+- **Stable: LeRobot `0.6.0`** — the blocking, CI-certified target (pinned exactly).
+- **Development: post-`0.6.0` (declares `0.6.1`)** — a **pinned, non-blocking** CI
+  probe (never a moving `@main`). Being inside `>=0.6.0,<0.7.0` means it installs,
+  not that every version is certified.
+
+See [lerobot-compatibility-levels.md](lerobot-compatibility-levels.md) for the
+leveled contract report (`lerobot-compat-check --contract`).
+
+## API alignment with LeRobot 0.6.x
+
+- `select_action(batch)` shares the **method name** with LeRobot's
+  `PreTrainedPolicy.select_action`, but its current **semantics differ**: the
+  local bridge returns a chunk passthrough, not a per-timestep action, and it
+  returns a list rather than a `torch.Tensor (B, action_dim)`. Official-eval
+  semantic alignment is a roadmap item (Action Contract v2).
+- `predict_action(batch)` is the richer helper returning `{"action": ..., "metadata": ...}`.
+- **A local, opt-in monkeypatch does exist**: `local_lerobot_registry_patch()`
+  (v1.1.3) temporarily wraps `lerobot.policies.factory.get_policy_class` inside a
+  `with` block and restores it on exit. This is a *local* adapter, not upstream
+  registration and not a global/default patch. The official out-of-tree plugin
+  system (`lerobot_policy_*` distributions) is the sanctioned path and is a
+  roadmap item.
+- `eval-v2` (v1.1.4) is currently a **feature-mapping check**, not an action
+  replay — it evaluates zero frames. A real action-replay eval is a roadmap item
+  (Eval v3).
+- No use of LeRobot private/internal submodule paths beyond documented public
+  entry points.
+
+## Roadmap toward official integration
+
+- **v1.2.4**: compatibility truth — leveled contract report, stable/dev CI split,
+  corrected docs.
+- **v1.2.5+**: Action Contract v2 (chunk vs next-action, batch/reset), source
+  loader v2, Eval v3 (real frame replay), typed feature contract.
+- **v1.3.x**: official out-of-tree plugin (`lerobot_policy_coreai_bridge`) —
+  `PreTrainedPolicy`/`nn.Module` subclass, registered `PreTrainedConfig`,
+  processor factory, official plugin discovery, official `lerobot-eval`.
+- Guarded real egress remains a **separately enforced** runtime
+  (`real --mode guarded`), independent of the official rollout stack.
 
 ## Roadmap
 

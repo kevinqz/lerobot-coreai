@@ -626,6 +626,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Emit a tested LeRobot 0.6.x compatibility certificate (v1.1.2)")
     p_lcc.add_argument("--strict", action="store_true",
                        help="Require LeRobot installed + in range (used by the compat CI job)")
+    p_lcc.add_argument("--contract", action="store_true",
+                       help="Emit the v1 leveled contract report (v1.2.4) instead of the "
+                            "v0 shape certificate")
     p_lcc.add_argument("--output-dir", dest="output_dir", default=None)
     p_lcc.add_argument("--json", action="store_true")
     p_lcc.set_defaults(func=cmd_lerobot_compat_check)
@@ -860,7 +863,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_not_implemented(args: argparse.Namespace) -> int:
     print(
         f"'{args.command}' is not implemented in v0.8. "
-        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, compare, export.",
+        f"Available commands: inspect, doctor, list, predict, rollout --mode dry_run, shadow, sim, sim-regression, package-sim-run, verify-sim-bundle, supervisor-check, profile-list, profile-show, profile-validate, profile-recommend, profile-calibrate, profile-compare, safety-gate, safety-regression, approval-request, approve-bundle, verify-approval, release-readiness, real, verify-real-session, lerobot-bridge-check, lerobot-compat-check, lerobot-registry-check, eval, eval-v2, obs-bridge-check, hf-metadata, package-bridge-benchmark, verify-bridge-benchmark, provenance-create, sign-artifact, verify-signature, release-check, artifact-index, policy-card, lerobot-compat-check --contract, compare, export.",
         file=sys.stderr,
     )
     return 1
@@ -2655,8 +2658,36 @@ def cmd_lerobot_bridge_check(args: argparse.Namespace) -> int:
 # MARK: - lerobot-compat-check (v1.1.2 — tested LeRobot 0.6.x certificate)
 
 def cmd_lerobot_compat_check(args: argparse.Namespace) -> int:
-    """Emit a tested LeRobot compatibility certificate. Imports no hardware."""
+    """Emit a LeRobot compatibility certificate. Imports no hardware.
+
+    Default: v0 shape certificate. --contract: v1 leveled contract (v1.2.4).
+    """
     import json as _json
+
+    if getattr(args, "contract", False):
+        from .lerobot_contracts import (
+            build_contract_markdown, evaluate_compatibility_contract,
+        )
+        report = evaluate_compatibility_contract(strict=getattr(args, "strict", False))
+        if getattr(args, "output_dir", None):
+            out = Path(args.output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            with open(out / "lerobot_compatibility_report_v1.json", "w") as f:
+                _json.dump(report, f, indent=2)
+            (out / "lerobot_compatibility_report_v1.md").write_text(
+                build_contract_markdown(report))
+        if args.json:
+            print(_json.dumps(report, indent=2))
+            return 0 if report["ok"] else 1
+        print("lerobot-coreai lerobot-compat-check --contract (v1 levels)")
+        print("=" * 50)
+        for k, v in report["levels"].items():
+            print(f"  {k}: {v}")
+        print("=" * 50)
+        print("Contract report consistent." if report["ok"]
+              else "Contract report FAILED (stable target or consistency).")
+        print("Local runtime-only bridge — not official plugin/eval/rollout.")
+        return 0 if report["ok"] else 1
 
     from .lerobot_compat import build_compat_markdown, evaluate_lerobot_compat
 
