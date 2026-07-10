@@ -11,12 +11,51 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from lerobot_coreai.coreai_observation_serialization import (
     extract_observation, observation_sha256, serialize_value,
 )
 from lerobot_coreai.errors import CoreAIPolicyError
+
+
+def _require_declared_features(obs: dict[str, Any], manifest: Any) -> None:
+    """Fail if a REQUIRED manifest observation feature is missing at runtime (v1.3.10).
+
+    The factory cross-binding proves the dataset declares the feature; this guards
+    the per-request observation actually carrying it.
+    """
+    expected = getattr(manifest, "observation_features", None) if manifest else None
+    if not expected:
+        return
+    for name, spec in expected.items():
+        if name == "task":
+            continue
+        required = getattr(spec, "required", None)
+        if required is None and isinstance(spec, dict):
+            required = spec.get("required", True)
+        if required and name not in obs:
+            raise CoreAIPolicyError(
+                f"required observation feature {name!r} is missing from the runtime "
+                f"observation (present: {sorted(obs)}).")
+
+
+def _require_str_task(value: Any) -> str:
+    """A task must already BE a string — never silently coerce None/int/dict (P1.7)."""
+    if not isinstance(value, str):
+        raise CoreAIPolicyError(
+            f"task must be a string; got {type(value).__name__} {value!r}.")
+    return value
+
+
+def canonical_batch_sha256(batch_size: int, sample_shas: list[str], mode: str) -> str:
+    """Order-sensitive batch hash over (batch_size, mode, ordered sample hashes)."""
+    canon = json.dumps({"batch_size": int(batch_size), "mode": mode,
+                        "ordered_sample_sha256s": list(sample_shas)},
+                       separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canon.encode()).hexdigest()
 
 # Observation transport encodings the plugin can emit. nested_json_v1 sends the
 # model plain nested JSON arrays (the default, safe for a runner that expects
@@ -124,11 +163,13 @@ def prepare_single_coreai_observation(
     # Keep only declared observation inputs (+ task) — never the ground-truth action.
     obs = extract_observation(dict(batch), manifest)
     expected = getattr(manifest, "observation_features", None) if manifest else None
+    _require_declared_features(obs, manifest)
 
     single: dict[str, Any] = {}
     for k, v in obs.items():
         if k == "task":
-            single[k] = v[0] if isinstance(v, (list, tuple)) and v else v
+            unwrapped = v[0] if isinstance(v, (list, tuple)) and v else v
+            single[k] = _require_str_task(unwrapped)
             continue
         stripped = _strip_leading_batch(v)
         values, shape = _plain_and_shape(stripped)
@@ -200,6 +241,7 @@ def prepare_batched_coreai_observation(
 
     obs = extract_observation(dict(batch), manifest)
     expected = getattr(manifest, "observation_features", None) if manifest else None
+    _require_declared_features(obs, manifest)
 
     payload: dict[str, Any] = {}
     for k, v in obs.items():
@@ -207,7 +249,7 @@ def prepare_batched_coreai_observation(
             if not isinstance(v, (list, tuple)) or len(v) != batch_size:
                 raise CoreAIPolicyError(
                     f"task must be a list[str] of length {batch_size}; got {v!r}.")
-            payload[k] = [str(t) for t in v]
+            payload[k] = [_require_str_task(t) for t in v]   # no silent coercion
             continue
         values, shape = _plain_and_shape(v)
         if shape is None or len(shape) < 1 or int(shape[0]) != batch_size:

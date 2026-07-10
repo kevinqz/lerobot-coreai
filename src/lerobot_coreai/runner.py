@@ -30,6 +30,29 @@ from .errors import (
 from .types import ActionPredictRequest, ActionPredictResponse, RunnerCapabilities, RunnerHealth
 
 
+def _strict_bool(value: Any, field: str) -> bool:
+    """Return a real bool, or raise — a JSON string is NOT coerced (v1.3.10).
+
+    ``bool("false")`` is ``True`` in Python; a malformed capability payload must
+    not be silently promoted, so only real booleans (or absent -> False) pass.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    raise RunnerProtocolError(
+        f"capability {field!r} must be a JSON boolean, got {type(value).__name__} "
+        f"{value!r}.")
+
+
+def capabilities_sha256(caps: "RunnerCapabilities") -> str:
+    """A canonical, order-stable fingerprint of a runner's announced capabilities."""
+    import hashlib as _hashlib
+
+    canon = json.dumps(caps.raw or {}, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + _hashlib.sha256(canon.encode()).hexdigest()
+
+
 class RunnerClient:
     """Client for coreai-runner HTTP API.
 
@@ -75,31 +98,54 @@ class RunnerClient:
     # MARK: - Capabilities
 
     def capabilities(self) -> RunnerCapabilities:
-        """GET /v1/capabilities — discover what the runner supports."""
+        """GET /v1/capabilities — discover what the runner supports.
+
+        v1.3.10: the action_batching / inference_state blocks, when present, are
+        STRICTLY typed — a JSON string ``"false"`` must NOT be promoted to True by
+        ``bool(...)``, and ``max_batch_size`` must be a real int >= 1. Malformed
+        capabilities are rejected here (the earliest boundary), not at decision time.
+        """
         resp = self._get("v1/capabilities")
         data = self._parse_json(resp)
         supports = data.get("supports", {})
         batching = data.get("action_batching", {}) or {}
+        inference = data.get("inference_state", {}) or {}
         encodings = data.get("observation_encodings") or ()
+
+        supported = _strict_bool(batching.get("supported", False), "action_batching.supported")
+        max_bs = batching.get("max_batch_size")
+        if max_bs is None:
+            max_bs = batching.get("max_native_batch_size")
+        if supported:
+            if not isinstance(max_bs, int) or isinstance(max_bs, bool) or max_bs < 1:
+                raise RunnerProtocolError(
+                    f"action_batching.supported=true but max_batch_size is invalid: "
+                    f"{max_bs!r} (must be an int >= 1).")
+        # slot_isolation (v1.3.10) is separate from inference_state.scope; accept the
+        # legacy "state_isolation" key as an alias.
+        slot_isolation = batching.get("slot_isolation") or batching.get("state_isolation")
+
         return RunnerCapabilities(
             runtime=data.get("runtime", "coreai-runner"),
-            supports_action=supports.get("action", False),
-            supports_llm=supports.get("llm", False),
-            supports_vlm=supports.get("vlm", False),
-            supports_host_loop=supports.get("host_loop", False),
-            supports_multi_graph=supports.get("multi_graph", False),
+            supports_action=_strict_bool(supports.get("action", False), "supports.action"),
+            supports_llm=_strict_bool(supports.get("llm", False), "supports.llm"),
+            supports_vlm=_strict_bool(supports.get("vlm", False), "supports.vlm"),
+            supports_host_loop=_strict_bool(supports.get("host_loop", False), "supports.host_loop"),
+            supports_multi_graph=_strict_bool(supports.get("multi_graph", False), "supports.multi_graph"),
             protocol_version=data.get("protocol_version"),
             observation_encodings=tuple(encodings),
-            supports_batch=bool(batching.get("supported", False)),
-            max_batch_size=batching.get("max_batch_size"),
+            supports_batch=supported,
+            max_batch_size=max_bs,
             backward_compatible_with=tuple(
                 data.get("backward_compatible_with") or ()),
             action_batching_semantics=batching.get("semantics"),
-            action_batching_state_isolation=batching.get("state_isolation"),
-            inference_state_scope=(data.get("inference_state") or {}).get("scope"),
-            supports_session_ids=bool(
-                (data.get("inference_state") or {}).get("supports_session_ids", False)),
-            reset_scope=(data.get("inference_state") or {}).get("reset_scope"),
+            action_batching_state_isolation=slot_isolation,
+            action_batching_slot_isolation=slot_isolation,
+            inference_state_scope=inference.get("scope"),
+            supports_session_ids=_strict_bool(
+                inference.get("supports_session_ids", False),
+                "inference_state.supports_session_ids"),
+            reset_scope=inference.get("reset_scope"),
             raw=data,
         )
 

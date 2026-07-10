@@ -45,32 +45,64 @@ class ActionContract:
         }
 
 
-BATCH_CONTRACT_SCHEMA_VERSION = "coreai-batch-contract.v2"
+BATCH_CONTRACT_SCHEMA_VERSION = "coreai-batch-contract.v3"
 _VALID_FALLBACKS = ("split_and_stack", "reject")
 _VALID_CLIENT_MODES = ("native_batch", "split_and_stack")
 _VALID_QUEUE_LAYOUTS = ("time_major_batched",)
+_VALID_COMMIT_SEMANTICS = ("atomic_queue_commit",)
+_VALID_SLOT_ISOLATION = ("independent", "shared", "unknown")
+_VALID_STATE_SCOPES = ("stateless", "request_scoped", "session_scoped", "global")
+DEFAULT_OBSERVATION_STAGE = "lerobot_policy_preprocessor_output.v1"
 
 
 @dataclass
 class BatchContract:
-    supports_batch: bool = False
-    max_batch_size: int = 1
-    fallback: str = "split_and_stack"      # "split_and_stack" | "reject"
-    # v2 (v1.3.9): explicit client modes + atomic-commit contract.
+    """Authoritative batch contract (v3, v1.3.10): native and split modeled apart.
+
+    v3 separates the native batch capacity (one batched request) from the client
+    split capacity (B single requests). Legacy flat v0/v2 blocks are still read for
+    B=1 back-compat, but only a v3 contract with both modes explicitly declared can
+    authorize B>1 (``authoritative``).
+    """
     schema_version: str = BATCH_CONTRACT_SCHEMA_VERSION
-    supported_client_modes: tuple[str, ...] = ("native_batch", "split_and_stack")
+    native_supported: bool = False
+    native_max_batch_size: int = 1
+    native_slot_isolation: str = "independent"   # required slot isolation for native
+    split_supported: bool = False
+    split_max_batch_size: int = 1
+    split_allowed_scopes: tuple[str, ...] = ("stateless", "request_scoped")
+    fallback: str = "split_and_stack"            # "split_and_stack" | "reject"
     queue_layout: str = "time_major_batched"
-    requires_atomic_commit: bool = True
+    commit_semantics: str = "atomic_queue_commit"
+    observation_stage: str = DEFAULT_OBSERVATION_STAGE
+    authoritative: bool = False                   # True only for an explicit v3 block
+
+    # Back-compat convenience (max across modes) for older callers/reports.
+    @property
+    def supports_batch(self) -> bool:
+        return self.native_supported or self.split_supported
+
+    @property
+    def max_batch_size(self) -> int:
+        return max(self.native_max_batch_size, self.split_max_batch_size)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
-            "policy_supports_batch": self.supports_batch,
-            "supported_client_modes": list(self.supported_client_modes),
-            "max_batch_size": self.max_batch_size,
+            "native_batch": {
+                "supported": self.native_supported,
+                "max_batch_size": self.native_max_batch_size,
+                "required_slot_isolation": self.native_slot_isolation,
+            },
+            "client_split": {
+                "supported": self.split_supported,
+                "max_batch_size": self.split_max_batch_size,
+                "allowed_state_scopes": list(self.split_allowed_scopes),
+            },
             "fallback": self.fallback,
-            "queue_layout": self.queue_layout,
-            "requires_atomic_commit": self.requires_atomic_commit,
+            "queue": {"layout": self.queue_layout,
+                      "commit_semantics": self.commit_semantics},
+            "observation_stage": self.observation_stage,
         }
 
 
@@ -158,47 +190,88 @@ def parse_action_contract_from_manifest(manifest) -> ActionContract:
     return ActionContract(representation=_SINGLE, horizon=1, action_dim=None)
 
 
+def _int_ge1(value: Any, name: str, default: int = 1) -> int:
+    try:
+        v = int(value if value is not None else default)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} is not an integer: {exc}") from exc
+    if v < 1:
+        raise ValueError(f"{name} must be >= 1, got {v}.")
+    return v
+
+
 def parse_batch_contract_from_manifest(manifest) -> BatchContract:
+    """Parse an authoritative v3 batch contract, or read legacy v0/v2 for B=1.
+
+    A v3 block (``native_batch`` / ``client_split`` present, or
+    ``schema_version == coreai-batch-contract.v3``) yields an ``authoritative``
+    contract that can gate B>1. Legacy flat blocks are read permissively but stay
+    non-authoritative (B>1 refuses to certify on them).
+    """
     explicit = _contracts_block(manifest).get("batch")
     if not isinstance(explicit, dict):
         if isinstance(manifest, dict):
             explicit = manifest.get("batch_contract")
         else:
             explicit = getattr(manifest, "batch_contract", None)
-    if isinstance(explicit, dict):
-        # v2 uses "policy_supports_batch"; v1 "runner_supports_batch"; v0 "supports_batch".
-        supports = explicit.get(
-            "policy_supports_batch",
-            explicit.get("runner_supports_batch",
-                         explicit.get("supports_batch", False)))
-        try:
-            max_bs = int(explicit.get("max_batch_size", 1))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"batch contract max_batch_size is not an integer: {exc}") from exc
-        if max_bs < 1:
-            raise ValueError(
-                f"batch contract max_batch_size must be >= 1, got {max_bs}.")
-        fallback = explicit.get("fallback", "split_and_stack")
-        if fallback not in _VALID_FALLBACKS:
-            raise ValueError(
-                f"batch contract fallback {fallback!r} not in {_VALID_FALLBACKS}.")
-        modes = tuple(explicit.get("supported_client_modes",
-                                   ("native_batch", "split_and_stack")))
-        for m in modes:
-            if m not in _VALID_CLIENT_MODES:
-                raise ValueError(
-                    f"batch contract client mode {m!r} not in {_VALID_CLIENT_MODES}.")
-        layout = explicit.get("queue_layout", "time_major_batched")
+    if not isinstance(explicit, dict):
+        return BatchContract()
+
+    fallback = explicit.get("fallback", "split_and_stack")
+    if fallback not in _VALID_FALLBACKS:
+        raise ValueError(f"batch fallback {fallback!r} not in {_VALID_FALLBACKS}.")
+
+    is_v3 = (explicit.get("schema_version") == BATCH_CONTRACT_SCHEMA_VERSION
+             or "native_batch" in explicit or "client_split" in explicit)
+    if is_v3:
+        native = explicit.get("native_batch", {}) or {}
+        split = explicit.get("client_split", {}) or {}
+        queue = explicit.get("queue", {}) or {}
+        layout = queue.get("layout", "time_major_batched")
+        commit = queue.get("commit_semantics", "atomic_queue_commit")
         if layout not in _VALID_QUEUE_LAYOUTS:
+            raise ValueError(f"queue.layout {layout!r} not in {_VALID_QUEUE_LAYOUTS}.")
+        if commit not in _VALID_COMMIT_SEMANTICS:
             raise ValueError(
-                f"batch contract queue_layout {layout!r} not in {_VALID_QUEUE_LAYOUTS}.")
+                f"queue.commit_semantics {commit!r} not in {_VALID_COMMIT_SEMANTICS}.")
+        slot_iso = native.get("required_slot_isolation", "independent")
+        if slot_iso not in _VALID_SLOT_ISOLATION:
+            raise ValueError(
+                f"native required_slot_isolation {slot_iso!r} not in {_VALID_SLOT_ISOLATION}.")
+        scopes = tuple(split.get("allowed_state_scopes", ("stateless", "request_scoped")))
+        for s in scopes:
+            if s not in _VALID_STATE_SCOPES:
+                raise ValueError(f"split allowed scope {s!r} not in {_VALID_STATE_SCOPES}.")
         return BatchContract(
-            supports_batch=bool(supports), max_batch_size=max_bs, fallback=fallback,
             schema_version=explicit.get("schema_version", BATCH_CONTRACT_SCHEMA_VERSION),
-            supported_client_modes=modes, queue_layout=layout,
-            requires_atomic_commit=bool(explicit.get("requires_atomic_commit", True)))
-    return BatchContract()
+            native_supported=bool(native.get("supported", False)),
+            native_max_batch_size=_int_ge1(native.get("max_batch_size"),
+                                           "native_batch.max_batch_size"),
+            native_slot_isolation=slot_iso,
+            split_supported=bool(split.get("supported", False)),
+            split_max_batch_size=_int_ge1(split.get("max_batch_size"),
+                                          "client_split.max_batch_size"),
+            split_allowed_scopes=scopes,
+            fallback=fallback, queue_layout=layout, commit_semantics=commit,
+            observation_stage=explicit.get("observation_stage", DEFAULT_OBSERVATION_STAGE),
+            authoritative=True)
+
+    # Legacy flat (v0/v2): read permissively, NOT authoritative for B>1.
+    supports = bool(explicit.get(
+        "policy_supports_batch",
+        explicit.get("runner_supports_batch", explicit.get("supports_batch", False))))
+    max_bs = _int_ge1(explicit.get("max_batch_size"), "batch max_batch_size")
+    modes = tuple(explicit.get("supported_client_modes",
+                               ("native_batch", "split_and_stack")))
+    for m in modes:
+        if m not in _VALID_CLIENT_MODES:
+            raise ValueError(f"client mode {m!r} not in {_VALID_CLIENT_MODES}.")
+    return BatchContract(
+        schema_version=explicit.get("schema_version", "coreai-batch-contract.v2"),
+        native_supported=supports and "native_batch" in modes,
+        native_max_batch_size=max_bs,
+        split_supported=supports and "split_and_stack" in modes,
+        split_max_batch_size=max_bs, fallback=fallback, authoritative=False)
 
 
 def build_action_contract_report(action: ActionContract,

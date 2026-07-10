@@ -33,49 +33,51 @@ class BatchDecision:
     effective_max_batch_size: int = 1
 
 
-def _effective_max(config, artifact_batch_contract, capabilities) -> int:
-    """Minimum of the artifact/config/runner maxima (each optional)."""
-    limits = []
-    for src, attr in ((artifact_batch_contract, "max_batch_size"),
-                      (config, "max_batch_size"),
-                      (capabilities, "max_batch_size")):
-        v = getattr(src, attr, None)
-        if v is not None:
-            limits.append(int(v))
-    return min(limits) if limits else 1
+def _min_present(*vals) -> int:
+    present = [int(v) for v in vals if v is not None]
+    return min(present) if present else 1
+
+
+def _native_effective_max(config, contract, capabilities) -> int:
+    # Native = ONE batched request -> the runner's native max applies.
+    return _min_present(getattr(contract, "native_max_batch_size", None),
+                        getattr(config, "max_batch_size", None),
+                        getattr(capabilities, "max_batch_size", None))
+
+
+def _split_effective_max(config, contract) -> int:
+    # Split = B single requests -> the runner's NATIVE max must NOT cap it (P1.3).
+    return _min_present(getattr(contract, "split_max_batch_size", None),
+                        getattr(config, "max_batch_size", None),
+                        getattr(config, "max_split_requests", None))
 
 
 def _validate_batch_capabilities(capabilities) -> None:
-    """Fail-closed capability validation used only when B>1 is requested."""
     if capabilities is None:
         raise CoreAIPolicyError(
             "no runner capabilities available; B>1 requires an announced runner.")
     scope = getattr(capabilities, "inference_state_scope", None)
     if scope is None:
         raise CoreAIPolicyError(
-            "inference_state.scope is not announced; B>1 refuses to assume "
-            "stateless (a missing scope is not safe).")
+            "inference_state.scope is not announced; B>1 refuses to assume stateless.")
     if scope not in INFERENCE_STATE_SCOPES:
         raise CoreAIPolicyError(f"unknown inference_state.scope {scope!r}.")
-    if getattr(capabilities, "supports_batch", False):
-        mbs = getattr(capabilities, "max_batch_size", None)
-        if mbs is None or int(mbs) < 1:
-            raise CoreAIPolicyError(
-                f"runner announces batch support but max_batch_size is invalid: {mbs!r}.")
 
 
 def select_batch_execution_mode(config, artifact_batch_contract, capabilities,
                                 requested_batch_size: int) -> BatchDecision:
-    """Decide how a B-observation request executes, fail-closed (v1.3.9).
+    """Decide how a B-observation request executes, fail-closed (v1.3.10).
 
-    B=1 always resolves to single_only (backward compatible, no capability
-    requirement). For B>1 the runner MUST announce a known, safe state scope:
-      - scope missing/unknown       -> fail (never assume stateless)
-      - global / session_scoped     -> fail (session batching is deferred)
-      - native_batch                -> needs native semantics AND state_isolation
-                                       in {stateless, request_scoped}
-      - split_and_stack / auto      -> needs scope in {stateless, request_scoped}
-      - B > effective max           -> fail (min of artifact/config/runner limits)
+    B=1 is always single. For B>1 the ARTIFACT BATCH CONTRACT is authoritative:
+      - non-authoritative (legacy v0/v2) contract         -> fail (needs v3)
+      - native requires contract.native_supported + runner native semantics +
+        slot_isolation == contract.native_slot_isolation (default 'independent')
+      - split requires contract.split_supported + scope in the contract's allowed
+        scopes (global/session deferred)
+      - fallback == 'reject' forbids auto from choosing split
+      - native/split effective maxima are computed SEPARATELY; the runner's native
+        max never caps split
+      - queue.layout / commit_semantics must match what this runtime implements
     """
     mode = getattr(config, "batch_mode", "single_only")
     if mode not in BATCH_MODES:
@@ -83,56 +85,72 @@ def select_batch_execution_mode(config, artifact_batch_contract, capabilities,
     b = int(requested_batch_size)
     if b < 1:
         raise CoreAIPolicyError(f"requested_batch_size must be >= 1, got {b}.")
-
     if b == 1:
         return BatchDecision(MODE_SINGLE, "B=1", 1, 1)
-
     if mode == "single_only":
         raise CoreAIPolicyError(
-            f"batch_mode='single_only' cannot serve B={b}; set native_batch/"
-            "split_and_stack/auto and use a batch-capable runner.")
+            f"batch_mode='single_only' cannot serve B={b}.")
+
+    c = artifact_batch_contract
+    if c is None or not getattr(c, "authoritative", False):
+        raise CoreAIPolicyError(
+            "B>1 requires an authoritative coreai-batch-contract.v3 in the manifest; "
+            "the artifact does not declare one.")
+    if getattr(c, "queue_layout", None) != "time_major_batched":
+        raise CoreAIPolicyError(
+            f"unsupported queue layout {c.queue_layout!r} (this runtime is "
+            "time_major_batched only).")
+    if getattr(c, "commit_semantics", None) != "atomic_queue_commit":
+        raise CoreAIPolicyError(
+            f"unsupported commit semantics {c.commit_semantics!r}.")
 
     _validate_batch_capabilities(capabilities)
     scope = getattr(capabilities, "inference_state_scope", None)
     if scope == "global":
         raise CoreAIPolicyError("global-state runner: B>1 is forbidden.")
     if scope == "session_scoped":
-        raise CoreAIPolicyError(
-            "session_scoped batching is deferred (needs a per-slot session "
-            "lifecycle/transaction protocol); refusing B>1.")
+        raise CoreAIPolicyError("session_scoped batching is deferred; refusing B>1.")
 
-    eff_max = _effective_max(config, artifact_batch_contract, capabilities)
-    if b > eff_max:
-        raise CoreAIPolicyError(
-            f"requested batch {b} exceeds the effective max {eff_max} "
-            "(min of artifact/config/runner limits).")
-
-    supports_batch = bool(getattr(capabilities, "supports_batch", False))
     semantics = getattr(capabilities, "action_batching_semantics", None)
-    isolation = getattr(capabilities, "action_batching_state_isolation", None)
-    native_ok = (supports_batch and semantics == "native"
-                 and isolation in SAFE_ISOLATION)
+    slot_iso = (getattr(capabilities, "action_batching_slot_isolation", None)
+                or getattr(capabilities, "action_batching_state_isolation", None))
+    runner_supports_batch = bool(getattr(capabilities, "supports_batch", False))
+    native_ok = (c.native_supported and runner_supports_batch and semantics == "native"
+                 and slot_iso == c.native_slot_isolation)
+    split_ok = c.split_supported and scope in c.split_allowed_scopes
 
-    if mode == "native_batch":
+    def _native():
         if not native_ok:
             raise CoreAIPolicyError(
-                "native_batch requires action_batching.supported + semantics "
-                f"'native' + state_isolation in {SAFE_ISOLATION}; got "
-                f"supported={supports_batch} semantics={semantics!r} "
-                f"isolation={isolation!r}.")
-        return BatchDecision(MODE_NATIVE, "native batch (isolated)", b, eff_max)
+                "native_batch refused: needs contract.native_supported + runner "
+                f"native semantics + slot_isolation=={c.native_slot_isolation!r}; got "
+                f"contract={c.native_supported} runner_supported={runner_supports_batch} "
+                f"semantics={semantics!r} slot_isolation={slot_iso!r}.")
+        eff = _native_effective_max(config, c, capabilities)
+        if b > eff:
+            raise CoreAIPolicyError(f"native batch {b} exceeds effective max {eff}.")
+        return BatchDecision(MODE_NATIVE, "native batch (isolated)", b, eff)
 
-    if mode == "split_and_stack":
-        if scope not in SAFE_SCOPES:
+    def _split():
+        if not split_ok:
             raise CoreAIPolicyError(
-                f"split_and_stack requires scope in {SAFE_SCOPES}; got {scope!r}.")
-        return BatchDecision(MODE_SPLIT, "split-and-stack (stateless/request)", b, eff_max)
+                "split_and_stack refused: needs contract.split_supported + scope in "
+                f"{c.split_allowed_scopes}; got contract={c.split_supported} "
+                f"scope={scope!r}.")
+        eff = _split_effective_max(config, c)
+        if b > eff:
+            raise CoreAIPolicyError(f"split batch {b} exceeds effective max {eff}.")
+        return BatchDecision(MODE_SPLIT, "split-and-stack", b, eff)
 
+    if mode == "native_batch":
+        return _native()
+    if mode == "split_and_stack":
+        return _split()
     # auto
     if native_ok:
-        return BatchDecision(MODE_NATIVE, "auto -> native (isolated)", b, eff_max)
-    if scope in SAFE_SCOPES:
-        return BatchDecision(MODE_SPLIT, "auto -> split (stateless/request)", b, eff_max)
+        return _native()
+    if split_ok and c.fallback != "reject":
+        return _split()
     raise CoreAIPolicyError(
-        f"auto: no safe B>1 mode for scope={scope!r}, semantics={semantics!r}, "
-        f"isolation={isolation!r}.")
+        f"auto: no permitted B>1 mode (native_ok={native_ok}, split_ok={split_ok}, "
+        f"fallback={c.fallback!r}).")

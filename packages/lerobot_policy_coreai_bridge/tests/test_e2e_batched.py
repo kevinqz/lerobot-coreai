@@ -57,12 +57,16 @@ def _manifest():
                                       "expects": "raw_lerobot_observation"},
                 "action_output": {"owner": "coreai_runner",
                                   "returns": "postprocessed_environment_action"}},
-            "batch": {"schema_version": "coreai-batch-contract.v2",
-                      "policy_supports_batch": True,
-                      "supported_client_modes": ["native_batch", "split_and_stack"],
-                      "max_batch_size": 4, "fallback": "split_and_stack",
-                      "queue_layout": "time_major_batched",
-                      "requires_atomic_commit": True}},
+            "batch": {"schema_version": "coreai-batch-contract.v3",
+                      "native_batch": {"supported": True, "max_batch_size": 4,
+                                       "required_slot_isolation": "independent"},
+                      "client_split": {"supported": True, "max_batch_size": 4,
+                                       "allowed_state_scopes": ["stateless",
+                                                                "request_scoped"]},
+                      "fallback": "split_and_stack",
+                      "queue": {"layout": "time_major_batched",
+                                "commit_semantics": "atomic_queue_commit"},
+                      "observation_stage": "lerobot_policy_preprocessor_output.v1"}},
     }
 
 
@@ -100,9 +104,9 @@ def _handler(state):
                                         "reset_scope": "none"}}
                 caps["action_batching"] = (
                     {"supported": True, "max_batch_size": 4, "semantics": "native",
-                     "state_isolation": "stateless"} if state.native
-                    else {"supported": False, "max_batch_size": 4,
-                          "semantics": "split_and_stack", "state_isolation": "stateless"})
+                     "slot_isolation": "independent"} if state.native
+                    else {"supported": False, "semantics": "split_and_stack",
+                          "slot_isolation": "independent"})
                 return self._j(200, caps)
             return self._j(404, {})
 
