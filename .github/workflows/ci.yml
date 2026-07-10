@@ -58,7 +58,8 @@ jobs:
     timeout-minutes: 40
     continue-on-error: true
     env:
-      LEROBOT_DEV_REF: "v0.6.0"
+      # Pinned exact post-0.6.0 (0.6.1-dev) commit — never a moving @main.
+      LEROBOT_DEV_REF: "e40b58a8dfa9e7b86918c374791599d070518d11"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -67,10 +68,11 @@ jobs:
           cache: pip
       - run: pip install -e ".[test,signing]"
       - run: pip install "git+https://github.com/huggingface/lerobot.git@${LEROBOT_DEV_REF}"
+      - run: pip install -e ./packages/lerobot_policy_coreai_bridge --no-deps
       - name: LeRobot contract report (dev, v1 levels)
         run: lerobot-coreai lerobot-compat-check --contract --output-dir reports/lerobot-dev
-      - name: Dev contract tests
-        run: pytest tests/test_lerobot_dev_contract.py tests/test_lerobot_contracts.py
+      - name: Dev contract + plugin tests (0.6.1-dev)
+        run: pytest tests/test_lerobot_dev_contract.py tests/test_lerobot_contracts.py packages/lerobot_policy_coreai_bridge/tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

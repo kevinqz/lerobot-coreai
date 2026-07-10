@@ -89,12 +89,29 @@ Verified against real LeRobot 0.6.0 (no monkeypatch):
 `not_tested` and `official_eval_certified` stays `false` until a live end-to-end
 eval proves it.
 
+## Data plane (v1.3.2)
+
+The plugin now bridges a real LeRobot batch to the CoreAI observation contract:
+`transport.prepare_single_coreai_observation` strips the leading batch dim,
+unwraps `task: list[str]` → `task: str`, keeps **only** manifest-declared
+observation features (never the ground-truth `action`/`reward`), converts
+`torch`/`numpy` to JSON-safe values, and hashes the exact payload. `select_action`
+now **always** routes through `predict_action_chunk` (one boundary → `(B,H,A)` →
+per-timestep `(B,A)`). `batch_size > 1` fails closed (batched transport is
+v1.3.3). Cross-binding is fully fail-closed: a declared expectation with an
+unknown manifest value is a failure.
+
+Real discovery is proven in a clean subprocess (`test_discovery.py`):
+`register_third_party_plugins()` finds `coreai_bridge` without a manual import.
+The `lerobot-dev` CI job is pinned to an exact 0.6.1-dev commit.
+
 ## Not yet
 
-- Full batched evaluation (`batch_size > 1`) — v1.3.2.
+- Full batched evaluation (`batch_size > 1`) — v1.3.3.
 - Real serializable `PolicyProcessorPipeline` + canonical Hub artifact layout
-  (`config.json` / `policy_preprocessor.json` / …) — v1.3.2.
-- Official `lerobot-eval` end-to-end certification (envs, success/reward
-  metrics) — v1.3.3.
+  (`config.json` / `policy_preprocessor.json` / …) — v1.3.3.
+- Live end-to-end `make_policy` → processors → fake-HTTP-runner test (the
+  current factory tests still bind via a fake `CoreAIPolicy`) — v1.3.3.
+- Official `lerobot-eval` end-to-end certification — v1.4.0.
 
 Guarded real egress remains a separately enforced runtime.
