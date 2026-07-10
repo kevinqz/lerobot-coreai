@@ -133,6 +133,7 @@ lerobot-coreai doctor --policy.path kevinqz/EVO1-SO100-CoreAI --robot.type so100
 | `release-readiness` | v0.9.3 ✅ | Produce a final readiness report from bundle + approval |
 | `real` | v1.0.0 ✅ | Guarded real mode: preflight or bounded guarded session |
 | `verify-real-session` | v1.0.2 ✅ | Offline audit of a completed guarded real session |
+| `lerobot-bridge-check` | v1.1.0 ✅ | Probe the local LeRobot bridge for a CoreAI policy (no robot action) |
 
 ## Safety model
 
@@ -194,6 +195,7 @@ v1.0.4 adds real observation config (`--obs.config` / `--obs.*`, required for no
 v1.0.5 adds per-step real-session metrics (`real_metrics.json/csv/md`: latency, effective fps, missed deadlines) and report/session redaction (`--redact-runner-url` / `--redact-operator` / `--redact-paths`).
 v1.0.6 adds an arming manifest (`real_arming_manifest.json/md`: the armed envelope — limits, attestations, and SHA256 bindings of the readiness report / approval / safety profile, written before the first action) and operator abort controls (SIGINT / `--abort-file <path>` polled each step → e-stop + `operator_abort` stop reason).
 v1.0.7 is a docs-consistency release: the README command surface and `docs/lerobot-compatibility.md` now reflect the full v0.9/v1.0 chain (guarded real egress exists via `real --mode guarded`; still not native LeRobot robot integration, still no physical-safety claim).
+v1.1.0 adds a **local LeRobot bridge** (`load_coreai_policy_for_lerobot()` → a LeRobot-shaped, runtime-only `CoreAILeRobotPolicyBridge`; `lerobot-bridge-check` command) so CoreAI policies can be used where LeRobot expects a policy-shaped object. Duck-typed (no `PreTrainedPolicy` subclass), no global monkeypatch, no `torch`/`lerobot` import at load, works without the `[lerobot]` extra. It is a **local** bridge — `policy_type="coreai"` is not registered upstream, training is not supported, and it proves nothing about physical safety. See [docs/lerobot-native-bridge.md](docs/lerobot-native-bridge.md).
 Baseline verified: 0.6.0. Latest verified: 0.6.1.
 
 **Compatibility:**
