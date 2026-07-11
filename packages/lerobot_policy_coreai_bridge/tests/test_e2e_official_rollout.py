@@ -233,6 +233,7 @@ def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
     cfg = PreTrainedConfig.from_pretrained(str(art))
     cfg.pretrained_path = str(art); cfg.batch_mode = batch_mode
     policy = make_policy(cfg, ds_meta=_ds_meta())
+    policy.record_queue_events = True        # v1.3.17: capture queue lifecycle events
     pre, post = make_pre_post_processors(cfg, pretrained_path=str(art))
     venv = gym.vector.SyncVectorEnv(
         [lambda t=t, s=s: _Env(t, s) for s, t in enumerate(terminate_ats)])
@@ -253,7 +254,7 @@ def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
         request_bodies=tuple(state.bodies), response_bodies=tuple(state.responses),
         done_mask=tuple(tuple(int(x) for x in r) for r in out["done"].int().tolist()),
         final_action=out["action"].to("cpu").tolist(), required_obs_keys=tuple(_FIXTURE),
-        fixture_contract=_FIXTURE)
+        fixture_contract=_FIXTURE, queue_events=tuple(policy.queue_events))
     ev = evaluate_rollout_measurements(m)
     report = build_rollout_readiness_report(
         ev, m, environment=capture_environment_identity(target),
