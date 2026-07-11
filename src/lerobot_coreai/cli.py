@@ -995,11 +995,66 @@ def build_parser() -> argparse.ArgumentParser:
     p_pp_ver.add_argument("--report", required=True)
     p_pp_ver.set_defaults(func=cmd_processor_parity_verify)
 
+    # --- signed evidence (v1.3.28 core) — Ed25519 + DSSE/in-toto + TrustPolicy ---
+    p_se = sub.add_parser("sign-evidence", help="Sign an evidence statement (Ed25519/DSSE)")
+    p_se.add_argument("--statement", required=True, help="in-toto statement JSON")
+    p_se.add_argument("--private-key-env", required=True,
+                      help="env var holding the hex private key (never a literal)")
+    p_se.add_argument("--key-id", required=True)
+    p_se.add_argument("--output", required=True)
+    p_se.set_defaults(func=cmd_sign_evidence)
+    p_vse = sub.add_parser("verify-signed-evidence",
+                           help="Verify a signed evidence envelope offline")
+    p_vse.add_argument("--envelope", required=True)
+    p_vse.add_argument("--trust-policy", required=True)
+    p_vse.add_argument("--now", required=True, help="ISO-8601 UTC time for validity")
+    p_vse.add_argument("--evidence-grade", default="certificate",
+                       choices=["diagnostic", "certificate"])
+    p_vse.add_argument("--json", action="store_true")
+    p_vse.set_defaults(func=cmd_verify_signed_evidence)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_sign_evidence(args: argparse.Namespace) -> int:
+    import json as _json
+    import os as _os
+
+    from .signed_evidence import sign_statement
+    key = _os.environ.get(args.private_key_env)
+    if not key:
+        print(f"{args.private_key_env} is not set (the private key is never a literal).")
+        return 2
+    with open(args.statement) as fh:
+        statement = _json.load(fh)
+    env = sign_statement(statement, private_key_hex=key, key_id=args.key_id)
+    with open(args.output, "w") as fh:
+        _json.dump(env, fh, indent=2)
+    print(f"signed -> {args.output}")
+    return 0
+
+
+def cmd_verify_signed_evidence(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .signed_evidence import verify_signed_evidence
+    with open(args.envelope) as fh:
+        env = _json.load(fh)
+    with open(args.trust_policy) as fh:
+        tp = _json.load(fh)
+    ok, reasons = verify_signed_evidence(env, trust_policy=tp, now=args.now,
+                                         evidence_grade=args.evidence_grade)
+    if args.json:
+        print(_json.dumps({"authenticity_verified": ok, "reasons": reasons}, indent=2))
+    else:
+        for r in reasons:
+            print(f"  ✗ {r}")
+        print(f"authenticity_verified={ok}")
+    return 0 if ok else 1
 
 
 def cmd_processor_parity_run(args: argparse.Namespace) -> int:
