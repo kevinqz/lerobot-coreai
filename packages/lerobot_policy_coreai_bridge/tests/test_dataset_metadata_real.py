@@ -3,15 +3,28 @@
 # DatasetMetadataEvidence, verify it offline, and bind it to a FeatureContract.
 # No SimpleNamespace in this path — the real upstream class is loaded. No network.
 
+import os
+
 import pytest
 
 pytest.importorskip("torch")
 pytest.importorskip("lerobot")
 import numpy as np  # noqa: E402
 
-from lerobot.datasets.lerobot_dataset import (  # noqa: E402
-    LeRobotDataset, LeRobotDatasetMetadata,
-)
+# LeRobotDataset needs the dataset/media extra (`lerobot[dataset]`), which only the
+# isolated rollout CI jobs install — the plain lerobot-stable/dev jobs do not. Guard
+# the heavy import with a module-level skip (pytest 8 importorskip re-raises a
+# mismatched-name ImportError, so use an explicit try/except). COREAI_REQUIRE_ROLLOUT=1
+# (set in the rollout jobs) makes it mandatory there.
+_REQUIRE = os.environ.get("COREAI_REQUIRE_ROLLOUT") == "1"
+try:
+    from lerobot.datasets.lerobot_dataset import (  # noqa: E402
+        LeRobotDataset, LeRobotDatasetMetadata,
+    )
+except ImportError as _exc:  # pragma: no cover
+    if _REQUIRE:
+        raise
+    pytest.skip(f"lerobot dataset stack unavailable ({_exc})", allow_module_level=True)
 
 from lerobot_coreai.dataset_metadata_evidence import (  # noqa: E402
     capture_dataset_metadata_evidence, verify_dataset_metadata_evidence,
