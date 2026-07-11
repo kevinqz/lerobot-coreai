@@ -961,11 +961,79 @@ def build_parser() -> argparse.ArgumentParser:
     p_fc_diff.add_argument("--json", action="store_true")
     p_fc_diff.set_defaults(func=cmd_feature_contract_diff)
 
+    # --- dataset-metadata (v1.3.25) — real LeRobotDatasetMetadata evidence ---
+    p_dm = sub.add_parser("dataset-metadata",
+                          help="Real LeRobotDatasetMetadata evidence (v1.3.25)")
+    dm_sub = p_dm.add_subparsers(dest="dm_command")
+    p_dm_ins = dm_sub.add_parser("inspect", help="Capture evidence from a metadata root")
+    p_dm_ins.add_argument("--repo-id", required=True)
+    p_dm_ins.add_argument("--root", required=True)
+    p_dm_ins.add_argument("--revision", default=None)
+    p_dm_ins.add_argument("--output", required=True)
+    p_dm_ins.set_defaults(func=cmd_dataset_metadata_inspect)
+    p_dm_ver = dm_sub.add_parser("verify", help="Verify metadata evidence offline")
+    p_dm_ver.add_argument("--metadata-evidence", required=True)
+    p_dm_ver.add_argument("--root", required=True)
+    p_dm_ver.set_defaults(func=cmd_dataset_metadata_verify)
+    p_dm_bind = dm_sub.add_parser("bind-feature-contract",
+                                  help="Bind metadata evidence to a FeatureContract")
+    p_dm_bind.add_argument("--metadata-evidence", required=True)
+    p_dm_bind.add_argument("--feature-contract", required=True)
+    p_dm_bind.add_argument("--fail-on-mismatch", action="store_true")
+    p_dm_bind.set_defaults(func=cmd_dataset_metadata_bind)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_dataset_metadata_inspect(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .dataset_metadata_evidence import capture_dataset_metadata_evidence
+    try:
+        from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+    except Exception as exc:  # noqa: BLE001
+        print(f"lerobot required for inspect: {exc}")
+        return 2
+    meta = LeRobotDatasetMetadata(repo_id=args.repo_id, root=args.root,
+                                  revision=args.revision)
+    ev = capture_dataset_metadata_evidence(
+        meta, root=args.root, repo_id=args.repo_id, revision=args.revision)
+    with open(args.output, "w") as fh:
+        _json.dump(ev, fh, indent=2)
+    print(f"metadata_tree_sha256={ev['metadata_tree_sha256']}")
+    return 0
+
+
+def cmd_dataset_metadata_verify(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .dataset_metadata_evidence import verify_dataset_metadata_evidence
+    with open(args.metadata_evidence) as fh:
+        ev = _json.load(fh)
+    ok, errs = verify_dataset_metadata_evidence(ev, args.root)
+    for e in errs:
+        print(f"  ✗ {e}")
+    print(f"dataset metadata evidence {'VERIFIED' if ok else 'FAILED'}.")
+    return 0 if ok else 1
+
+
+def cmd_dataset_metadata_bind(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .dataset_metadata_validation import bind_metadata_to_feature_contract
+    from .feature_contract_reports import load_feature_contract
+    with open(args.metadata_evidence) as fh:
+        ev = _json.load(fh)
+    contract = load_feature_contract(args.feature_contract)
+    r = bind_metadata_to_feature_contract(ev, contract)
+    for f in r.failures:
+        print(f"  ✗ {f}")
+    print(f"binding {'OK' if r.ok else 'MISMATCH'}.")
+    return 1 if (not r.ok and args.fail_on_mismatch) else 0
 
 
 def _parse_symbols(raw: str) -> dict[str, int]:
