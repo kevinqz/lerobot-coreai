@@ -159,6 +159,8 @@ def build_rollout_readiness_report(
     environment: dict, artifact_root_sha256: str, batch_contract_sha256: str,
     runner_capabilities_sha256: str, preprocessor_sha256: str,
     postprocessor_sha256: str, artifact_integrity_verified: bool,
+    feature_contract_sha256: str | None = None,
+    processor_stage_contract_sha256: str | None = None,
 ) -> dict[str, Any]:
     import re
     _re = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -196,7 +198,9 @@ def build_rollout_readiness_report(
             "runner_capabilities_sha256": runner_capabilities_sha256,
             "preprocessor_sha256": preprocessor_sha256,
             "postprocessor_sha256": postprocessor_sha256,
-            "artifact_integrity_verified": bool(artifact_integrity_verified)},
+            "artifact_integrity_verified": bool(artifact_integrity_verified),
+            "feature_contract_sha256": feature_contract_sha256,
+            "processor_stage_contract_sha256": processor_stage_contract_sha256},
         "observation": {
             "ordered_request_sha256s": list(req),
             "distinct_request_hashes": len(set(req)) == len(req) and len(req) > 1},

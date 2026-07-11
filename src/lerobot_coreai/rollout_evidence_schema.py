@@ -132,7 +132,11 @@ READINESS_SCHEMA = {
                 "artifact_root_sha256": _SHA256, "batch_contract_sha256": _SHA256,
                 "runner_capabilities_sha256": _SHA256, "preprocessor_sha256": _SHA256,
                 "postprocessor_sha256": _SHA256,
-                "artifact_integrity_verified": {"type": "boolean"}}},
+                "artifact_integrity_verified": {"type": "boolean"},
+                # v1.3.24a: bind the FeatureContract + canonical ProcessorStageContract
+                # roots into the rollout case (→ bundle root → matrix root).
+                "feature_contract_sha256": {"anyOf": [_SHA256, {"type": "null"}]},
+                "processor_stage_contract_sha256": {"anyOf": [_SHA256, {"type": "null"}]}}},
         "observation": {
             "type": "object", "additionalProperties": False,
             "required": ["ordered_request_sha256s"],
