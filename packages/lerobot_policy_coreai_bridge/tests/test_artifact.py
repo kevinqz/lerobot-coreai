@@ -113,6 +113,31 @@ def test_verify_passes_and_writes_report_outside(tmp_path):
     assert not (out / "plugin_artifact_verification_report.json").exists()
 
 
+def test_feature_contract_bound_into_artifact(tmp_path):
+    # v1.3.24a: the plugin manifest carries the canonical ProcessorStageContract +
+    # FeatureContract hashes + runtime_backend, and the clean artifact binds them.
+    out = _build(tmp_path)
+    pm = json.loads((out / "plugin_artifact_manifest.json").read_text())
+    assert pm["runtime_backend"] == "coreai"
+    assert pm["feature_contract_sha256"].startswith("sha256:")
+    assert pm["canonical_processor_stage_contract"]["runtime_backend"] == "coreai"
+    res = verify_plugin_artifact(str(out), deep=False)
+    assert res.semantics.get("feature_contract_binding") == "passed"
+    assert res.semantics.get("canonical_processor_stage_contract") == "passed"
+
+
+def test_feature_contract_binding_detects_manifest_tamper(tmp_path):
+    # tampering the embedded CoreAI manifest features must break the recomputed
+    # FeatureContract binding (independent of the byte-integrity check).
+    from lerobot_policy_coreai_bridge.artifact import verify_artifact_semantics
+    out = _build(tmp_path)
+    m = json.loads((out / "lerobot-coreai.json").read_text())
+    m["features"]["action"]["action"]["shape"] = [99]      # forge the action shape
+    (out / "lerobot-coreai.json").write_text(json.dumps(m))
+    sem = verify_artifact_semantics(out)
+    assert sem.get("feature_contract_binding", "").startswith("failed")
+
+
 def test_verify_is_idempotent(tmp_path):
     out = _build(tmp_path)
     root1 = json.loads((out / "plugin_artifact_inventory.json").read_text())["artifact_root_sha256"]

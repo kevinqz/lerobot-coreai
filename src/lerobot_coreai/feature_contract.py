@@ -146,6 +146,62 @@ def _spec_from_dict(d: dict) -> FeatureSpec:
                                             nz.get("stats_ref")))
 
 
+def feature_contract_from_manifest(
+    manifest_features: dict, *, contract_id: str, robot_type: str | None,
+    runtime_backend: str = "coreai",
+    processor_stage_contract_sha256: str | None = None,
+    runtime_support_profile_sha256: str | None = None,
+) -> "FeatureContract":
+    """Derive a FeatureContract at the provider-input/output stages from a CoreAI
+    manifest ``features`` block (v1.3.24a) — so the artifact can bind a contract root
+    without hand-authored fixtures. Backend-neutral: the stage is the concrete backend
+    runner boundary, the backend is recorded on the contract id."""
+    from .stages import ActionStage, ObservationStage
+    obs_stage = ObservationStage.COREAI_RUNNER_INPUT.value if runtime_backend == "coreai" \
+        else f"{runtime_backend}_runner_input.v1"
+    act_stage = ActionStage.COREAI_RUNNER_OUTPUT.value if runtime_backend == "coreai" \
+        else f"{runtime_backend}_runner_output.v1"
+    observations: list[FeatureSpec] = []
+    context: list[FeatureSpec] = []
+    for key, spec in (manifest_features.get("observation", {}) or {}).items():
+        dtype = spec.get("dtype", "float32")
+        required = bool(spec.get("required", True))
+        if key == "task" or dtype == "string":
+            context.append(FeatureSpec(
+                feature_id=make_feature_id("context", key, obs_stage), key=key,
+                role="context", modality="text", stage=obs_stage, required=required,
+                dtype="string", shape=(), axes=(), layout=None,
+                value_domain=ValueDomain(finite=True)))
+            continue
+        shape = tuple(spec.get("shape", []) or [])
+        modality = "image" if dtype in ("image", "video") else "vector"
+        names = tuple(spec["names"]) if spec.get("names") else None
+        observations.append(FeatureSpec(
+            feature_id=make_feature_id("observation", key, obs_stage), key=key,
+            role="observation", modality=modality, stage=obs_stage, required=required,
+            dtype=("float32" if modality == "image" else dtype), shape=shape,
+            axes=tuple(f"d{i}" for i in range(len(shape))), layout=None,
+            value_domain=ValueDomain(finite=True), names=names,
+            normalization=NormalizationContract("unknown", None, None)))
+    actions: list[FeatureSpec] = []
+    for key, spec in (manifest_features.get("action", {}) or {}).items():
+        shape = tuple(spec.get("shape", []) or [])
+        actions.append(FeatureSpec(
+            feature_id=make_feature_id("action", key, act_stage), key=key,
+            role="action", modality="vector", stage=act_stage, required=True,
+            dtype=spec.get("dtype", "float32"), shape=shape,
+            axes=tuple(f"d{i}" for i in range(len(shape))), layout=None,
+            value_domain=ValueDomain(finite=True),
+            names=tuple(spec["names"]) if spec.get("names") else None,
+            normalization=NormalizationContract("unknown", None, None)))
+    return FeatureContract(
+        contract_id=contract_id, robot_type=robot_type, policy_path=None,
+        observations=tuple(observations), actions=tuple(actions),
+        context=tuple(context),
+        processor_stage_contract_sha256=processor_stage_contract_sha256,
+        runtime_support_profile_sha256=runtime_support_profile_sha256)
+
+
 def feature_contract_from_dict(d: dict) -> FeatureContract:
     return FeatureContract(
         contract_id=d["contract_id"], robot_type=d.get("robot_type"),

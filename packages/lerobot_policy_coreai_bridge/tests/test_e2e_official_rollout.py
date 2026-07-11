@@ -267,7 +267,10 @@ def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
         runner_capabilities_sha256=capabilities_sha256(policy._capabilities),
         preprocessor_sha256=_sha256_file(art / "policy_preprocessor.json"),
         postprocessor_sha256=_sha256_file(art / "policy_postprocessor.json"),
-        artifact_integrity_verified=verified.ok)
+        artifact_integrity_verified=verified.ok,
+        feature_contract_sha256=pm.get("feature_contract_sha256"),
+        processor_stage_contract_sha256=pm.get(
+            "canonical_processor_stage_contract_sha256"))
     case = f"{mode}-b{B}"
     root = write_evidence_bundle(str(Path(evidence_dir) / case), report, m)
     return ev, report, root

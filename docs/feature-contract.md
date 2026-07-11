@@ -62,17 +62,34 @@ lerobot-coreai feature-contract diff \
   `transform`) + a hash. The legacy strings remain accepted **only in the reader**;
   new writers emit the enum forms.
 
+## v1.3.24a — Certification Binding Closure
+
+The stop-the-line closure of the RFC's Phase 0: the FeatureContract now **governs the
+certified runtime evidence** instead of sitting beside it.
+
+- **Hash-bound into the artifact root** — the plugin artifact manifest (already inside
+  the artifact-root inventory) carries `runtime_backend`, the canonical
+  `canonical_processor_stage_contract` (+ its sha), and `feature_contract_sha256`
+  derived from the CoreAI manifest. `verify_artifact_semantics` **recomputes** both
+  from the embedded manifest and fails if they don't match — so a tamper of the CoreAI
+  manifest features/ownership breaks the artifact (both via the byte-integrity root
+  and the semantic recompute).
+- **Hash-bound into the rollout/matrix root** — each rollout case's readiness report
+  records `feature_contract_sha256` + `processor_stage_contract_sha256` in its
+  `contracts` block; the report is checksummed into the bundle root, which is bound
+  into the matrix root. Tamper breaks the case and the matrix.
+- **Backend-neutral now** — a `RuntimeProviderStage` canonical layer
+  (`runtime_provider_input.v1`/`output.v1`) + `runtime_backend` +
+  `canonical_source`/`canonical_target` annotations let MLX / PyTorch-reference
+  providers plug in later without a destructive contract migration. The legacy
+  `coreai_*` stages remain valid (they are the coreai `backend_stage` values).
+
 ## Not yet
 
-- **Artifact + rollout-evidence cross-binding** — persisting `feature_contract.json`
-  + `feature_contract_sha256` + the canonical `processor_stage_contract.json` in the
-  plugin artifact and per-case rollout bundle (and recording `validated_feature_ids`
-  per case) — the FeatureContract subsystem, validation, diff and CLI are in and
-  independently tested; wiring it into the artifact builder + rollout evidence (which
-  touches the manifest fixtures across the E2E suite) is the next step.
 - **Full `raw_lerobot_observation` string removal** across every consumer +
-  companion BatchContract schema dedup — the remaining Phase-0 migration, isolated so
-  it can land as its own green change.
+  companion BatchContract schema dedup — the ownership strings are still accepted in
+  the READER (diagnostic), while writers emit the canonical backend-neutral form; the
+  final removal is isolated so it can land as its own green change.
 - **Processor parity** — v1.3.24 may *declare* cross-stage transforms; equivalence is
   not proven until v1.3.26.
 - `dataset_metadata_verified` (v1.3.25), `processor_parity_verified` (v1.3.26),

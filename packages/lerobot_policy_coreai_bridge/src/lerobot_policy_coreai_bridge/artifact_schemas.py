@@ -207,6 +207,12 @@ PLUGIN_ARTIFACT_MANIFEST_SCHEMA = {
                 "observation_input_stage": {"type": "string"},
                 "action_output_stage": {"type": "string"},
             }},
+        # v1.3.24a: contracts hash-bound into the (root-bound) plugin manifest, so a
+        # tamper on any of them changes artifact_root. Backend-neutral canonical form.
+        "runtime_backend": {"type": "string"},
+        "canonical_processor_stage_contract": {"type": "object"},
+        "canonical_processor_stage_contract_sha256": _SHA256,
+        "feature_contract_sha256": _SHA256,
         "source_coreai_artifact_reference": _SOURCE_REF_SCHEMA,
         "claims": CLAIMS_SCHEMA,
     },

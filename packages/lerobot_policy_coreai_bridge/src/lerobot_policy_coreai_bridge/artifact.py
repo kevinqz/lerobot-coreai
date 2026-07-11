@@ -258,6 +258,9 @@ def build_plugin_artifact(
             "observation_input_stage": batch_contract.observation_stage,
             "action_output_stage": "postprocessed_environment_action.v1",
         },
+        # v1.3.24a: canonical, backend-neutral ProcessorStageContract + FeatureContract
+        # hashes, embedded in the (root-bound) manifest so a tamper breaks artifact_root.
+        **_certification_binding(getattr(manifest, "raw", None) or {}, proc_contract),
         "source_coreai_artifact_reference": source_ref,
         "claims": {"official_plugin_factory_compatible": None,
                    "official_eval_certified": False, "upstream_native": False,
@@ -295,6 +298,39 @@ def build_plugin_artifact(
 
 def _manifest_processor_contract(manifest_raw: dict) -> dict:
     return (manifest_raw.get("contracts", {}) or {}).get("processor", {}) or {}
+
+
+def _manifest_features(manifest_raw: dict) -> dict:
+    return manifest_raw.get("features", {}) or {}
+
+
+def _certification_binding(manifest_raw: dict, proc_contract: dict,
+                           runtime_backend: str = "coreai") -> dict:
+    """Canonical ProcessorStageContract v1 + FeatureContract hashes derived from the
+    CoreAI manifest, for embedding in the (root-bound) plugin manifest (v1.3.24a).
+    Derivation is deterministic, so `verify_artifact_semantics` can recompute and
+    detect any tamper of the CoreAI manifest features/ownership."""
+    from lerobot_coreai.feature_contract import feature_contract_from_manifest
+    from lerobot_coreai.stages import (
+        build_processor_stage_contract, processor_stage_contract_sha256,
+    )
+    expects = (proc_contract.get("observation_input", {}) or {}).get("expects")
+    returns = (proc_contract.get("action_output", {}) or {}).get("returns")
+    psc = build_processor_stage_contract(expects=expects, returns=returns,
+                                         runtime_backend=runtime_backend)
+    psc_sha = processor_stage_contract_sha256(psc)
+    robot_type = (manifest_raw.get("robot", {}) or {}).get("type")
+    fc = feature_contract_from_manifest(
+        _manifest_features(manifest_raw),
+        contract_id=f"{runtime_backend}:{robot_type or 'unknown'}",
+        robot_type=robot_type, runtime_backend=runtime_backend,
+        processor_stage_contract_sha256=psc_sha)
+    return {
+        "runtime_backend": runtime_backend,
+        "canonical_processor_stage_contract": psc,
+        "canonical_processor_stage_contract_sha256": psc_sha,
+        "feature_contract_sha256": fc.sha256(),
+    }
 
 
 def _render_readme(pm: dict[str, Any]) -> str:
@@ -393,6 +429,25 @@ def verify_artifact_semantics(out: Path) -> dict[str, str]:
               f"{key} is not step-empty (identity contract requires no steps)")
         except Exception as exc:  # noqa: BLE001
             c(f"processor_steps_empty:{key}", False, str(exc))
+
+    # v1.3.24a: recompute the canonical ProcessorStageContract + FeatureContract from
+    # the CoreAI manifest and require the (root-bound) plugin manifest to match — so a
+    # tamper of the CoreAI manifest features/ownership breaks the artifact.
+    if pm.get("feature_contract_sha256") is not None:
+        try:
+            binding = _certification_binding(
+                coreai, proc, runtime_backend=pm.get("runtime_backend", "coreai"))
+            c("canonical_processor_stage_contract",
+              pm.get("canonical_processor_stage_contract") == binding[
+                  "canonical_processor_stage_contract"]
+              and pm.get("canonical_processor_stage_contract_sha256")
+              == binding["canonical_processor_stage_contract_sha256"],
+              "canonical ProcessorStageContract != recomputed")
+            c("feature_contract_binding",
+              pm.get("feature_contract_sha256") == binding["feature_contract_sha256"],
+              "feature_contract_sha256 != recomputed from manifest features")
+        except Exception as exc:  # noqa: BLE001
+            c("feature_contract_binding", False, str(exc))
 
     # feature semantics: shapes verifiable from the manifest; dtype/names/units/
     # layout are recorded as not_verified (config PolicyFeatures don't carry them).
