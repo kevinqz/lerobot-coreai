@@ -27,6 +27,18 @@ def _shape(v):
     return tuple(s)
 
 
+def _is_rectangular(v) -> bool:
+    """A scalar is rectangular; a list is rectangular iff every element shares the same
+    shape AND is itself rectangular. Rejects ragged arrays like [[1], [2, 3]] which the
+    first-branch _shape() would otherwise mis-measure (P1.4)."""
+    if not isinstance(v, list):
+        return True
+    shapes = {_shape(x) for x in v}
+    if len(shapes) > 1:
+        return False
+    return all(_is_rectangular(x) for x in v)
+
+
 @dataclass(frozen=True)
 class ParityMetrics:
     shape_ref: tuple
@@ -59,6 +71,10 @@ def compute_parity_metrics(reference, candidate) -> ParityMetrics:
     cand = [float(x) for x in _flatten(candidate)]
     nf_ref = sum(0 if math.isfinite(x) else 1 for x in ref)
     nf_cand = sum(0 if math.isfinite(x) else 1 for x in cand)
+    # a ragged array has no well-defined shape → never a parity match (P1.4).
+    if not _is_rectangular(reference) or not _is_rectangular(candidate):
+        return ParityMetrics(sr, sc, False, max(len(ref), len(cand)), nf_ref, nf_cand,
+                             math.inf, math.inf, math.inf, 0.0)
     if sr != sc or len(ref) != len(cand):
         return ParityMetrics(sr, sc, False, max(len(ref), len(cand)), nf_ref, nf_cand,
                              math.inf, math.inf, math.inf, 0.0)

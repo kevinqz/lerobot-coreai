@@ -212,6 +212,32 @@ def test_shape_mismatch_metrics():
     assert not m.shape_match and m.max_abs_error == float("inf")
 
 
+# --- P1.4: ragged arrays never match ---
+
+def test_ragged_array_never_matches():
+    ragged = [[1.0], [2.0, 3.0]]                     # not rectangular
+    m = compute_parity_metrics(ragged, ragged)       # identical ragged inputs
+    assert not m.shape_match and m.max_abs_error == float("inf")
+    r = _numeric_case(ragged, ragged, {"max_abs_error": 1e-6}).evaluate()
+    assert not r["passed"]
+
+
+# --- P1.5: closed case schema + mode enum ---
+
+def test_unknown_mode_rejected():
+    with pytest.raises(ValueError):
+        ParityCase("f", "a", "b", "fuzzy", [[1.0]], [[1.0]]).evaluate()
+
+
+def test_malformed_case_fails_schema():
+    ref = apply_operations(_HWC, [{"op": "permute", "order": [2, 0, 1]}])
+    cand = _reference_hwc_to_chw(_HWC)
+    report = build_processor_parity_report([ParityCase("f", "a", "b", "exact", ref, cand)])
+    report["cases"][0]["mode"] = "sideways"          # not in the closed enum
+    ok, errs = verify_processor_parity_report(report)
+    assert not ok and any("schema" in e for e in errs)
+
+
 # --- save/reload parity (the transform contract IS the serializable processor spec) ---
 
 def test_transform_save_reload_output_parity(tmp_path):

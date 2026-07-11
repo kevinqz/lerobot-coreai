@@ -5,6 +5,11 @@ on:
   pull_request:
     branches: [main]
 
+# least-privilege by default (v1.3.26.11 supply-chain hardening): CI only reads the
+# repo. A release/signing job that needs more requests it explicitly and locally.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

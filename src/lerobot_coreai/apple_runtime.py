@@ -96,41 +96,87 @@ APPLE_RUNTIME_CERTIFICATE_SCHEMA = {
 }
 
 
-def _macos_sw_versions() -> tuple[str | None, str | None]:
+def _probe(cmd: list) -> str | None:
+    """Run a short read-only system probe, returning stripped stdout or None. Fully
+    defensive: any failure (missing tool, timeout, non-zero) yields None."""
+    import subprocess
     try:
-        mac_ver = platform.mac_ver()[0] or None
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
     except Exception:  # noqa: BLE001
-        mac_ver = None
-    return mac_ver, None
+        return None
+    if out.returncode != 0:
+        return None
+    return (out.stdout or "").strip() or None
+
+
+def _sysctl(name: str) -> str | None:
+    return _probe(["sysctl", "-n", name])
+
+
+def _process_arch() -> str | None:
+    """The ARCH the process actually runs as. On Apple Silicon under Rosetta the machine
+    is arm64 but the process is x86_64 (proc_translated == 1) — the gate must see x86."""
+    machine = platform.machine() or None
+    if platform.system() == "Darwin" and _sysctl("sysctl.proc_translated") == "1":
+        return "x86_64"
+    return machine
+
+
+def _sha256_file(path) -> str | None:
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return "sha256:" + h.hexdigest()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def capture_apple_runtime_identity(
     *, coreai_runner_version: str | None = None,
     coreai_runner_binary_sha256: str | None = None,
+    coreai_runner_binary_path: str | None = None,
     aimodel_sha256: str | None = None, aimodel_schema_version: str | None = None,
-    manifest_sha256: str | None = None, compute_units_requested: str | None = None,
+    aimodel_path: str | None = None, manifest_sha256: str | None = None,
+    compute_units_requested: str | None = None,
     compute_units_reported: str | None = None,
 ) -> dict:
-    """Capture the runtime identity. On a non-Apple/non-arm64 host the Apple-specific
-    fields are null and the certificate gate can never pass — honest by construction."""
-    mac_ver, mac_build = _macos_sw_versions()
+    """Capture the runtime identity. On macOS the hardware/software fields are read from
+    the REAL host (`sysctl`, `sw_vers`, `xcrun`) rather than declared (P1.7); on a
+    non-Apple host they are null and the certificate gate can never pass — honest by
+    construction. When a real runner/`.aimodel` PATH is given, its digest is computed
+    from bytes rather than trusting a free-arg hash."""
     is_macos = platform.system() == "Darwin"
+    mem = _sysctl("hw.memsize") if is_macos else None
+    try:
+        mem_bytes = int(mem) if mem is not None else None
+    except ValueError:
+        mem_bytes = None
+    # a real .aimodel / runner path wins over a declared hash (no free-arg hash on-Mac).
+    runner_sha = _sha256_file(coreai_runner_binary_path) if coreai_runner_binary_path \
+        else coreai_runner_binary_sha256
+    aimodel_hash = _sha256_file(aimodel_path) if aimodel_path else aimodel_sha256
     return {
         "schema_version": APPLE_RUNTIME_IDENTITY_SCHEMA_VERSION,
-        "hardware": {"model_identifier": None,
-                     "chip": platform.processor() or None if is_macos else None,
-                     "memory_bytes": None, "cpu_arch": platform.machine() or None},
-        "software": {"macos_version": mac_ver if is_macos else None,
-                     "macos_build": mac_build, "xcode_version": None,
-                     "sdk_version": None,
+        "hardware": {"model_identifier": _sysctl("hw.model") if is_macos else None,
+                     "chip": (_sysctl("machdep.cpu.brand_string") if is_macos
+                              else None),
+                     "memory_bytes": mem_bytes,
+                     "cpu_arch": platform.machine() or None},
+        "software": {"macos_version": (platform.mac_ver()[0] or None) if is_macos else None,
+                     "macos_build": _probe(["sw_vers", "-buildVersion"]) if is_macos else None,
+                     "xcode_version": _probe(["xcrun", "xcodebuild", "-version"]) if is_macos else None,
+                     "sdk_version": _probe(["xcrun", "--show-sdk-version"]) if is_macos else None,
                      "coreai_runner_version": coreai_runner_version,
-                     "coreai_runner_binary_sha256": coreai_runner_binary_sha256},
-        "model": {"aimodel_sha256": aimodel_sha256,
+                     "coreai_runner_binary_sha256": runner_sha},
+        "model": {"aimodel_sha256": aimodel_hash,
                   "aimodel_schema_version": aimodel_schema_version,
                   "manifest_sha256": manifest_sha256},
         "execution": {"compute_units_requested": compute_units_requested,
                       "compute_units_reported": compute_units_reported,
-                      "process_arch": platform.machine() or None},
+                      "process_arch": _process_arch()},
     }
 
 
@@ -197,7 +243,29 @@ def promote_apple_runtime_certificate(
         raise TypeError("trust_policy must be a VerifiedTrustPolicy")
     jsonschema.validate(identity, APPLE_RUNTIME_IDENTITY_SCHEMA)
 
+    from .authority import AuthorityError
     receipt = runtime_receipt.payload
+    conv_aimodel = conversion.payload["artifact"]["aimodel_sha256"]
+    identity_aimodel = identity["model"]["aimodel_sha256"]
+    signed_eval_root = official_eval.payload["statement"]["predicate"]["certificate_root_sha256"]
+    official_cert = official_eval.payload["certificate"]
+    official_artifact_root = official_cert["inputs"]["artifact_root_sha256"]
+
+    # P0.5 — the .aimodel actually executed by the runner MUST be the SAME artifact the
+    # conversion evidence, the runtime identity, and the certified official-eval bound.
+    # A mismatch means "certified the wrong artifact"; refuse to promote (no diagnostic
+    # fallback — this is a provenance contradiction, not a graded observation).
+    aimodel = receipt["aimodel_root_sha256"]
+    binds = {"runtime.aimodel_root": aimodel,
+             "runtime.artifact_aimodel": receipt["artifact_aimodel_sha256"],
+             "conversion.artifact.aimodel": conv_aimodel,
+             "identity.model.aimodel": identity_aimodel}
+    if len(set(binds.values())) != 1:
+        raise AuthorityError(f"apple promotion artifact cross-binding mismatch: {binds}")
+    if official_artifact_root != aimodel:
+        raise AuthorityError(
+            f"official-eval artifact_root {official_artifact_root} != runtime aimodel {aimodel}")
+
     # checks derived from receipt substance (not the caller)
     checks = {
         "real_runner_used": bool(receipt["real_runner_used"] and not receipt["fake_runner"]),
@@ -207,7 +275,6 @@ def promote_apple_runtime_certificate(
         "official_eval_chain_bound": True,          # VerifiedSignedOfficialEvalCertificate
         "signed_evidence_verified": True,           # verified signature + policy at mint
     }
-    signed_eval_root = official_eval.payload["predicate"]["certificate_root_sha256"]
     return build_apple_runtime_certificate(
         identity=identity, checks=checks,
         artifact_root_sha256=receipt["artifact_aimodel_sha256"],

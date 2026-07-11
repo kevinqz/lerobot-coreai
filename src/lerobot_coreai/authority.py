@@ -86,25 +86,38 @@ _REQUIRED_RUNTIME_CASES = ("single-b1", "native-b2", "native-b4", "split-b2", "s
 
 # --- official-eval execution receipt (what a REAL lerobot-eval subprocess emits) ---
 
+_BOOL = {"type": "boolean"}
 OFFICIAL_EVAL_EXECUTION_RECEIPT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
     "required": ["real_subprocess", "fake_executor", "resolution_method",
                  "executable_realpath", "argv", "lerobot_distribution_sha256",
                  "coreai_env_instantiated", "cases", "exit_code",
-                 "command_sha256", "resolved_config_sha256", "output_tree_sha256"],
+                 "command_sha256", "resolved_config_sha256", "output_tree_sha256",
+                 "schema_report", "replay_report", "verified_cases_root_sha256"],
     "properties": {
-        "real_subprocess": {"type": "boolean"},
-        "fake_executor": {"type": "boolean"},
+        "real_subprocess": _BOOL,
+        "fake_executor": _BOOL,
         "resolution_method": {"enum": ["console_script", "python_-m"]},
         "executable_realpath": {"type": "string", "minLength": 1},
         "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "lerobot_distribution_sha256": _HASH,
-        "coreai_env_instantiated": {"type": "boolean"},
+        "coreai_env_instantiated": _BOOL,
         "cases": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "exit_code": {"type": "integer"},
         "command_sha256": _HASH, "resolved_config_sha256": _HASH,
         "output_tree_sha256": _HASH,
+        # verifier reports the executor produced from the REAL outputs — the promoter
+        # derives its checks from these, never hardcodes them (P0.3).
+        "schema_report": {"type": "object", "additionalProperties": False,
+                          "required": ["outputs_schema_valid", "output_manifest_sha256"],
+                          "properties": {"outputs_schema_valid": _BOOL,
+                                         "output_manifest_sha256": _HASH}},
+        "replay_report": {"type": "object", "additionalProperties": False,
+                          "required": ["evidence_replay_passed", "replay_root_sha256"],
+                          "properties": {"evidence_replay_passed": _BOOL,
+                                         "replay_root_sha256": _HASH}},
+        "verified_cases_root_sha256": _HASH,
     },
 }
 _TEMP_DIR_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/dev/shm/")
@@ -142,6 +155,12 @@ def verify_official_eval_execution_receipt(receipt: dict) -> VerifiedOfficialEva
         fails.append("incomplete case matrix")
     if receipt["exit_code"] != 0:
         fails.append(f"non-zero exit {receipt['exit_code']}")
+    # the executor's own verifier reports must attest success (the promoter derives its
+    # checks from these — a receipt whose reports failed cannot certify).
+    if not receipt["schema_report"]["outputs_schema_valid"]:
+        fails.append("outputs failed schema validation")
+    if not receipt["replay_report"]["evidence_replay_passed"]:
+        fails.append("evidence replay did not pass")
     if fails:
         raise AuthorityError(f"official-eval receipt is not certificate-grade: {fails}")
     return VerifiedOfficialEvalExecutionReceipt(dict(receipt), _AUTHORITY)
@@ -150,29 +169,79 @@ def verify_official_eval_execution_receipt(receipt: dict) -> VerifiedOfficialEva
 # --- mint functions (the ONLY way to obtain a Verified*) ---
 
 def as_verified_trust_policy(policy: dict) -> VerifiedTrustPolicy:
+    """A schema-valid TrustPolicy (generic; NOT the official release anchor). Useful for
+    diagnostic verification, but promotion of a high claim requires the OFFICIAL anchor
+    (see ``as_verified_official_trust_policy``)."""
     import jsonschema
     from .signed_evidence import TRUST_POLICY_SCHEMA
     jsonschema.validate(policy, TRUST_POLICY_SCHEMA)
     return VerifiedTrustPolicy(dict(policy), _AUTHORITY)
 
 
-def as_verified_signed_official_eval(dsse_envelope: dict, *,
+def as_verified_official_trust_policy(policy: dict) -> VerifiedTrustPolicy:
+    """The pinned OFFICIAL release anchor (v1.3.26.11, P0.6). Provenance authority no
+    longer comes from a caller-supplied self-signed policy: the policy must match the
+    pinned anchor identity (policy_id + allowed issuers ⊆ the official set) and carry NO
+    dev key. A producer that mints its own key + its own policy cannot pass this."""
+    import jsonschema
+    from .signed_evidence import (
+        OFFICIAL_ALLOWED_ISSUERS, OFFICIAL_TRUST_POLICY_ID, TRUST_POLICY_SCHEMA,
+    )
+    jsonschema.validate(policy, TRUST_POLICY_SCHEMA)
+    if policy["policy_id"] != OFFICIAL_TRUST_POLICY_ID:
+        raise AuthorityError(
+            f"trust policy is not the official anchor {OFFICIAL_TRUST_POLICY_ID!r}")
+    if not set(policy["allowed_issuers"]) <= set(OFFICIAL_ALLOWED_ISSUERS):
+        raise AuthorityError("trust policy allows non-official issuers")
+    if any(k.get("dev") for k in policy["trusted_keys"]):
+        raise AuthorityError("official anchor must not trust a dev key")
+    if policy["minimum_evidence_grade"] != "certificate":
+        raise AuthorityError("official anchor must require certificate grade")
+    return VerifiedTrustPolicy(dict(policy), _AUTHORITY)
+
+
+def as_verified_signed_official_eval(dsse_envelope: dict, *, certificate: dict,
                                      trust_policy: VerifiedTrustPolicy, now: str,
                                      ) -> VerifiedSignedOfficialEvalCertificate:
+    """Verify a SIGNED official-eval certificate bound to its actual bytes (v1.3.26.11,
+    P0.7/WS4). The caller MUST supply the underlying OfficialEvalCertificate; this:
+      1. re-runs the official-eval verifier on those bytes (must be certificate grade +
+         official_eval_certified),
+      2. recomputes the certificate's canonical root and cross-binds it to the signed
+         subject / predicate.certificate_root,
+      3. verifies the Ed25519 signature under the trust policy.
+    So a signature over a bare, unverified root no longer suffices."""
     import base64
     import json
 
-    from .signed_evidence import verify_signed_evidence
+    from .signed_evidence import certificate_root_sha256, verify_signed_evidence
+    from .official_eval_certificate import verify_official_eval_certificate
     if not isinstance(trust_policy, VerifiedTrustPolicy):
         raise TypeError("trust_policy must be a VerifiedTrustPolicy")
+    if not isinstance(certificate, dict):
+        raise TypeError("certificate (the underlying OfficialEvalCertificate) is required")
+    # (1) re-verify the underlying certificate bytes.
+    cert_ok, cert_reasons = verify_official_eval_certificate(certificate)
+    if not cert_ok:
+        raise AuthorityError(f"underlying official-eval certificate invalid: {cert_reasons}")
+    if certificate.get("evidence_grade") != "certificate":
+        raise AuthorityError("underlying certificate is not certificate grade")
+    if not certificate["claims"]["official_eval_certified"]:
+        raise AuthorityError("underlying certificate does not assert official_eval_certified")
+    # (3) signature.
     ok, reasons = verify_signed_evidence(dsse_envelope, trust_policy=trust_policy.payload,
                                          now=now, evidence_grade="certificate")
     if not ok:
         raise AuthorityError(f"signed official-eval did not verify: {reasons}")
     statement = json.loads(base64.b64decode(dsse_envelope["payload"], validate=True))
-    if statement["predicate"]["certificate_type"] != "official_eval":
+    pred = statement["predicate"]
+    if pred["certificate_type"] != "official_eval":
         raise AuthorityError("signed certificate is not certificate_type=official_eval")
-    return VerifiedSignedOfficialEvalCertificate(statement, _AUTHORITY)
+    # (2) cross-bind the signed root to the ACTUAL certificate bytes.
+    if pred["certificate_root_sha256"] != certificate_root_sha256(certificate):
+        raise AuthorityError("signed certificate_root does not match the certificate bytes")
+    return VerifiedSignedOfficialEvalCertificate(
+        {"statement": statement, "certificate": dict(certificate)}, _AUTHORITY)
 
 
 def as_verified_model_conversion(evidence: dict, *, reference_outputs,

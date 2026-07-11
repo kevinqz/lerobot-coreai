@@ -15,8 +15,9 @@ from lerobot_coreai.apple_runtime import (
     verify_apple_runtime_certificate,
 )
 from lerobot_coreai.authority import (
-    AuthorityError, as_verified_model_conversion, as_verified_signed_official_eval,
-    as_verified_trust_policy, verify_coreai_runtime_receipt,
+    AuthorityError, as_verified_model_conversion, as_verified_official_trust_policy,
+    as_verified_signed_official_eval, verify_coreai_runtime_receipt,
+    verify_official_eval_execution_receipt,
 )
 
 _H = "sha256:" + "a" * 64
@@ -57,32 +58,57 @@ def _non_apple_identity():
 # --- helpers that mint REAL Verified* receipts (the only way to promote) ---
 
 def _verified_trust_policy(key):
-    from lerobot_coreai.signed_evidence import TRUST_POLICY_SCHEMA_VERSION
-    policy = {"schema_version": TRUST_POLICY_SCHEMA_VERSION, "policy_id": "official-release",
-              "allowed_issuers": ["lerobot-coreai-release-ci"],
+    from lerobot_coreai.signed_evidence import (
+        OFFICIAL_ALLOWED_ISSUERS, OFFICIAL_TRUST_POLICY_ID, TRUST_POLICY_SCHEMA_VERSION,
+    )
+    policy = {"schema_version": TRUST_POLICY_SCHEMA_VERSION,
+              "policy_id": OFFICIAL_TRUST_POLICY_ID,
+              "allowed_issuers": list(OFFICIAL_ALLOWED_ISSUERS),
               "trusted_keys": [{"key_id": key["key_id"],
                                 "public_key_hex": key["public_key_hex"],
                                 "valid_from": None, "valid_until": None, "revoked": False,
+                                "dev": False,
                                 "allowed_certificate_types": ["official_eval"]}],
               "require_unexpired": True, "minimum_evidence_grade": "certificate",
               "required_claims_false": ["proves_physical_safety"]}
-    return as_verified_trust_policy(policy)
+    return as_verified_official_trust_policy(policy)
+
+
+def _official_eval_certificate():
+    """A REAL certificate-grade OfficialEvalCertificate whose artifact_root == the
+    certified .aimodel (_H) so the Apple cross-binding holds."""
+    from lerobot_coreai.official_eval_certificate import (
+        _ROOT_KEYS, REQUIRED_CASES, promote_official_eval_certificate,
+    )
+    receipt = verify_official_eval_execution_receipt({
+        "real_subprocess": True, "fake_executor": False,
+        "resolution_method": "console_script",
+        "executable_realpath": "/usr/local/bin/lerobot-eval",
+        "argv": ["/usr/local/bin/lerobot-eval", "--env.type=coreai_cert_env"],
+        "lerobot_distribution_sha256": _H, "coreai_env_instantiated": True,
+        "cases": list(REQUIRED_CASES), "exit_code": 0, "command_sha256": _H,
+        "resolved_config_sha256": _H, "output_tree_sha256": _H,
+        "schema_report": {"outputs_schema_valid": True, "output_manifest_sha256": _H},
+        "replay_report": {"evidence_replay_passed": True, "replay_root_sha256": _H},
+        "verified_cases_root_sha256": _H})
+    return promote_official_eval_certificate(receipt=receipt,
+                                             inputs={k: _H for k in _ROOT_KEYS})
 
 
 def _verified_official_eval(key, vtp):
-    from lerobot_coreai.signed_evidence import build_evidence_statement, sign_statement
-    roots = {"matrix_root_sha256": _H, "artifact_root_sha256": _H,
-             "feature_contract_sha256": _H, "dataset_metadata_sha256": _H,
-             "processor_parity_sha256": _H}
+    from lerobot_coreai.signed_evidence import (
+        build_evidence_statement, certificate_root_sha256, sign_statement,
+    )
+    cert = _official_eval_certificate()
+    root = certificate_root_sha256(cert)
+    roots = {"artifact_root_sha256": _H, "feature_contract_sha256": _H,
+             "dataset_metadata_sha256": _H, "processor_parity_sha256": _H}
     st = build_evidence_statement(certificate_type="official_eval",
-                                  certificate_root_sha256=_H, roots=roots,
+                                  certificate_root_sha256=root, roots=roots,
                                   issuer="lerobot-coreai-release-ci", issued_at=_NOW)
     env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
-    return as_verified_official_eval_env(env, vtp)
-
-
-def as_verified_official_eval_env(env, vtp):
-    return as_verified_signed_official_eval(env, trust_policy=vtp, now=_NOW)
+    return as_verified_signed_official_eval(env, certificate=cert, trust_policy=vtp,
+                                            now=_NOW)
 
 
 def _verified_conversion():
@@ -128,6 +154,30 @@ def test_captured_identity_is_schema_valid():
     import jsonschema
     idy = capture_apple_runtime_identity(coreai_runner_version="coreai-runner.v2")
     jsonschema.validate(idy, APPLE_RUNTIME_IDENTITY_SCHEMA)
+
+
+def test_capture_reflects_real_host():
+    # P1.7: on macOS the fields are read from the real host (sysctl/sw_vers); on a
+    # non-Apple host the Apple-specific fields are null so the gate can never pass.
+    import platform
+    idy = capture_apple_runtime_identity()
+    if platform.system() == "Darwin":
+        assert idy["software"]["macos_version"] is not None
+        assert idy["hardware"]["chip"] is not None          # sysctl brand string
+        assert idy["hardware"]["memory_bytes"] is not None
+    else:
+        assert idy["software"]["macos_version"] is None
+        assert idy["hardware"]["chip"] is None
+
+
+def test_capture_hashes_real_aimodel_path(tmp_path):
+    # P1.7: a real .aimodel PATH is hashed from bytes (no free-arg hash trust).
+    p = tmp_path / "model.aimodel"
+    p.write_bytes(b"coreai-model-bytes")
+    idy = capture_apple_runtime_identity(aimodel_path=str(p))
+    import hashlib
+    expected = "sha256:" + hashlib.sha256(b"coreai-model-bytes").hexdigest()
+    assert idy["model"]["aimodel_sha256"] == expected
 
 
 # --- diagnostic builder NEVER certifies (P0.2) ---
@@ -235,3 +285,100 @@ def test_physical_safety_and_task_success_always_false():
     assert cert["claims"]["proves_physical_safety"] is False
     assert cert["claims"]["proves_real_robot_task_success"] is False
     assert cert["claims"]["proves_general_apple_compatibility"] is False
+
+
+# --- v1.3.26.11 provenance closures ---
+
+def test_apple_cross_binding_mismatch_refused():
+    # the runner executed a DIFFERENT .aimodel than the conversion/identity/official-eval
+    # bound → provenance contradiction → promotion refused (P0.5).
+    idy = _apple_identity()
+    idy["model"]["aimodel_sha256"] = "sha256:" + "d" * 64      # different artifact
+    with pytest.raises(AuthorityError):
+        promote_apple_runtime_certificate(identity=idy, **_verified_receipts())
+
+
+def test_official_anchor_rejects_dev_key():
+    from lerobot_coreai.signed_evidence import (
+        OFFICIAL_ALLOWED_ISSUERS, OFFICIAL_TRUST_POLICY_ID, TRUST_POLICY_SCHEMA_VERSION,
+        generate_keypair,
+    )
+    key = generate_keypair(dev=True)
+    policy = {"schema_version": TRUST_POLICY_SCHEMA_VERSION,
+              "policy_id": OFFICIAL_TRUST_POLICY_ID,
+              "allowed_issuers": list(OFFICIAL_ALLOWED_ISSUERS),
+              "trusted_keys": [{"key_id": key["key_id"],
+                                "public_key_hex": key["public_key_hex"],
+                                "valid_from": None, "valid_until": None, "revoked": False,
+                                "dev": True,        # a dev key
+                                "allowed_certificate_types": ["official_eval"]}],
+              "require_unexpired": True, "minimum_evidence_grade": "certificate",
+              "required_claims_false": ["proves_physical_safety"]}
+    with pytest.raises(AuthorityError):
+        as_verified_official_trust_policy(policy)
+
+
+def test_official_anchor_rejects_wrong_policy_id():
+    from lerobot_coreai.signed_evidence import (
+        OFFICIAL_ALLOWED_ISSUERS, TRUST_POLICY_SCHEMA_VERSION, generate_keypair,
+    )
+    key = generate_keypair(dev=False)
+    policy = {"schema_version": TRUST_POLICY_SCHEMA_VERSION,
+              "policy_id": "attacker-self-signed",       # not the pinned anchor
+              "allowed_issuers": list(OFFICIAL_ALLOWED_ISSUERS),
+              "trusted_keys": [{"key_id": key["key_id"],
+                                "public_key_hex": key["public_key_hex"],
+                                "valid_from": None, "valid_until": None, "revoked": False,
+                                "dev": False,
+                                "allowed_certificate_types": ["official_eval"]}],
+              "require_unexpired": True, "minimum_evidence_grade": "certificate",
+              "required_claims_false": ["proves_physical_safety"]}
+    with pytest.raises(AuthorityError):
+        as_verified_official_trust_policy(policy)
+
+
+def test_signed_official_eval_requires_matching_certificate_bytes():
+    from lerobot_coreai.signed_evidence import (
+        build_evidence_statement, sign_statement,
+    )
+    from lerobot_coreai.signed_evidence import generate_keypair
+    key = generate_keypair(dev=False)
+    vtp = _verified_trust_policy(key)
+    cert = _official_eval_certificate()
+    # sign a statement whose root does NOT match the certificate bytes.
+    st = build_evidence_statement(
+        certificate_type="official_eval", certificate_root_sha256="sha256:" + "e" * 64,
+        roots={"artifact_root_sha256": _H, "feature_contract_sha256": _H,
+               "dataset_metadata_sha256": _H, "processor_parity_sha256": _H},
+        issuer="lerobot-coreai-release-ci", issued_at=_NOW)
+    env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
+    with pytest.raises(AuthorityError):
+        as_verified_signed_official_eval(env, certificate=cert, trust_policy=vtp, now=_NOW)
+
+
+def test_signed_official_eval_rejects_uncertified_certificate():
+    from lerobot_coreai.official_eval_certificate import (
+        build_diagnostic_official_eval_report,
+    )
+    from lerobot_coreai.signed_evidence import (
+        build_evidence_statement, certificate_root_sha256, generate_keypair,
+        sign_statement,
+    )
+    key = generate_keypair(dev=False)
+    vtp = _verified_trust_policy(key)
+    diag = build_diagnostic_official_eval_report(
+        scope={"lerobot_version": None, "lerobot_distribution_sha256": _H,
+               "environment": "coreai_cert_env", "cases": []},
+        inputs={"artifact_root_sha256": _H}, checks={},
+        execution={"argv": ["pytest"], "command_sha256": _H,
+                   "resolved_config_sha256": _H, "output_tree_sha256": _H,
+                   "exit_code": 0})
+    st = build_evidence_statement(
+        certificate_type="official_eval",
+        certificate_root_sha256=certificate_root_sha256(diag),
+        roots={"artifact_root_sha256": _H, "feature_contract_sha256": _H,
+               "dataset_metadata_sha256": _H, "processor_parity_sha256": _H},
+        issuer="lerobot-coreai-release-ci", issued_at=_NOW)
+    env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
+    with pytest.raises(AuthorityError):        # diagnostic cert never a signed authority
+        as_verified_signed_official_eval(env, certificate=diag, trust_policy=vtp, now=_NOW)

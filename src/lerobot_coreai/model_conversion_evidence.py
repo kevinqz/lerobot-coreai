@@ -188,7 +188,11 @@ def verify_model_conversion_evidence(
             errors.append("reference_outputs hash mismatch")
         if _output_hash(cand) != np_block["candidate_outputs_sha256"]:
             errors.append("candidate_outputs hash mismatch")
-        _, ok, reasons = _parity(ref, cand, np_block["tolerance"])
+        metrics, ok, reasons = _parity(ref, cand, np_block["tolerance"])
+        # P1.1: compare the full recomputed metrics block, not just the pass flag — a
+        # forged metric with a consistent verdict is caught.
+        if metrics != np_block["metrics"]:
+            errors.append("recomputed metrics != recorded metrics (tamper)")
         if ok != np_block["passed"]:
             errors.append(f"recomputed parity {ok} != recorded {np_block['passed']} "
                           f"({reasons})")
@@ -199,6 +203,11 @@ def verify_model_conversion_evidence(
             errors.append("certificate grade requires a replay_bundle (raw arrays)")
         else:
             _replay(bundle["reference_outputs"], bundle["candidate_outputs"])
+            # P1.1: reference_inputs digest is re-derived from the bundle when present.
+            rin = bundle.get("reference_inputs")
+            recomputed = canonical_json_sha256(rin) if rin is not None else None
+            if recomputed != np_block["reference_inputs_sha256"]:
+                errors.append("reference_inputs hash mismatch (tamper)")
     if reference_outputs is not None and candidate_outputs is not None:
         _replay(reference_outputs, candidate_outputs)
     return (not errors), errors

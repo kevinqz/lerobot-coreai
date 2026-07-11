@@ -188,6 +188,23 @@ def sign_statement(statement: dict, *, private_key_hex: str, key_id: str) -> dic
 
 # MARK: - trust policy + verify
 
+# The pinned OFFICIAL trust anchor (v1.3.26.11). A certificate-grade high claim may be
+# promoted only under a policy that matches this anchor's identity AND carries no dev
+# key. In a real protected release, `OFFICIAL_TRUST_POLICY_SHA256` is additionally
+# pinned to the exact policy bytes committed in the release environment; here we pin the
+# anchor IDENTITY (policy_id + allowed issuers) so provenance authority no longer comes
+# from a caller-supplied, self-signed policy.
+OFFICIAL_TRUST_POLICY_ID = "coreai-official-release.v1"
+OFFICIAL_ALLOWED_ISSUERS = ("lerobot-coreai-release-ci",)
+
+
+def certificate_root_sha256(certificate: dict) -> str:
+    """The canonical content root of a certificate's bytes — what a signed statement's
+    subject must equal (v1.3.26.11 cross-binding). Prefixed `sha256:` to match the
+    predicate root format."""
+    return "sha256:" + _sha256_hex(_canonical_bytes(certificate))
+
+
 TRUST_POLICY_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
@@ -205,6 +222,8 @@ TRUST_POLICY_SCHEMA = {
                 "valid_from": {"type": ["string", "null"]},
                 "valid_until": {"type": ["string", "null"]},
                 "revoked": {"type": "boolean"},
+                # a dev key is development-scoped; an OFFICIAL anchor refuses it.
+                "dev": {"type": "boolean"},
                 "allowed_certificate_types": {"type": "array",
                                               "items": {"enum": list(CERTIFICATE_TYPES)}}}}},
         "require_unexpired": {"type": "boolean"},
@@ -303,8 +322,14 @@ def verify_signed_evidence(dsse_envelope: dict, *, trust_policy: dict, now: str,
             reasons.append("issued before key valid_from")
         if vu is not None and now_dt > vu:
             reasons.append("key expired")
+        # a non-null but unparseable expires_at must FAIL, not be treated as "no expiry".
+        if pred.get("expires_at") and exp is None:
+            reasons.append("expires_at is malformed")
         if exp is not None and now_dt >= exp:
             reasons.append("certificate expired (replay)")
+        # a certificate may not outlive the key that signed it.
+        if exp is not None and vu is not None and exp > vu:
+            reasons.append("certificate expires after key valid_until")
         if exp is not None and issued_dt is not None and \
                 (exp - issued_dt) > _dt.timedelta(seconds=MAX_CERTIFICATE_TTL_SECONDS):
             reasons.append("certificate TTL exceeds policy maximum")

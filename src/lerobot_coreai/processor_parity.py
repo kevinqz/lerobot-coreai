@@ -26,7 +26,21 @@ PROCESSOR_PARITY_REPORT_SCHEMA = {
         "dataset_metadata_sha256": {"type": ["string", "null"]},
         "feature_contract_sha256": {"type": ["string", "null"]},
         "processor_stage_contract_sha256": {"type": ["string", "null"]},
-        "cases": {"type": "array"},
+        "cases": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["feature_id", "source_stage", "target_stage", "mode", "metrics",
+                         "thresholds", "reference_sha256", "candidate_sha256", "passed",
+                         "reasons"],
+            "properties": {
+                "feature_id": {"type": "string"}, "source_stage": {"type": "string"},
+                "target_stage": {"type": "string"},
+                "mode": {"enum": ["exact", "numeric"]},     # closed (no implicit numeric)
+                "metrics": {"type": "object"}, "thresholds": {"type": "object"},
+                "reference_sha256": _SHA256, "candidate_sha256": _SHA256,
+                "passed": {"type": "boolean"},
+                "reasons": {"type": "array", "items": {"type": "string"}},
+                # raw arrays present only in certificate grade (for replay).
+                "reference": {}, "candidate": {}}}},
         "passed": {"type": "boolean"},
         "claims": {
             "type": "object", "additionalProperties": False,
@@ -51,6 +65,8 @@ class ParityCase:
     thresholds: dict = field(default_factory=dict)   # numeric gates (explicit)
 
     def evaluate(self, *, include_arrays: bool = False) -> dict:
+        if self.mode not in ("exact", "numeric"):
+            raise ValueError(f"unknown parity mode {self.mode!r} (exact|numeric)")
         entry = _evaluate_arrays(self.reference, self.candidate, self.mode,
                                  self.thresholds)
         out = {"feature_id": self.feature_id, "source_stage": self.source_stage,

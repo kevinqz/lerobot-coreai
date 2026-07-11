@@ -53,6 +53,45 @@ So no public function accepts booleans to promote, and **no manually-built JSON 
 obtain a true `apple_runtime_certified`** — the gate still also requires the arm64
 Apple identity, which Linux CI can never satisfy.
 
+## Provenance authority (v1.3.26.11)
+
+An earlier review correctly noted that the `Verified*` types had merely **moved**
+self-attestation into the receipts, and that a Python object sealed by a module-private
+token is **type discipline, not a security boundary**. This release closes the
+provenance gap for everything that is deterministic offline:
+
+- **Trust anchor is pinned (P0.6).** A high claim promotes only under
+  `as_verified_official_trust_policy`, which requires the policy to match the pinned
+  official anchor identity (`policy_id` + issuers ⊆ the official set), require
+  certificate grade, and carry **no dev key**. A producer that mints its own key + its
+  own policy is rejected — "verified signature" no longer means "signed by a key the
+  caller chose to trust."
+- **Signatures bind to real certificate bytes (P0.7/WS4).**
+  `as_verified_signed_official_eval` now requires the underlying `OfficialEvalCertificate`,
+  **re-runs its verifier** (must be certificate grade + certified), and cross-binds the
+  signed root to a fresh `certificate_root_sha256` of those bytes. A signature over a
+  bare, unverified root is refused.
+- **Checks are derived from receipt reports (P0.3).** The official-eval receipt carries
+  the executor's own `schema_report` / `replay_report`; the promoter derives its checks
+  from them instead of hardcoding `True`.
+- **Full evidence-graph root closure (P0.4/WS5).** A certified `OfficialEvalCertificate`
+  must bind all eleven roots (artifact, feature, dataset, processor-parity, policy-execution,
+  model-conversion, processor-stage, runtime-support, negotiation, runner-capabilities,
+  rollout-matrix) — **non-null**. The verifier rejects a certified certificate with any
+  null root.
+- **Artifact cross-binding (P0.5).** Apple promotion refuses unless the `.aimodel` the
+  runner executed is the *same* artifact bound by the conversion evidence, the runtime
+  identity, and the certified official-eval (`runtime.aimodel == conversion.artifact ==
+  identity.model == official_eval.artifact_root`). "Certified the wrong artifact" is a
+  hard error.
+
+**Honest limits.** The `Verified*` seal remains a type guard, not authenticity;
+authenticity comes from verified bytes + a trusted executor identity + a signed receipt
++ the pinned trust policy. The two things CI cannot fabricate — a real `lerobot-eval`
+subprocess (WS1) and a real CoreAI Runner + `.aimodel` handshake (WS2) — stay deferred
+to v1.3.27 / v1.4.0; until an executor-owned, signed receipt exists, those receipts are
+built from declared fields and the high claims remain **false** in CI.
+
 ## Reproducible procedure (maintainer, on Apple Silicon)
 
 1. Start the **real** CoreAI Runner on loopback; note its binary sha256 + version.
