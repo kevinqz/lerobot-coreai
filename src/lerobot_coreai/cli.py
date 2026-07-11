@@ -942,11 +942,82 @@ def build_parser() -> argparse.ArgumentParser:
     p_vre.add_argument("--json", action="store_true")
     p_vre.set_defaults(func=cmd_verify_official_rollout_evidence)
 
+    # --- feature-contract (v1.3.24) — stage-bound feature semantics ---
+    p_fc = sub.add_parser("feature-contract",
+                          help="FeatureContract v1: validate / diff (v1.3.24)")
+    fc_sub = p_fc.add_subparsers(dest="fc_command")
+    p_fc_val = fc_sub.add_parser("validate", help="Validate a payload against a contract")
+    p_fc_val.add_argument("--contract", required=True)
+    p_fc_val.add_argument("--input", required=True, help="observation/action payload JSON")
+    p_fc_val.add_argument("--stage", required=True)
+    p_fc_val.add_argument("--symbols", default="", help="e.g. B=4,A=7")
+    p_fc_val.add_argument("--output", default=None, help="write validation report JSON")
+    p_fc_val.add_argument("--json", action="store_true")
+    p_fc_val.set_defaults(func=cmd_feature_contract_validate)
+    p_fc_diff = fc_sub.add_parser("diff", help="Diff two contracts for breaking changes")
+    p_fc_diff.add_argument("--baseline", required=True)
+    p_fc_diff.add_argument("--candidate", required=True)
+    p_fc_diff.add_argument("--fail-on-breaking", action="store_true")
+    p_fc_diff.add_argument("--json", action="store_true")
+    p_fc_diff.set_defaults(func=cmd_feature_contract_diff)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def _parse_symbols(raw: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for tok in (raw or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        k, _, v = tok.partition("=")
+        out[k.strip()] = int(v.strip())
+    return out
+
+
+def cmd_feature_contract_validate(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .feature_contract_reports import build_validation_report, load_feature_contract
+    from .feature_contract_validation import validate_payload_against_feature_contract
+    contract = load_feature_contract(args.contract)
+    with open(args.input) as fh:
+        payload = _json.load(fh)
+    result = validate_payload_against_feature_contract(
+        payload, contract, stage=args.stage, symbols=_parse_symbols(args.symbols))
+    report = build_validation_report(contract, [result])
+    if args.output:
+        with open(args.output, "w") as fh:
+            _json.dump(report, fh, indent=2)
+    if args.json:
+        print(_json.dumps(report, indent=2))
+    else:
+        for f in result.failures:
+            print(f"  ✗ {f}")
+        print(f"feature_contract_verified="
+              f"{report['claims']['feature_contract_verified']}")
+    return 0 if result.ok else 1
+
+
+def cmd_feature_contract_diff(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .feature_contract_diff import diff_feature_contracts
+    from .feature_contract_reports import load_feature_contract
+    d = diff_feature_contracts(load_feature_contract(args.baseline),
+                               load_feature_contract(args.candidate))
+    if args.json:
+        print(_json.dumps(d.to_dict(), indent=2))
+    else:
+        for b in d.breaking:
+            print(f"  BREAKING: {b}")
+        for n in d.non_breaking:
+            print(f"  ok: {n}")
+    return 1 if (d.is_breaking and args.fail_on_breaking) else 0
 
 
 def cmd_verify_official_rollout_evidence(args: argparse.Namespace) -> int:
