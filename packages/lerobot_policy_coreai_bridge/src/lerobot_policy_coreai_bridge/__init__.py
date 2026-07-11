@@ -6,7 +6,7 @@
 # factory. Runtime-only: it does not train. `policy_type="coreai"` is NOT
 # registered — only "coreai_bridge".
 
-__version__ = "1.3.26.5"
+__version__ = "1.3.26.6"
 
 from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 from .modeling_coreai_bridge import CoreAIBridgePolicy
