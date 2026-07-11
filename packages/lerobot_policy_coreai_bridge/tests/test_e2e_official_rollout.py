@@ -256,7 +256,8 @@ def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
         done_mask=tuple(tuple(int(x) for x in r) for r in out["done"].int().tolist()),
         final_action=out["action"].to("cpu").tolist(), required_obs_keys=tuple(_FIXTURE),
         fixture_contract=_FIXTURE, queue_events=tuple(policy.queue_events),
-        negotiation=policy.negotiation_record)
+        negotiation=policy.negotiation_record,
+        runner_capabilities=policy.runner_capabilities_raw)
     ev = evaluate_rollout_measurements(m)
     report = build_rollout_readiness_report(
         ev, m, environment=capture_environment_identity(target),
@@ -342,6 +343,15 @@ def test_matrix_and_offline_verify(tmp_path, monkeypatch):
     d = json.loads(rp.read_text()); d["execution"]["request_count"] = 999
     rp.write_text(json.dumps(d))
     assert not verify_official_rollout_evidence(str(tampered)).ok
+
+    # v1.3.20: tampering the persisted runner capabilities breaks the recomputed
+    # capabilities hash bound in the NegotiationRecord.
+    tampered2 = tmp_path / "tampered-caps"
+    shutil.copytree(ev_dir, tampered2)
+    cp = tampered2 / "single_only-b1" / "runner_capabilities.json"
+    c = json.loads(cp.read_text()); c["protocol_version"] = "coreai-runner.v9"
+    cp.write_text(json.dumps(c))
+    assert not verify_official_rollout_evidence(str(tampered2)).ok
 
 
 def test_missing_case_fails_verify(tmp_path, monkeypatch):

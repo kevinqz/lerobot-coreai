@@ -53,11 +53,12 @@ def _enum(field: str, value: Any, allowed: tuple) -> None:
 
 
 def capabilities_sha256(caps: "RunnerCapabilities") -> str:
-    """A canonical, order-stable fingerprint of a runner's announced capabilities."""
-    import hashlib as _hashlib
+    """A canonical, order-stable fingerprint of a runner's announced capabilities.
 
-    canon = json.dumps(caps.raw or {}, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + _hashlib.sha256(canon.encode()).hexdigest()
+    Delegates to the base helper so the offline verifier recomputes the SAME hash
+    from the persisted ``runner_capabilities.json`` (v1.3.20, P1.3)."""
+    from .rollout_evidence_schema import capabilities_sha256_from_raw
+    return capabilities_sha256_from_raw(caps.raw or {})
 
 
 class RunnerClient:

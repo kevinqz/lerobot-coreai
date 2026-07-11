@@ -84,7 +84,9 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._rollout_step: int = 0
         self._pops_since_commit: int = 0
         self._pending_responses: list[str] = []
+        self._open_requests: int = 0
         self.negotiation_record: dict[str, Any] | None = None
+        self.runner_capabilities_raw: dict[str, Any] | None = None
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self.last_batch_mode: str | None = None
@@ -162,18 +164,22 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         return self._protocol
 
     def _build_negotiation_record(self, caps: Any, proto: Any) -> None:
-        """Persist the NegotiationRecord v1 (v1.3.19, P1.14): the negotiated protocol
-        + encoding, bound to the runner's announced capabilities. The offline
-        verifier requires every request's options to equal this record."""
+        """Persist the NegotiationRecord v2 (v1.3.20, P1.2/P1.4): the negotiated
+        protocol + encoding, the selection policy, and the runner's declared
+        backward-compatibility list + announced capabilities. The offline verifier
+        RE-RUNS the negotiation algorithm from these inputs and requires equality."""
         from lerobot_coreai.rollout_evidence_schema import (
             NEGOTIATION_SCHEMA_VERSION, canonical_json_sha256)
         from lerobot_coreai.runner import capabilities_sha256
         rec = {
             "schema_version": NEGOTIATION_SCHEMA_VERSION,
+            "selection_policy": "minimum_compatible",
             "requested_protocol": None,
             "minimum_protocol": self.config.minimum_runner_protocol,
             "runner_protocol": getattr(caps, "protocol_version", None)
             or self.config.minimum_runner_protocol,
+            "runner_backward_compatible_with": list(
+                getattr(caps, "backward_compatible_with", ()) or ()),
             "negotiated_protocol": proto.protocol_version,
             "requested_encoding": self.config.observation_encoding,
             "runner_encodings": list(getattr(caps, "observation_encodings", ())
@@ -183,6 +189,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         }
         rec["record_sha256"] = canonical_json_sha256(rec)
         self.negotiation_record = rec
+        self.runner_capabilities_raw = dict(getattr(caps, "raw", {}) or {})
 
     # MARK: - Official runtime binding
 
@@ -349,6 +356,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._rollout_step = 0
         self._pops_since_commit = 0
         self._pending_responses = []
+        self._open_requests = 0
         self._active_prediction_id = None
         self._active_chunk_id = None
         self._execution_id = run_id
@@ -356,18 +364,29 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._emit("execution.started")
 
     def end_evidence_session(self) -> None:
-        """Seal the session. Rejects end-without-begin / double-end (P1.8). Declares
-        any actions still cached in the queue as unused (P1.11)."""
+        """Seal the session. Rejects end-without-begin / double-end (P1.8).
+
+        v1.3.20: the producer now fail-fasts on an inconsistent terminal state — an
+        open request or a pending (validated-but-uncommitted) chunk emits
+        ``execution.failed`` and raises, and NEVER an invalid ``execution.completed``
+        (P1.10). Completion ALWAYS declares termination_reason + unused_action_count
+        + unused_action_sha256s, even when zero (P1.11)."""
         if self._session_state != "ACTIVE":
             raise PluginBindingError(
                 "end_evidence_session called without an active session.")
-        extra: dict[str, Any] = {}
+        if self._open_requests:
+            self._emit("execution.failed", failed_stage="response",
+                       detail=f"{self._open_requests} request(s) without a response")
+            self.record_queue_events = False
+            self._session_state = "IDLE"
+            raise PluginBindingError(
+                "cannot seal an execution with open runner requests.")
         cached = len(self._queue)
-        if cached:
-            hashes = [_action_sha256(a) for a in self._queue]
-            extra = {"unused_action_count": cached, "unused_action_sha256s": hashes,
-                     "termination_reason": "rollout_complete_with_cached_actions"}
-        self._emit("execution.completed", **extra)
+        hashes = [_action_sha256(a) for a in self._queue] if cached else []
+        reason = ("rollout_complete_with_cached_actions" if cached
+                  else "rollout_completed_queue_empty")
+        self._emit("execution.completed", termination_reason=reason,
+                   unused_action_count=cached, unused_action_sha256s=hashes)
         self.record_queue_events = False
         self._session_state = "IDLE"
 
@@ -426,6 +445,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                else f"{cid}/native")
         self._emit("runner.request_started", prediction_id=self._active_prediction_id,
                    chunk_id=cid, request_id=rid, sample_index=sample_index)
+        self._open_requests += 1
         raw = fn(*args, **kwargs)
         if self.record_queue_events:
             from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
@@ -434,6 +454,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             self._emit("runner.response_received",
                        prediction_id=self._active_prediction_id, chunk_id=cid,
                        request_id=rid, sample_index=sample_index, response_sha256=sha)
+        self._open_requests -= 1
         return raw
 
     def _predict_single_chunk(self, batch, proto) -> torch.Tensor:

@@ -67,10 +67,14 @@ def capture_environment_identity(target: str) -> dict[str, Any]:
         "repository_head_sha": os.environ.get("GITHUB_SHA"),
         "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
         "workflow_job": os.environ.get("GITHUB_JOB"),
-        "source_head_sha": os.environ.get("GITHUB_SHA"),
-        "base_sha": os.environ.get("GITHUB_BASE_SHA") or os.environ.get("GITHUB_BASE_REF"),
-        "merge_sha": os.environ.get("GITHUB_MERGE_SHA"),
-        "workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"),
+        # v1.3.20 (P1.12): the workflow resolves these EXACTLY via dedicated env vars
+        # — GITHUB_SHA is a synthetic merge commit on PRs, and GITHUB_BASE_REF is a
+        # branch name, not a SHA — so we prefer the explicit COREAI_* values.
+        "source_head_sha": os.environ.get("COREAI_SOURCE_HEAD_SHA")
+        or os.environ.get("GITHUB_SHA"),
+        "base_sha": os.environ.get("COREAI_BASE_SHA"),
+        "merge_sha": os.environ.get("COREAI_MERGE_SHA") or os.environ.get("GITHUB_SHA"),
+        "workflow_sha": os.environ.get("COREAI_WORKFLOW_SHA"),
         "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "runner_image": os.environ.get("ImageOS") or os.environ.get("RUNNER_OS"),
     }
@@ -94,6 +98,7 @@ class RolloutMeasurements:
     fixture_contract: dict = field(default_factory=dict)   # {key: expected per-sample shape}
     queue_events: tuple[dict, ...] = ()
     negotiation: dict | None = None                        # persisted NegotiationRecord
+    runner_capabilities: dict | None = None                # normalized announced caps
 
     def to_raw(self) -> dict:
         """Canonical, replayable raw record (persisted as measurements.json)."""
@@ -245,9 +250,13 @@ def write_evidence_bundle(out_dir: str, report: dict, measurements: RolloutMeasu
                                          measurements.response_bodies)):
             fh.write(json.dumps({"index": j, "request_sha256": canonical_json_sha256(rq),
                                  "response_sha256": canonical_json_sha256(rs)}) + "\n")
+    # v1.3.20 (P1.3): persist the normalized announced capabilities so the verifier
+    # can recompute the hash bound in the NegotiationRecord OFFLINE.
+    (out / "runner_capabilities.json").write_text(
+        json.dumps(measurements.runner_capabilities or {}, indent=2, sort_keys=True))
     content = ["official_rollout_readiness_report.json",
                "official_rollout_readiness_report.md", "official_rollout_trace.jsonl",
-               "measurements.json"]
+               "measurements.json", "runner_capabilities.json"]
     files = {f: _sha256_file(out / f) for f in content}
     bundle_root = canonical_json_sha256(sorted(files.items()))
     manifest = {"schema_version": BUNDLE_MANIFEST_SCHEMA_VERSION,
@@ -281,18 +290,19 @@ def write_failure_evidence(
     )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    exec_id = execution_id or f"failed-{case}"     # shared across report + envelope + trace
     report = {
         "schema_version": FAILURE_REPORT_SCHEMA_VERSION, "case": case,
         "target": target, "failed_stage": failed_stage,
         "exception_type": exception_type, "message": message[:2000],
-        "execution_id": execution_id,
+        "execution_id": exec_id,
         "claims": {"official_rollout_pipeline_smoke_passed": False,
                    "official_eval_certified": False, "authenticity_verified": False,
                    "proves_task_success": False, "proves_physical_safety": False}}
     jsonschema.validate(report, FAILURE_REPORT_SCHEMA)
     envelope = {
         "schema_version": EXECUTION_ENVELOPE_SCHEMA_VERSION,
-        "execution_id": execution_id or f"failed-{case}", "case": case,
+        "execution_id": exec_id, "case": case,
         "target": target, "mode": mode, "batch_size": batch_size,
         "status": status if status in ("failed", "aborted") else "failed",
         "negotiation_sha256": negotiation_sha256, "termination_reason": failed_stage}
@@ -301,9 +311,23 @@ def write_failure_evidence(
     (out / "failure_report.json").write_text(json.dumps(report, indent=2))
     (out / "execution_envelope.json").write_text(json.dumps(envelope, indent=2))
     (out / "environment_identity.json").write_text(
-        json.dumps(environment or {"target": target}, indent=2))
+        json.dumps(environment or capture_environment_identity(target), indent=2))
+    # v1.3.20 (P1.8): the partial trace must END with a terminal failure event that
+    # names the same failed_stage + execution_id as the report/envelope, so the
+    # causal trace demonstrably terminated at that failure.
+    events = list(partial_events)
+    exec_id = envelope["execution_id"]
+    terminal = "execution.aborted" if status == "aborted" else "execution.failed"
+    if not events or events[-1].get("event") not in ("execution.failed",
+                                                      "execution.aborted"):
+        events.append({
+            "event_index": events[-1]["event_index"] + 1 if events else 0,
+            "event": terminal, "execution_id": exec_id,
+            "relative_monotonic_ns": (events[-1].get("relative_monotonic_ns", 0) + 1
+                                      if events else 0),
+            "failed_stage": failed_stage})
     with open(out / "partial_trace.jsonl", "w") as fh:
-        for e in partial_events:
+        for e in events:
             fh.write(json.dumps(e) + "\n")
     content = ["failure_report.json", "execution_envelope.json",
                "environment_identity.json", "partial_trace.jsonl"]

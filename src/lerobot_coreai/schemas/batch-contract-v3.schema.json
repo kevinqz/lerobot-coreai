@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lerobot-coreai/batch-contract-v3",
+  "title": "CoreAI BatchContract v3",
+  "description": "The single canonical schema for the v3 batch contract (native_batch and client_split modeled apart). All consumers — manifest parser, plugin artifact, runtime, artifact verifier, evidence verifier, tests — validate against THIS file (v1.3.20).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "native_batch", "client_split", "fallback", "queue"],
+  "properties": {
+    "schema_version": {"const": "coreai-batch-contract.v3"},
+    "native_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "max_batch_size", "required_slot_isolation"],
+      "properties": {
+        "supported": {"type": "boolean"},
+        "max_batch_size": {"type": "integer", "minimum": 1},
+        "required_slot_isolation": {"enum": ["independent", "shared", "unknown"]}
+      }
+    },
+    "client_split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "max_batch_size", "allowed_state_scopes"],
+      "properties": {
+        "supported": {"type": "boolean"},
+        "max_batch_size": {"type": "integer", "minimum": 1},
+        "allowed_state_scopes": {
+          "type": "array",
+          "items": {"enum": ["stateless", "request_scoped", "session_scoped", "global"]}
+        }
+      }
+    },
+    "fallback": {"enum": ["split_and_stack", "reject"]},
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layout", "commit_semantics"],
+      "properties": {
+        "layout": {"enum": ["time_major_batched"]},
+        "commit_semantics": {"enum": ["atomic_queue_commit"]}
+      }
+    },
+    "observation_stage": {"type": "string"}
+  }
+}

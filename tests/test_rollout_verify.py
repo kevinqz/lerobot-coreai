@@ -110,7 +110,8 @@ def _valid_events():
             selected_action_sha256=_SEL_H,
             queue_size_before=3 - b, queue_size_after=2 - b)
     add("queue.exhausted", queue_size_after=0)
-    add("execution.completed")
+    add("execution.completed", termination_reason="rollout_completed_queue_empty",
+        unused_action_count=0, unused_action_sha256s=[])
     return ev
 
 
@@ -224,9 +225,11 @@ def test_reset_abort_requires_discard_evidence():
 def test_negotiation_binding_rejects_mismatched_request_options():
     from lerobot_coreai.rollout_replay import derive_checks
     raw = _raw_with_events(_valid_events())
-    neg = {"schema_version": "lerobot-coreai.negotiation_record.v1",
-           "requested_protocol": None, "minimum_protocol": "coreai-runner.v2",
-           "runner_protocol": "coreai-runner.v2", "negotiated_protocol": "coreai-runner.v2",
+    neg = {"schema_version": "lerobot-coreai.negotiation_record.v2",
+           "selection_policy": "minimum_compatible", "requested_protocol": None,
+           "minimum_protocol": "coreai-runner.v2", "runner_protocol": "coreai-runner.v2",
+           "runner_backward_compatible_with": [],
+           "negotiated_protocol": "coreai-runner.v2",
            "requested_encoding": "nested_json_v1", "runner_encodings": ["nested_json_v1"],
            "negotiated_encoding": "nested_json_v1",
            "runner_capabilities_sha256": "sha256:" + "d" * 64}
@@ -241,9 +244,11 @@ def test_negotiation_binding_rejects_mismatched_request_options():
 
 def test_negotiation_record_tamper_detected():
     from lerobot_coreai.rollout_replay import _negotiation_ok
-    neg = {"schema_version": "lerobot-coreai.negotiation_record.v1",
-           "requested_protocol": None, "minimum_protocol": "coreai-runner.v2",
-           "runner_protocol": "coreai-runner.v2", "negotiated_protocol": "coreai-runner.v2",
+    neg = {"schema_version": "lerobot-coreai.negotiation_record.v2",
+           "selection_policy": "minimum_compatible", "requested_protocol": None,
+           "minimum_protocol": "coreai-runner.v2", "runner_protocol": "coreai-runner.v2",
+           "runner_backward_compatible_with": [],
+           "negotiated_protocol": "coreai-runner.v2",
            "requested_encoding": "nested_json_v1", "runner_encodings": ["nested_json_v1"],
            "negotiated_encoding": "nested_json_v1",
            "runner_capabilities_sha256": "sha256:" + "d" * 64}
