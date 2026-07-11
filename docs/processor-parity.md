@@ -29,8 +29,17 @@ against a shared buggy implementation (RFC §18.3).
 `build_processor_parity_report` evaluates each `ParityCase` and promotes
 `processor_parity_verified` only when every case passes; `model_output_parity_verified`
 stays false (model/policy output parity is a later, separate proof).
-`verify_processor_parity_report` re-checks, offline, that each case's pass flag is
-consistent with its reasons and the top-level claim — a forged `passed` flag fails.
+
+### Independent replay (v1.3.26.10, P1.1)
+
+The report carries an `evidence_grade`. In **certificate** grade (the default) each case
+persists its **raw reference/candidate arrays**, and `verify_processor_parity_report`
+**re-derives** every case's metrics, array hashes, and pass/fail from those arrays — an
+independent replay, not merely an internal-consistency check. A report that is
+self-consistent (its `passed` flag agrees with its `reasons`) but whose recorded
+**metrics** were forged is now caught, because a fresh recomputation from the raw arrays
+won't match. A tampered raw value breaks the array hash. **diagnostic** grade omits the
+arrays and enforces consistency only.
 
 ## Save/reload
 

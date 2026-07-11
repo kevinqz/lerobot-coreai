@@ -155,6 +155,58 @@ def test_report_tamper_detected():
     assert not ok
 
 
+# --- P1.1: certificate-grade independent replay ---
+
+def test_certificate_grade_persists_arrays_and_replays():
+    ref = apply_operations(_HWC, [{"op": "permute", "order": [2, 0, 1]}])
+    cand = _reference_hwc_to_chw(_HWC)
+    report = build_processor_parity_report(
+        [ParityCase("f", "a", "b", "exact", ref, cand)])       # default = certificate
+    assert report["evidence_grade"] == "certificate"
+    c0 = report["cases"][0]
+    assert c0["reference"] == ref and c0["candidate"] == cand   # raw arrays persisted
+    ok, errs = verify_processor_parity_report(report)
+    assert ok, errs
+
+
+def test_certificate_grade_metrics_tamper_detected_by_replay():
+    # a report can be self-consistent (passed matches reasons) yet have FORGED metrics;
+    # certificate-grade replay recomputes from the raw arrays and catches it.
+    ref = [[0.0, 0.0]]
+    cand = [[10.0, 10.0]]                                       # clearly far apart
+    report = build_processor_parity_report(
+        [ParityCase("f", "a", "b", "numeric", ref, cand,
+                    thresholds={"max_abs_error": 1e-6})])
+    assert report["passed"] is False
+    # forge the case to look passing AND self-consistent (empty reasons).
+    report["cases"][0]["passed"] = True
+    report["cases"][0]["reasons"] = []
+    report["passed"] = True
+    report["claims"]["processor_parity_verified"] = True
+    ok, errs = verify_processor_parity_report(report)
+    assert not ok and any("verdict" in e or "metrics" in e for e in errs)
+
+
+def test_certificate_grade_array_tamper_detected_by_replay():
+    ref = apply_operations(_HWC, [{"op": "permute", "order": [2, 0, 1]}])
+    cand = _reference_hwc_to_chw(_HWC)
+    report = build_processor_parity_report([ParityCase("f", "a", "b", "exact", ref, cand)])
+    report["cases"][0]["candidate"][0][0][0] = 999             # tamper a raw value
+    ok, errs = verify_processor_parity_report(report)
+    assert not ok and any("hash mismatch" in e or "verdict" in e for e in errs)
+
+
+def test_diagnostic_grade_omits_arrays():
+    ref = apply_operations(_HWC, [{"op": "permute", "order": [2, 0, 1]}])
+    cand = _reference_hwc_to_chw(_HWC)
+    report = build_processor_parity_report(
+        [ParityCase("f", "a", "b", "exact", ref, cand)], evidence_grade="diagnostic")
+    assert report["evidence_grade"] == "diagnostic"
+    assert "reference" not in report["cases"][0]
+    ok, errs = verify_processor_parity_report(report)      # consistency-only, still ok
+    assert ok, errs
+
+
 def test_shape_mismatch_metrics():
     m = compute_parity_metrics([[1.0, 2.0]], [[1.0, 2.0, 3.0]])
     assert not m.shape_match and m.max_abs_error == float("inf")

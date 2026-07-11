@@ -20,10 +20,16 @@ _NE_STR = {"type": "string", "minLength": 1}
 MODEL_CONVERSION_EVIDENCE_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "source", "exporter", "export_configuration_sha256",
-                 "artifact", "numeric_parity", "claims"],
+    "required": ["schema_version", "evidence_grade", "source", "exporter",
+                 "export_configuration_sha256", "artifact", "numeric_parity", "claims"],
     "properties": {
         "schema_version": {"const": MODEL_CONVERSION_EVIDENCE_SCHEMA_VERSION},
+        "evidence_grade": {"enum": ["diagnostic", "certificate"]},
+        "replay_bundle": {"anyOf": [{"type": "null"}, {
+            "type": "object", "additionalProperties": False,
+            "required": ["reference_outputs", "candidate_outputs"],
+            "properties": {"reference_inputs": {},
+                           "reference_outputs": {}, "candidate_outputs": {}}}]},
         "source": {
             "type": "object", "additionalProperties": False,
             "required": ["repository", "revision", "weights_sha256"],
@@ -114,13 +120,26 @@ def build_model_conversion_evidence(
     *, source: dict, exporter: dict, export_configuration: dict, artifact: dict,
     reference_outputs, candidate_outputs, tolerance: dict,
     operator_coverage: list | None = None, quantization: dict | None = None,
-    reference_inputs=None,
+    reference_inputs=None, evidence_grade: str = "certificate",
 ) -> dict:
     """Assemble conversion evidence. model_conversion_verified is true ONLY when the
-    identity chain is complete AND numeric parity passes within the tolerance."""
+    identity chain is complete AND numeric parity passes within the tolerance. In
+    ``certificate`` grade (default) the raw reference/candidate arrays are persisted as
+    a ``replay_bundle`` so the verifier can RE-DERIVE parity offline (P1.3); the claim
+    is promoted only in certificate grade. ``diagnostic`` grade omits the bundle and
+    never promotes the claim."""
+    if evidence_grade not in ("diagnostic", "certificate"):
+        raise ValueError(f"unknown evidence_grade {evidence_grade!r}")
+    certificate = evidence_grade == "certificate"
     metrics, parity_ok, _ = _parity(reference_outputs, candidate_outputs, tolerance)
+    verified = bool(parity_ok and certificate)     # diagnostic never promotes
     ev = {
         "schema_version": MODEL_CONVERSION_EVIDENCE_SCHEMA_VERSION,
+        "evidence_grade": evidence_grade,
+        "replay_bundle": ({"reference_inputs": reference_inputs,
+                           "reference_outputs": reference_outputs,
+                           "candidate_outputs": candidate_outputs}
+                          if certificate else None),
         "source": source, "exporter": exporter,
         "export_configuration_sha256": canonical_json_sha256(export_configuration),
         "operator_coverage": list(operator_coverage or []),
@@ -132,7 +151,7 @@ def build_model_conversion_evidence(
             "reference_outputs_sha256": _output_hash(reference_outputs),
             "candidate_outputs_sha256": _output_hash(candidate_outputs),
             "tolerance": dict(tolerance), "metrics": metrics, "passed": parity_ok},
-        "claims": {"model_conversion_verified": parity_ok,
+        "claims": {"model_conversion_verified": verified,
                    "numeric_parity_verified": parity_ok,
                    "proves_task_success": False, "proves_physical_safety": False},
     }
@@ -144,9 +163,11 @@ def build_model_conversion_evidence(
 def verify_model_conversion_evidence(
     evidence: dict, *, reference_outputs=None, candidate_outputs=None,
 ) -> tuple[bool, list]:
-    """Offline: schema-valid + claim consistent with recorded parity. If the raw
-    reference/candidate arrays are supplied, the recorded hashes + metrics + pass flag
-    are RE-DERIVED from them (independent re-proof, not just internal consistency)."""
+    """Offline. In ``certificate`` grade the raw arrays MUST be persisted in the
+    ``replay_bundle`` and the verifier RE-DERIVES the hashes + metrics + pass flag from
+    them (independent re-proof, not just internal consistency) — a certificate-grade
+    evidence without a bundle, or one whose bundle doesn't reproduce the record, is
+    rejected (P1.3). Externally-supplied arrays, if any, are also cross-checked."""
     import jsonschema
     errors: list[str] = []
     try:
@@ -154,18 +175,30 @@ def verify_model_conversion_evidence(
     except Exception as exc:  # noqa: BLE001
         return False, [f"schema: {exc}"]
     np_block = evidence["numeric_parity"]
-    if evidence["claims"]["model_conversion_verified"] != np_block["passed"]:
-        errors.append("model_conversion_verified inconsistent with numeric parity")
-    if evidence["claims"]["numeric_parity_verified"] != np_block["passed"]:
+    claims = evidence["claims"]
+    certificate = evidence["evidence_grade"] == "certificate"
+    if claims["numeric_parity_verified"] != np_block["passed"]:
         errors.append("numeric_parity_verified inconsistent with numeric parity")
-    if reference_outputs is not None and candidate_outputs is not None:
-        if _output_hash(reference_outputs) != np_block["reference_outputs_sha256"]:
+    # model_conversion_verified may be true ONLY in certificate grade with passing parity
+    if claims["model_conversion_verified"] != (np_block["passed"] and certificate):
+        errors.append("model_conversion_verified inconsistent with grade + numeric parity")
+
+    def _replay(ref, cand):
+        if _output_hash(ref) != np_block["reference_outputs_sha256"]:
             errors.append("reference_outputs hash mismatch")
-        if _output_hash(candidate_outputs) != np_block["candidate_outputs_sha256"]:
+        if _output_hash(cand) != np_block["candidate_outputs_sha256"]:
             errors.append("candidate_outputs hash mismatch")
-        _, ok, reasons = _parity(reference_outputs, candidate_outputs,
-                                 np_block["tolerance"])
+        _, ok, reasons = _parity(ref, cand, np_block["tolerance"])
         if ok != np_block["passed"]:
             errors.append(f"recomputed parity {ok} != recorded {np_block['passed']} "
                           f"({reasons})")
+
+    if certificate:
+        bundle = evidence.get("replay_bundle")
+        if not bundle:
+            errors.append("certificate grade requires a replay_bundle (raw arrays)")
+        else:
+            _replay(bundle["reference_outputs"], bundle["candidate_outputs"])
+    if reference_outputs is not None and candidate_outputs is not None:
+        _replay(reference_outputs, candidate_outputs)
     return (not errors), errors
