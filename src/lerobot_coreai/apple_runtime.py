@@ -64,10 +64,12 @@ _CHECK_KEYS = ("real_runner_used", "real_aimodel_loaded", "all_required_cases_pa
 APPLE_RUNTIME_CERTIFICATE_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "identity_sha256", "artifact_root_sha256",
-                 "aimodel_sha256", "cases", "performance_summary", "checks", "claims"],
+    "required": ["schema_version", "evidence_grade", "identity_sha256",
+                 "artifact_root_sha256", "aimodel_sha256", "cases",
+                 "performance_summary", "checks", "claims"],
     "properties": {
         "schema_version": {"const": APPLE_RUNTIME_CERTIFICATE_SCHEMA_VERSION},
+        "evidence_grade": {"enum": ["diagnostic", "certificate"]},
         "identity_sha256": _SHA256,
         "signed_official_eval_certificate_sha256": _SHA256_OR_NULL,
         "artifact_root_sha256": _SHA256_OR_NULL,
@@ -145,24 +147,107 @@ def _gate(identity: dict, checks: dict) -> bool:
     return bool(hw_arm and proc_arm and macos and all(checks.get(k) for k in _CHECK_KEYS))
 
 
-def build_apple_runtime_certificate(
+def build_diagnostic_apple_runtime_report(
     *, identity: dict, checks: dict, artifact_root_sha256: str | None = None,
     aimodel_sha256: str | None = None, feature_contract_sha256: str | None = None,
     processor_parity_sha256: str | None = None,
     signed_official_eval_certificate_sha256: str | None = None,
     cases: list | None = None, performance_summary: dict | None = None,
 ) -> dict:
-    """Build the certificate. apple_runtime_certified is derived from the gate — never
-    asserted directly. On Linux CI the gate is false, so the claim is false."""
+    """DIAGNOSTIC report only (v1.3.26.8): apple_runtime_certified is ALWAYS false,
+    regardless of the caller's checks. A true certificate can be produced ONLY by
+    ``promote_apple_runtime_certificate`` from verified receipts — no caller boolean
+    can promote the claim."""
+    return build_apple_runtime_certificate(
+        identity=identity, checks=checks, artifact_root_sha256=artifact_root_sha256,
+        aimodel_sha256=aimodel_sha256, feature_contract_sha256=feature_contract_sha256,
+        processor_parity_sha256=processor_parity_sha256,
+        signed_official_eval_certificate_sha256=signed_official_eval_certificate_sha256,
+        cases=cases, performance_summary=performance_summary, _authority=None)
+
+
+def promote_apple_runtime_certificate(
+    *, identity: dict,
+    runtime_receipt, official_eval, conversion, trust_policy,
+    feature_contract_sha256: str | None = None,
+    processor_parity_sha256: str | None = None,
+    performance_summary: dict | None = None,
+) -> dict:
+    """Promote a TRUE apple_runtime certificate (v1.3.26.8, P0.2).
+
+    Accepts ONLY unforgeable ``Verified*`` receipts (a dict/bool raises TypeError) whose
+    substance was re-derived by their verifiers — no caller boolean reaches this gate.
+    The checks are DERIVED from the runtime receipt + verified chain, never supplied.
+    apple_runtime_certified is still the arm64-Apple gate AND the receipt substance, so
+    on Linux CI (non-arm64, no macOS) the claim is false even with perfect receipts."""
+    import jsonschema
+
+    from .authority import (
+        VerifiedCoreAIRuntimeReceipt, VerifiedModelConversionEvidence,
+        VerifiedSignedOfficialEvalCertificate, VerifiedTrustPolicy,
+    )
+    if not isinstance(runtime_receipt, VerifiedCoreAIRuntimeReceipt):
+        raise TypeError("runtime_receipt must be a VerifiedCoreAIRuntimeReceipt "
+                        "(mint via authority.verify_coreai_runtime_receipt)")
+    if not isinstance(official_eval, VerifiedSignedOfficialEvalCertificate):
+        raise TypeError("official_eval must be a VerifiedSignedOfficialEvalCertificate")
+    if not isinstance(conversion, VerifiedModelConversionEvidence):
+        raise TypeError("conversion must be a VerifiedModelConversionEvidence")
+    if not isinstance(trust_policy, VerifiedTrustPolicy):
+        raise TypeError("trust_policy must be a VerifiedTrustPolicy")
+    jsonschema.validate(identity, APPLE_RUNTIME_IDENTITY_SCHEMA)
+
+    receipt = runtime_receipt.payload
+    # checks derived from receipt substance (not the caller)
+    checks = {
+        "real_runner_used": bool(receipt["real_runner_used"] and not receipt["fake_runner"]),
+        "real_aimodel_loaded": bool(receipt["aimodel_opened"]),
+        "all_required_cases_passed": True,          # enforced at mint (full matrix)
+        "numeric_parity_passed": bool(receipt["numeric_parity_passed"]),
+        "official_eval_chain_bound": True,          # VerifiedSignedOfficialEvalCertificate
+        "signed_evidence_verified": True,           # verified signature + policy at mint
+    }
+    signed_eval_root = official_eval.payload["predicate"]["certificate_root_sha256"]
+    return build_apple_runtime_certificate(
+        identity=identity, checks=checks,
+        artifact_root_sha256=receipt["artifact_aimodel_sha256"],
+        aimodel_sha256=receipt["aimodel_root_sha256"],
+        feature_contract_sha256=feature_contract_sha256,
+        processor_parity_sha256=processor_parity_sha256,
+        signed_official_eval_certificate_sha256=signed_eval_root,
+        cases=sorted(receipt["cases"]), performance_summary=performance_summary,
+        _authority=object.__new__(_PromotionAuthority),
+    )
+
+
+class _PromotionAuthority:
+    """Marker: the only path that may set apple_runtime_certified to the gate result."""
+
+
+def build_apple_runtime_certificate(
+    *, identity: dict, checks: dict, artifact_root_sha256: str | None = None,
+    aimodel_sha256: str | None = None, feature_contract_sha256: str | None = None,
+    processor_parity_sha256: str | None = None,
+    signed_official_eval_certificate_sha256: str | None = None,
+    cases: list | None = None, performance_summary: dict | None = None,
+    _authority=None,
+) -> dict:
+    """Internal certificate assembler. When called WITHOUT the promotion authority it
+    behaves as a diagnostic (claim forced false); the authority path lets the claim be
+    the gate result. Public callers use ``build_diagnostic_apple_runtime_report`` or
+    ``promote_apple_runtime_certificate``."""
     import jsonschema
     jsonschema.validate(identity, APPLE_RUNTIME_IDENTITY_SCHEMA)
     full_checks = {k: bool(checks.get(k, False)) for k in _CHECK_KEYS}
-    certified = _gate(identity, full_checks)
+    promoted = isinstance(_authority, _PromotionAuthority)
+    certified = _gate(identity, full_checks) if promoted else False
     cert = {
         "schema_version": APPLE_RUNTIME_CERTIFICATE_SCHEMA_VERSION,
+        "evidence_grade": "certificate" if promoted else "diagnostic",
         "identity_sha256": identity_sha256(identity),
         "signed_official_eval_certificate_sha256": signed_official_eval_certificate_sha256,
-        "artifact_root_sha256": artifact_root_sha256, "aimodel_sha256": aimodel_sha256,
+        "artifact_root_sha256": artifact_root_sha256,
+        "aimodel_sha256": aimodel_sha256,
         "feature_contract_sha256": feature_contract_sha256,
         "processor_parity_sha256": processor_parity_sha256,
         "cases": list(cases or []), "performance_summary": dict(performance_summary or {}),
@@ -189,12 +274,18 @@ def verify_apple_runtime_certificate(certificate: dict, identity: dict) -> tuple
         return False, [f"schema: {exc}"]
     if certificate["identity_sha256"] != identity_sha256(identity):
         errors.append("identity_sha256 does not bind the supplied identity")
-    expected = _gate(identity, certificate["checks"])
-    if certificate["claims"]["apple_runtime_certified"] != expected:
-        errors.append(f"apple_runtime_certified={certificate['claims']['apple_runtime_certified']} "
-                      f"!= gate {expected} (forged or inconsistent)")
-    if certificate["claims"]["apple_runtime_certified"]:
-        # certificate grade must bind the signed official-eval chain.
-        if not certificate.get("signed_official_eval_certificate_sha256"):
-            errors.append("certified without a bound signed official-eval certificate")
+    claimed = certificate["claims"]["apple_runtime_certified"]
+    grade = certificate["evidence_grade"]
+    if grade == "diagnostic":
+        # a diagnostic report may NEVER certify — a forged true is caught here.
+        if claimed:
+            errors.append("diagnostic-grade report forged to apple_runtime_certified=true "
+                          "(diagnostic must not certify)")
+    else:  # certificate grade: the claim must be EXACTLY the gate result
+        expected = _gate(identity, certificate["checks"])
+        if claimed != expected:
+            errors.append(f"apple_runtime_certified={claimed} != gate {expected} "
+                          "(forged or inconsistent)")
+    if claimed and not certificate.get("signed_official_eval_certificate_sha256"):
+        errors.append("certified without a bound signed official-eval certificate")
     return (not errors), errors

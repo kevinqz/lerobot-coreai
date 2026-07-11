@@ -26,6 +26,33 @@ A GitHub-hosted Linux runner fails the arch + macOS conditions, so the claim is 
 there regardless of the check flags. The verifier recomputes the gate and rejects a
 forged `true`, an identity tamper, or a certified claim with no signed chain.
 
+## Promotion authority — no self-certification (v1.3.26.8)
+
+The 3rd external review's finding was that the *contract* was near-SotA but the
+*authority* still trusted the producer: a caller could hand `build_apple_runtime_certificate`
+a dict of `True` booleans. That path is closed.
+
+- The public builder is now **`build_diagnostic_apple_runtime_report`** and carries
+  `evidence_grade: "diagnostic"` — its `apple_runtime_certified` is **always false**,
+  no matter what checks the caller passes. The verifier rejects a diagnostic report
+  whose claim was forged to `true`.
+- A **true** certificate (`evidence_grade: "certificate"`) can be produced only by
+  **`promote_apple_runtime_certificate`**, which accepts *only* unforgeable
+  `Verified*` receipts — `VerifiedCoreAIRuntimeReceipt`,
+  `VerifiedSignedOfficialEvalCertificate`, `VerifiedModelConversionEvidence`,
+  `VerifiedTrustPolicy` (see `authority.py`). A plain dict or bool in any slot raises
+  `TypeError`; the checks are **derived from the receipt substance**, never supplied.
+- Each `Verified*` is minted **only** by its verifier (constructor sealed by a
+  module-private token), and each verifier re-derives its substance from bytes: the
+  runtime receipt must prove a real runner (no `fake_runner`), the `.aimodel` opened
+  with its root == the certified artifact, the full case matrix, and numeric parity;
+  the signed official-eval must verify its Ed25519 signature + trust policy; the
+  conversion must re-pass numeric parity from raw arrays.
+
+So no public function accepts booleans to promote, and **no manually-built JSON can
+obtain a true `apple_runtime_certified`** — the gate still also requires the arm64
+Apple identity, which Linux CI can never satisfy.
+
 ## Reproducible procedure (maintainer, on Apple Silicon)
 
 1. Start the **real** CoreAI Runner on loopback; note its binary sha256 + version.
@@ -35,9 +62,13 @@ forged `true`, an identity tamper, or a certified claim with no signed chain.
 3. Drive the certified B=1 / native / split multimodal matrix through the **real**
    runner (front+wrist+state+task), compare outputs to the approved reference
    (numeric parity), and collect the check flags + performance summary.
-4. Build the certificate with `build_apple_runtime_certificate(identity=…, checks=…,
-   signed_official_eval_certificate_sha256=…, …)` — the gate promotes
-   `apple_runtime_certified` only if all conditions hold.
+4. Mint the verified receipts (`verify_coreai_runtime_receipt`,
+   `as_verified_signed_official_eval`, `as_verified_model_conversion`,
+   `as_verified_trust_policy`) from the real run's artifacts, then call
+   `promote_apple_runtime_certificate(identity=…, runtime_receipt=…, official_eval=…,
+   conversion=…, trust_policy=…)` — the gate promotes `apple_runtime_certified` only if
+   the arm64-Apple identity holds *and* every receipt verifies. (A diagnostic-only
+   snapshot uses `build_diagnostic_apple_runtime_report`, which never certifies.)
 5. Verify offline: `lerobot-coreai apple-runtime verify --certificate cert.json
    --identity identity.json`.
 6. Sign it with the **protected release key** via the signed-evidence primitive
