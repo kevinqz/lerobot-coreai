@@ -9,14 +9,30 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 # Plugin-supported encodings, safest first (mirrors the plugin's PLUGIN_SUPPORTED).
 PLUGIN_SUPPORTED_ENCODINGS = ("nested_json_v1", "typed_array_envelope_v1")
+# v1.3.21: only minimum_compatible is implemented. The schema pins this const, so a
+# record cannot declare an unimplemented policy (exact / highest_compatible) whose
+# semantics the verifier would silently ignore.
+SUPPORTED_SELECTION_POLICIES = ("minimum_compatible",)
 _PROTO_RE = re.compile(r"^(?P<family>[a-zA-Z0-9_.\-]+?)\.v(?P<major>\d+)$")
 
 
 class NegotiationError(ValueError):
     """Raised when a set of negotiation inputs cannot produce a valid result."""
+
+
+@dataclass(frozen=True)
+class NegotiatedRunnerContract:
+    """The protocol + encoding chosen by the ONE negotiation primitive (v1.3.21).
+
+    Shared by the runtime, the record builder and the offline verifier so there is a
+    single source of truth for what "negotiated" means (P1.3)."""
+    negotiated_protocol: str
+    negotiated_encoding: str
+    selection_policy: str
 
 
 def parse_protocol(version) -> tuple[str, int] | None:
@@ -78,12 +94,34 @@ def expected_encoding(requested_encoding, runner_encodings,
     raise NegotiationError("no common encoding between plugin and runner.")
 
 
+def negotiate_runner_contract(
+    *, selection_policy: str, requested_protocol, minimum_protocol: str,
+    runner_protocol, runner_backward_compatible_with, requested_encoding,
+    runner_encodings, plugin_encodings=PLUGIN_SUPPORTED_ENCODINGS,
+) -> NegotiatedRunnerContract:
+    """The SINGLE negotiation primitive (v1.3.21, P1.3). Runtime, record builder and
+    offline verifier all call THIS — no divergent second algorithm.
+
+    Only ``minimum_compatible`` is implemented; an unsupported policy fails closed."""
+    if selection_policy not in SUPPORTED_SELECTION_POLICIES:
+        raise NegotiationError(
+            f"unsupported selection_policy {selection_policy!r}; "
+            f"only {SUPPORTED_SELECTION_POLICIES} are implemented.")
+    proto = expected_protocol(minimum_protocol, runner_protocol,
+                              runner_backward_compatible_with)
+    enc = expected_encoding(requested_encoding, runner_encodings, plugin_encodings)
+    return NegotiatedRunnerContract(proto, enc, selection_policy)
+
+
 def expected_negotiation(record: dict) -> tuple[str, str]:
-    """Re-run negotiation from a NegotiationRecord's inputs. Returns
-    ``(protocol, encoding)`` the runtime must have chosen, or raises."""
-    proto = expected_protocol(
-        record["minimum_protocol"], record["runner_protocol"],
-        record.get("runner_backward_compatible_with"))
-    enc = expected_encoding(
-        record.get("requested_encoding"), record.get("runner_encodings"))
-    return proto, enc
+    """Re-run negotiation from a NegotiationRecord's inputs via the shared primitive.
+    Returns ``(protocol, encoding)`` the runtime must have chosen, or raises."""
+    c = negotiate_runner_contract(
+        selection_policy=record.get("selection_policy", "minimum_compatible"),
+        requested_protocol=record.get("requested_protocol"),
+        minimum_protocol=record["minimum_protocol"],
+        runner_protocol=record["runner_protocol"],
+        runner_backward_compatible_with=record.get("runner_backward_compatible_with"),
+        requested_encoding=record.get("requested_encoding"),
+        runner_encodings=record.get("runner_encodings"))
+    return c.negotiated_protocol, c.negotiated_encoding

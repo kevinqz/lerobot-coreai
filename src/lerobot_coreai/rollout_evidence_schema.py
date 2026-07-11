@@ -352,14 +352,18 @@ EXECUTION_ENVELOPE_SCHEMA = {
 # backward-compatibility list, so the offline verifier can RE-RUN the negotiation
 # algorithm and reject a self-consistent-but-invalid record (P1.2, P1.4).
 NEGOTIATION_SCHEMA_VERSION = "lerobot-coreai.negotiation_record.v2"
-NEGOTIATION_SELECTION_POLICIES = ("exact", "minimum_compatible", "highest_compatible")
+# v1.3.21 (P1.1): only minimum_compatible is implemented, so the schema pins it —
+# a record can no longer declare a policy whose semantics the verifier ignores.
+# exact / highest_compatible return when they have real use cases + tests.
+NEGOTIATION_SELECTION_POLICIES = ("minimum_compatible",)
 NEGOTIATION_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
     "required": ["schema_version", "selection_policy", "minimum_protocol",
                  "runner_protocol", "runner_backward_compatible_with",
                  "negotiated_protocol", "runner_encodings", "negotiated_encoding",
-                 "runner_capabilities_sha256", "record_sha256"],
+                 "runner_capabilities_sha256", "normalized_capabilities_sha256",
+                 "record_sha256"],
     "properties": {
         "schema_version": {"const": NEGOTIATION_SCHEMA_VERSION},
         "selection_policy": {"enum": list(NEGOTIATION_SELECTION_POLICIES)},
@@ -372,7 +376,8 @@ NEGOTIATION_SCHEMA = {
         "requested_encoding": {"type": ["string", "null"]},
         "runner_encodings": {"type": "array", "items": {"type": "string"}},
         "negotiated_encoding": _NE_STR,
-        "runner_capabilities_sha256": _HASH_OR,
+        "runner_capabilities_sha256": _HASH_OR,          # raw payload (audit)
+        "normalized_capabilities_sha256": _HASH_OR,      # canonical (certificate-grade)
         "record_sha256": _HASH_OR,
     },
 }
@@ -388,7 +393,7 @@ FAILURE_REPORT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
     "required": ["schema_version", "case", "target", "failed_stage",
-                 "exception_type", "message", "claims"],
+                 "exception_type", "message", "terminal_event_origin", "claims"],
     "properties": {
         "schema_version": {"const": FAILURE_REPORT_SCHEMA_VERSION},
         "case": _NE_STR, "target": {"enum": ["stable", "development", "local"]},
@@ -396,6 +401,10 @@ FAILURE_REPORT_SCHEMA = {
         "exception_type": _NE_STR,
         "message": {"type": "string"},
         "execution_id": {"type": ["string", "null"]},
+        # v1.3.21 (P1.6/L): whether the terminal event was emitted by the RUNTIME (the
+        # execution genuinely observed the failure) or synthesized by the writer
+        # (diagnostic only — never certificate-grade).
+        "terminal_event_origin": {"enum": ["runtime", "writer_synthesized"]},
         "claims": {
             "type": "object", "additionalProperties": False,
             "required": ["official_rollout_pipeline_smoke_passed",

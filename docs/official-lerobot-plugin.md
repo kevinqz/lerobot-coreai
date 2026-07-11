@@ -669,23 +669,61 @@ stage vocabulary a `FeatureContract` will need.
   **single** canonical `schemas/batch-contract-v3.schema.json` the parser validates
   against — the typed language a `FeatureContract` will bind features to.
 
+## v1.3.21 — Negotiation Semantics + Failure E2E + capabilities normalization
+
+Remove every semantic alias, execute every important failure, and make negotiation
+mean exactly what it declares. v1.3.20 created the negotiation/failure/stage formats;
+v1.3.21 unifies the negotiation primitive, normalizes capabilities, and runs the
+failure paths through the real stack.
+
+- **One negotiation primitive** — a single `negotiate_runner_contract()` in the base
+  package is the source of truth for what "negotiated" means; the record builder and
+  the offline verifier both go through it (P1.3). `selection_policy` is pinned to the
+  only implemented value, `minimum_compatible` — the schema rejects a policy whose
+  semantics the verifier would otherwise ignore (P1.1, P1.2).
+- **Capabilities normalization** — the bundle persists **both**
+  `runner_capabilities_raw.json` (audit) and `runner_capabilities_normalized.json`
+  (canonical: explicit defaults, sorted unordered lists, duplicates rejected). The
+  verifier re-runs normalization from the raw payload OFFLINE and requires it to equal
+  the persisted normalized file AND the record's `normalized_capabilities_sha256`;
+  the normalized file is schema-validated. Decisions bind the normalized hash
+  (P1.4, P1.5).
+- **Failure paths through the real stack** — a real local HTTP runner is driven to
+  fail at negotiation, request (HTTP 500), and validation (non-finite / wrong-shape
+  action); the policy's `abort_evidence_session(failed_stage)` emits a **runtime**
+  stage-specific failure event + a terminal `execution.failed`, and the bundle is
+  re-proved offline. `failure_report.terminal_event_origin` distinguishes a
+  **runtime** terminal (certificate-grade) from a **writer-synthesized** one
+  (diagnostic, e.g. a bind-time failure with no session) (P1.6, P1.8, L).
+- **Producer terminal validation** — `end_evidence_session` still fail-fasts on an
+  open request; `abort_evidence_session` seals a FAILED execution without emitting an
+  invalid `completed`.
+- **RuntimeSupportProfile v1** — persisted beside the matrix and verified against the
+  canonical frozen profile: native slot isolation is `independent`-only and split
+  scopes are `stateless`/`request_scoped`-only, separating the *expressible*
+  BatchContract language from the *supported* subset (P1.14). A tamper adding native
+  `shared` or split `global` fails.
+
 ## Not yet
 
-- **Exhaustive per-stage failure injection in CI** — the failure bundle, schemas,
-  offline verifier, terminal-event binding and unit-level injection (incl. a
-  failed-refill/no-partial-commit test) are in; driving a *real* injected failure at
-  each stage through the stable/dev rollout E2E is v1.3.21.
+- **Failure injection through the official `lerobot_eval.rollout` CI matrix** — the
+  failure paths run E2E through the real policy/transport/negotiation stack (negotiation,
+  HTTP, validation) with runtime-origin terminal events and offline verification;
+  wiring them as dedicated failure cases *inside* the stable/dev rollout jobs is
+  v1.3.22.
 - **Stable wheel-distribution digest** — `lerobot_distribution_sha256` for the stable
-  target (a content digest of the installed wheel) — v1.3.21.
+  target — v1.3.22.
 - **Chunk happy-path sub-stage events** (`chunk.assembly_started`/`assembled`/
-  `validation_started`/`commit_started`) + rollback-proven (not just single-extend)
-  commit atomicity fixture — v1.3.21.
+  `validation_started`/`commit_started`) + commit-fault rollback fixture (the
+  failed-refill/no-partial-commit case is in) — v1.3.22.
 - **Full `raw_lerobot_observation` removal** — the `ObservationStage`/`ActionStage`
-  vocabulary + `ProcessorStageContract` land here; migrating the manifest +
-  every consumer off the legacy ownership string (a wide rename across ~10 files
-  incl. the E2E fixtures) is its own isolated PR — v1.3.21.
+  vocabulary + `ProcessorStageContract` + `RuntimeSupportProfile` are in; migrating
+  the manifest + every consumer off the legacy ownership string (a wide rename across
+  ~10 files incl. the E2E fixtures) is its own isolated PR — v1.3.22.
+- **`observation_stage` closure in BatchContract** (required + enum, or moved to the
+  stage contract) — v1.3.22.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true) — v1.3.21+.
+  `universal_feature_contract_verified` true) — v1.3.22+.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

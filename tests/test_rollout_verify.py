@@ -232,7 +232,8 @@ def test_negotiation_binding_rejects_mismatched_request_options():
            "negotiated_protocol": "coreai-runner.v2",
            "requested_encoding": "nested_json_v1", "runner_encodings": ["nested_json_v1"],
            "negotiated_encoding": "nested_json_v1",
-           "runner_capabilities_sha256": "sha256:" + "d" * 64}
+           "runner_capabilities_sha256": "sha256:" + "d" * 64,
+           "normalized_capabilities_sha256": "sha256:" + "e" * 64}
     neg["record_sha256"] = canonical_json_sha256(neg)
     raw["negotiation"] = neg
     # request advertises a different encoding than negotiated -> wire invalid (P1.14).
@@ -251,7 +252,8 @@ def test_negotiation_record_tamper_detected():
            "negotiated_protocol": "coreai-runner.v2",
            "requested_encoding": "nested_json_v1", "runner_encodings": ["nested_json_v1"],
            "negotiated_encoding": "nested_json_v1",
-           "runner_capabilities_sha256": "sha256:" + "d" * 64}
+           "runner_capabilities_sha256": "sha256:" + "d" * 64,
+           "normalized_capabilities_sha256": "sha256:" + "e" * 64}
     neg["record_sha256"] = canonical_json_sha256(neg)
     assert _negotiation_ok({"negotiation": neg}) is True
     neg["negotiated_protocol"] = "coreai-runner.v3"          # tamper, hash now stale

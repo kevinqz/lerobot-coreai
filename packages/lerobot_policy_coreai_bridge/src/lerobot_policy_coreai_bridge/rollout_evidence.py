@@ -98,7 +98,8 @@ class RolloutMeasurements:
     fixture_contract: dict = field(default_factory=dict)   # {key: expected per-sample shape}
     queue_events: tuple[dict, ...] = ()
     negotiation: dict | None = None                        # persisted NegotiationRecord
-    runner_capabilities: dict | None = None                # normalized announced caps
+    runner_capabilities: dict | None = None                # raw announced caps (audit)
+    runner_capabilities_normalized: dict | None = None     # canonical normalized caps
 
     def to_raw(self) -> dict:
         """Canonical, replayable raw record (persisted as measurements.json)."""
@@ -250,13 +251,18 @@ def write_evidence_bundle(out_dir: str, report: dict, measurements: RolloutMeasu
                                          measurements.response_bodies)):
             fh.write(json.dumps({"index": j, "request_sha256": canonical_json_sha256(rq),
                                  "response_sha256": canonical_json_sha256(rs)}) + "\n")
-    # v1.3.20 (P1.3): persist the normalized announced capabilities so the verifier
-    # can recompute the hash bound in the NegotiationRecord OFFLINE.
-    (out / "runner_capabilities.json").write_text(
+    # v1.3.21 (P1.4): persist BOTH the raw announced capabilities (audit) and the
+    # canonical normalized form (certificate-grade). The verifier recomputes both
+    # hashes and re-runs normalization on the raw file OFFLINE.
+    (out / "runner_capabilities_raw.json").write_text(
         json.dumps(measurements.runner_capabilities or {}, indent=2, sort_keys=True))
+    (out / "runner_capabilities_normalized.json").write_text(
+        json.dumps(measurements.runner_capabilities_normalized or {}, indent=2,
+                   sort_keys=True))
     content = ["official_rollout_readiness_report.json",
                "official_rollout_readiness_report.md", "official_rollout_trace.jsonl",
-               "measurements.json", "runner_capabilities.json"]
+               "measurements.json", "runner_capabilities_raw.json",
+               "runner_capabilities_normalized.json"]
     files = {f: _sha256_file(out / f) for f in content}
     bundle_root = canonical_json_sha256(sorted(files.items()))
     manifest = {"schema_version": BUNDLE_MANIFEST_SCHEMA_VERSION,
@@ -275,6 +281,7 @@ def write_failure_evidence(
     execution_id: str | None = None, environment: dict | None = None,
     partial_events: tuple[dict, ...] = (), status: str = "failed",
     negotiation_sha256: str | None = None,
+    terminal_event_origin: str = "writer_synthesized",
 ) -> str:
     """Write a schema-valid, independently verifiable FailureEvidence v2 bundle.
 
@@ -295,7 +302,7 @@ def write_failure_evidence(
         "schema_version": FAILURE_REPORT_SCHEMA_VERSION, "case": case,
         "target": target, "failed_stage": failed_stage,
         "exception_type": exception_type, "message": message[:2000],
-        "execution_id": exec_id,
+        "execution_id": exec_id, "terminal_event_origin": terminal_event_origin,
         "claims": {"official_rollout_pipeline_smoke_passed": False,
                    "official_eval_certified": False, "authenticity_verified": False,
                    "proves_task_success": False, "proves_physical_safety": False}}
@@ -355,6 +362,10 @@ def write_matrix_manifest(matrix_dir: str, target: str, cases: dict[str, dict]) 
     mx = {"schema_version": MATRIX_SCHEMA_VERSION, "target": target,
           "cases": cases, "matrix_root_sha256": root}
     (out / "official_rollout_matrix_manifest.json").write_text(json.dumps(mx, indent=2))
+    # v1.3.21 (P1.14): declare the runtime support profile alongside the matrix.
+    from lerobot_coreai.runtime_support import runtime_support_profile
+    (out / "runtime_support_profile.json").write_text(
+        json.dumps(runtime_support_profile(), indent=2))
     (out / "matrix_checksums.json").write_text(json.dumps(
         {"official_rollout_matrix_manifest.json":
          _sha256_file(out / "official_rollout_matrix_manifest.json")}, indent=2))

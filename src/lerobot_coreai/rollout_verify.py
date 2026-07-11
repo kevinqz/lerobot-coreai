@@ -34,7 +34,8 @@ from .rollout_replay import replay_rollout_evidence
 
 FAILURE_REPORT_FILE = "failure_report.json"
 FAILURE_MANIFEST_FILE = "failure_bundle_manifest.json"
-CAPABILITIES_FILE = "runner_capabilities.json"
+CAPABILITIES_RAW_FILE = "runner_capabilities_raw.json"
+CAPABILITIES_NORM_FILE = "runner_capabilities_normalized.json"
 _FAILURE_CONTENT = ("failure_report.json", "execution_envelope.json",
                     "environment_identity.json", "partial_trace.jsonl")
 
@@ -47,7 +48,8 @@ README_MD = "official_rollout_readiness_report.md"
 MATRIX_FILE = "official_rollout_matrix_manifest.json"
 
 # content files (checksums must cover exactly these + the bundle manifest).
-_CONTENT = (REPORT_FILE, README_MD, TRACE_FILE, MEASUREMENTS_FILE, CAPABILITIES_FILE)
+_CONTENT = (REPORT_FILE, README_MD, TRACE_FILE, MEASUREMENTS_FILE,
+            CAPABILITIES_RAW_FILE, CAPABILITIES_NORM_FILE)
 _EXPECTED_CHECKSUMS = set(_CONTENT) | {BUNDLE_MANIFEST_FILE}
 _SECRET_KEYS = ("token", "secret", "password", "authorization", "bearer", "api_key")
 
@@ -191,20 +193,38 @@ def _verify_negotiation(case_dir: Path, checks: dict, prefix: str,
         raw = json.loads((case_dir / MEASUREMENTS_FILE).read_text())
     except Exception as exc:  # noqa: BLE001
         ok("negotiation_load", False, str(exc)); return
+    from .capabilities_normalize import (
+        CapabilitiesNormalizationError, NORMALIZED_CAPABILITIES_SCHEMA,
+        normalize_capabilities, normalized_capabilities_sha256,
+    )
     neg = raw.get("negotiation")
     if neg is None:
         # certificate-grade evidence must carry a NegotiationRecord (P1.1).
         ok("negotiation_present", not require_negotiation,
            "no NegotiationRecord (legacy unnegotiated evidence)")
         return
-    # capabilities hash recomputed from the persisted normalized capabilities.
+    # raw capabilities hash recomputed from the persisted raw payload (audit).
     try:
-        caps_raw = json.loads((case_dir / CAPABILITIES_FILE).read_text())
-        ok("capabilities_hash",
+        caps_raw = json.loads((case_dir / CAPABILITIES_RAW_FILE).read_text())
+        ok("capabilities_raw_hash",
            capabilities_sha256_from_raw(caps_raw) == neg.get("runner_capabilities_sha256"),
-           "runner_capabilities.json != NegotiationRecord.runner_capabilities_sha256")
+           "raw capabilities != NegotiationRecord.runner_capabilities_sha256")
     except Exception as exc:  # noqa: BLE001
-        ok("capabilities_hash", False, str(exc))
+        ok("capabilities_raw_hash", False, str(exc)); return
+    # v1.3.21 (P1.4/P1.5): re-run normalization OFFLINE from the raw payload; it must
+    # equal both the persisted normalized file and the record's normalized hash, and
+    # the normalized file must be schema-valid.
+    try:
+        norm_persisted = json.loads((case_dir / CAPABILITIES_NORM_FILE).read_text())
+        jsonschema.validate(norm_persisted, NORMALIZED_CAPABILITIES_SCHEMA)
+        recomputed = normalize_capabilities(caps_raw)
+        ok("capabilities_normalized",
+           recomputed == norm_persisted
+           and normalized_capabilities_sha256(caps_raw)
+           == neg.get("normalized_capabilities_sha256"),
+           "normalized capabilities mismatch (offline re-run != persisted)")
+    except (CapabilitiesNormalizationError, Exception) as exc:  # noqa: BLE001
+        ok("capabilities_normalized", False, str(exc))
     # re-run the exact negotiation algorithm and require equality (P1.2).
     try:
         proto, enc = expected_negotiation(neg)
@@ -386,5 +406,19 @@ def verify_official_rollout_evidence(
                      "matrix.target != a case target")
     elif require_complete_matrix:
         all_ok &= ok("matrix_present", False, f"{MATRIX_FILE} missing")
+
+    # v1.3.21 (P1.14): the RuntimeSupportProfile, if present, must be schema-valid and
+    # equal the canonical profile (a tamper adding native `shared` / split `global`
+    # fails), separating the universal contract language from the supported subset.
+    rsp = root / "runtime_support_profile.json"
+    if rsp.exists():
+        from .runtime_support import RUNTIME_SUPPORT_SCHEMA, runtime_support_profile
+        try:
+            prof = json.loads(rsp.read_text())
+            jsonschema.validate(prof, RUNTIME_SUPPORT_SCHEMA)
+            all_ok &= ok("runtime_support_profile", prof == runtime_support_profile(),
+                         "profile != canonical runtime support profile")
+        except Exception as exc:  # noqa: BLE001
+            all_ok &= ok("runtime_support_profile", False, str(exc))
 
     return VerifyEvidenceResult(bool(all_ok), checks, case_roots)

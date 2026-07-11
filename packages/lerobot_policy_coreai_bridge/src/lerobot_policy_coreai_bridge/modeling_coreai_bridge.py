@@ -87,6 +87,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._open_requests: int = 0
         self.negotiation_record: dict[str, Any] | None = None
         self.runner_capabilities_raw: dict[str, Any] | None = None
+        self.runner_capabilities_normalized: dict[str, Any] | None = None
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self.last_batch_mode: str | None = None
@@ -168,9 +169,12 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         protocol + encoding, the selection policy, and the runner's declared
         backward-compatibility list + announced capabilities. The offline verifier
         RE-RUNS the negotiation algorithm from these inputs and requires equality."""
+        from lerobot_coreai.capabilities_normalize import (
+            normalize_capabilities, normalized_capabilities_sha256)
         from lerobot_coreai.rollout_evidence_schema import (
             NEGOTIATION_SCHEMA_VERSION, canonical_json_sha256)
         from lerobot_coreai.runner import capabilities_sha256
+        raw = dict(getattr(caps, "raw", {}) or {})
         rec = {
             "schema_version": NEGOTIATION_SCHEMA_VERSION,
             "selection_policy": "minimum_compatible",
@@ -186,10 +190,12 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                                      or [proto.observation_encoding]),
             "negotiated_encoding": proto.observation_encoding,
             "runner_capabilities_sha256": capabilities_sha256(caps),
+            "normalized_capabilities_sha256": normalized_capabilities_sha256(raw),
         }
         rec["record_sha256"] = canonical_json_sha256(rec)
         self.negotiation_record = rec
-        self.runner_capabilities_raw = dict(getattr(caps, "raw", {}) or {})
+        self.runner_capabilities_raw = raw
+        self.runner_capabilities_normalized = normalize_capabilities(raw)
 
     # MARK: - Official runtime binding
 
@@ -389,6 +395,35 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                    unused_action_count=cached, unused_action_sha256s=hashes)
         self.record_queue_events = False
         self._session_state = "IDLE"
+
+    _STAGE_FAILURE_EVENT = {
+        "runner_negotiate": "negotiation.failed",
+        "request": "runner.request_failed",
+        "response": "runner.response_invalid",
+        "chunk_assembly": "chunk.assembly_failed",
+        "validation": "chunk.validation_failed",
+        "queue_commit": "chunk.commit_failed",
+    }
+
+    def abort_evidence_session(self, failed_stage: str, detail: str = "") -> list:
+        """Seal a FAILED execution with RUNTIME-origin terminal events (v1.3.21).
+
+        Emits the stage-specific failure event (e.g. ``chunk.validation_failed``)
+        followed by a terminal ``execution.failed`` — so the failure evidence proves
+        the runtime actually observed the failure, not a writer-synthesized terminal
+        (P1.6/P1.8/L). Returns the sealed event stream for the failure bundle."""
+        if self._session_state != "ACTIVE":
+            raise PluginBindingError("abort_evidence_session without an active session.")
+        stage_event = self._STAGE_FAILURE_EVENT.get(failed_stage)
+        if stage_event:
+            self._emit(stage_event, failed_stage=failed_stage,
+                       detail=detail[:500] if detail else "")
+        self._emit("execution.failed", failed_stage=failed_stage,
+                   detail=detail[:500] if detail else "")
+        events = list(self.queue_events)
+        self.record_queue_events = False
+        self._session_state = "IDLE"
+        return events
 
     def reset(self) -> None:
         n = len(self._queue)
