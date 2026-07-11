@@ -44,7 +44,13 @@ def _pkg_version(name: str) -> str | None:
 
 
 def capture_environment_identity(target: str) -> dict[str, Any]:
-    """Exact execution environment (P1.1) — no generic placeholders."""
+    """Exact execution environment (P1.1) — no generic placeholders.
+
+    v1.3.19 EnvironmentIdentity v2: records the separate provenance SHAs a PR merge
+    conflates (source-branch head vs merge commit vs base) plus run attempt and
+    runner image, so a rerun/merge is distinguishable. The stable wheel-distribution
+    digest is still deferred (v1.3.20).
+    """
     import os
     return {
         "target": target,
@@ -61,6 +67,12 @@ def capture_environment_identity(target: str) -> dict[str, Any]:
         "repository_head_sha": os.environ.get("GITHUB_SHA"),
         "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
         "workflow_job": os.environ.get("GITHUB_JOB"),
+        "source_head_sha": os.environ.get("GITHUB_SHA"),
+        "base_sha": os.environ.get("GITHUB_BASE_SHA") or os.environ.get("GITHUB_BASE_REF"),
+        "merge_sha": os.environ.get("GITHUB_MERGE_SHA"),
+        "workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"),
+        "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        "runner_image": os.environ.get("ImageOS") or os.environ.get("RUNNER_OS"),
     }
 
 
@@ -81,10 +93,11 @@ class RolloutMeasurements:
     required_obs_keys: tuple[str, ...] = ()
     fixture_contract: dict = field(default_factory=dict)   # {key: expected per-sample shape}
     queue_events: tuple[dict, ...] = ()
+    negotiation: dict | None = None                        # persisted NegotiationRecord
 
     def to_raw(self) -> dict:
         """Canonical, replayable raw record (persisted as measurements.json)."""
-        return {
+        raw = {
             "batch_size": self.batch_size, "mode": self.mode,
             "sequence_length": self.sequence_length, "horizon": self.horizon,
             "action_dim": self.action_dim, "terminate_at": list(self.terminate_at),
@@ -96,6 +109,9 @@ class RolloutMeasurements:
             "fixture_contract": dict(self.fixture_contract),
             "queue_events": list(self.queue_events),
         }
+        if self.negotiation is not None:
+            raw["negotiation"] = dict(self.negotiation)
+        return raw
 
 
 @dataclass(frozen=True)
@@ -148,6 +164,12 @@ def build_rollout_readiness_report(
         if not (isinstance(h, str) and _re.match(h)):
             raise EvidenceBindingError(f"{name}_sha256 must be a real sha256; got {h!r}.")
     req = evaluation.ordered_request_sha256s
+    # v1.3.19 execution envelope: pull the id + terminal accounting from the sealed
+    # event stream, and bind the persisted NegotiationRecord hash into the report.
+    events = list(measurements.queue_events)
+    exec_id = events[0]["execution_id"] if events else None
+    last = events[-1] if events else {}
+    neg_sha = measurements.negotiation["record_sha256"] if measurements.negotiation else None
     report = {
         "schema_version": READINESS_SCHEMA_VERSION,
         "hash_algorithm": CANONICAL_HASH_ALGORITHM,
@@ -156,7 +178,12 @@ def build_rollout_readiness_report(
             "batch_size": measurements.batch_size, "mode": measurements.mode,
             "sequence_length": measurements.sequence_length,
             "horizon": measurements.horizon, "request_count": evaluation.request_count,
-            "failed_stage": evaluation.failed_stage, "errors": list(evaluation.errors)},
+            "failed_stage": evaluation.failed_stage, "errors": list(evaluation.errors),
+            "execution_id": exec_id,
+            "status": "completed" if evaluation.passed else "failed",
+            "termination_reason": last.get("termination_reason"),
+            "unused_action_count": last.get("unused_action_count", 0),
+            "negotiation_sha256": neg_sha},
         "contracts": {
             "artifact_root_sha256": artifact_root_sha256,
             "batch_contract_sha256": batch_contract_sha256,
@@ -233,16 +260,62 @@ def write_evidence_bundle(out_dir: str, report: dict, measurements: RolloutMeasu
     return bundle_root
 
 
-def write_failure_evidence(out_dir: str, *, case: str, failed_stage: str,
-                           exception_type: str, message: str) -> None:
-    """Write a minimal, schema-free failure record for any stage exception (P1.7)."""
+def write_failure_evidence(
+    out_dir: str, *, case: str, failed_stage: str, exception_type: str, message: str,
+    target: str = "local", batch_size: int = 1, mode: str = "single_only",
+    execution_id: str | None = None, environment: dict | None = None,
+    partial_events: tuple[dict, ...] = (), status: str = "failed",
+    negotiation_sha256: str | None = None,
+) -> str:
+    """Write a schema-valid, independently verifiable FailureEvidence v2 bundle.
+
+    v1.3.18 wrote a single schema-free record; v1.3.19 (P1.13) writes a full bundle —
+    failure_report.json (stage-typed, all claims false), execution_envelope.json,
+    environment_identity.json, partial_trace.jsonl — with a manifest + checksums the
+    offline verifier can re-prove exactly like a success bundle. Returns the root.
+    """
+    from lerobot_coreai.rollout_evidence_schema import (
+        EXECUTION_ENVELOPE_SCHEMA, EXECUTION_ENVELOPE_SCHEMA_VERSION,
+        FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION, FAILURE_REPORT_SCHEMA,
+        FAILURE_REPORT_SCHEMA_VERSION,
+    )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    rec = {"case": case, "passed": False, "failed_stage": failed_stage,
-           "exception_type": exception_type, "message": message[:2000],
-           "claims": {"official_rollout_pipeline_smoke_passed": False,
-                      "official_eval_certified": False}}
-    (out / "failure_evidence.json").write_text(json.dumps(rec, indent=2))
+    report = {
+        "schema_version": FAILURE_REPORT_SCHEMA_VERSION, "case": case,
+        "target": target, "failed_stage": failed_stage,
+        "exception_type": exception_type, "message": message[:2000],
+        "execution_id": execution_id,
+        "claims": {"official_rollout_pipeline_smoke_passed": False,
+                   "official_eval_certified": False, "authenticity_verified": False,
+                   "proves_task_success": False, "proves_physical_safety": False}}
+    jsonschema.validate(report, FAILURE_REPORT_SCHEMA)
+    envelope = {
+        "schema_version": EXECUTION_ENVELOPE_SCHEMA_VERSION,
+        "execution_id": execution_id or f"failed-{case}", "case": case,
+        "target": target, "mode": mode, "batch_size": batch_size,
+        "status": status if status in ("failed", "aborted") else "failed",
+        "negotiation_sha256": negotiation_sha256, "termination_reason": failed_stage}
+    jsonschema.validate(envelope, EXECUTION_ENVELOPE_SCHEMA)
+
+    (out / "failure_report.json").write_text(json.dumps(report, indent=2))
+    (out / "execution_envelope.json").write_text(json.dumps(envelope, indent=2))
+    (out / "environment_identity.json").write_text(
+        json.dumps(environment or {"target": target}, indent=2))
+    with open(out / "partial_trace.jsonl", "w") as fh:
+        for e in partial_events:
+            fh.write(json.dumps(e) + "\n")
+    content = ["failure_report.json", "execution_envelope.json",
+               "environment_identity.json", "partial_trace.jsonl"]
+    files = {f: _sha256_file(out / f) for f in content}
+    root = canonical_json_sha256(sorted(files.items()))
+    manifest = {"schema_version": FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION,
+                "case": case, "files": files, "bundle_root_sha256": root}
+    (out / "failure_bundle_manifest.json").write_text(json.dumps(manifest, indent=2))
+    checks = dict(files)
+    checks["failure_bundle_manifest.json"] = _sha256_file(out / "failure_bundle_manifest.json")
+    (out / "checksums.json").write_text(json.dumps(checks, indent=2))
+    return root
 
 
 def write_matrix_manifest(matrix_dir: str, target: str, cases: dict[str, dict]) -> dict:

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,12 @@ from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 
 class PluginBindingError(RuntimeError):
     """Raised when the CoreAI runtime cannot be bound or fails cross-binding."""
+
+
+def _action_sha256(action: Any) -> str:
+    """Canonical hash of an action tensor (materialized to a JSON-safe list)."""
+    from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
+    return canonical_json_sha256(action.detach().to("cpu").tolist())
 
 
 def _infer_batch_size(batch: dict[str, Any]) -> int:
@@ -70,6 +77,14 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._execution_id: str | None = None
         self._active_prediction_id: int | None = None
         self._active_chunk_id: str | None = None
+        # v1.3.19 Execution Trace Protocol v3: session state machine, monotonic
+        # clock, causal request/action ids, and per-prediction response hashes.
+        self._session_state: str = "IDLE"          # IDLE | ACTIVE
+        self._clock_base_ns: int = 0
+        self._rollout_step: int = 0
+        self._pops_since_commit: int = 0
+        self._pending_responses: list[str] = []
+        self.negotiation_record: dict[str, Any] | None = None
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self.last_batch_mode: str | None = None
@@ -143,7 +158,31 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             capabilities=caps,
             minimum_protocol=self.config.minimum_runner_protocol,
             allow_legacy=(mode == "legacy"))
+        self._build_negotiation_record(caps, self._protocol)
         return self._protocol
+
+    def _build_negotiation_record(self, caps: Any, proto: Any) -> None:
+        """Persist the NegotiationRecord v1 (v1.3.19, P1.14): the negotiated protocol
+        + encoding, bound to the runner's announced capabilities. The offline
+        verifier requires every request's options to equal this record."""
+        from lerobot_coreai.rollout_evidence_schema import (
+            NEGOTIATION_SCHEMA_VERSION, canonical_json_sha256)
+        from lerobot_coreai.runner import capabilities_sha256
+        rec = {
+            "schema_version": NEGOTIATION_SCHEMA_VERSION,
+            "requested_protocol": None,
+            "minimum_protocol": self.config.minimum_runner_protocol,
+            "runner_protocol": getattr(caps, "protocol_version", None)
+            or self.config.minimum_runner_protocol,
+            "negotiated_protocol": proto.protocol_version,
+            "requested_encoding": self.config.observation_encoding,
+            "runner_encodings": list(getattr(caps, "observation_encodings", ())
+                                     or [proto.observation_encoding]),
+            "negotiated_encoding": proto.observation_encoding,
+            "runner_capabilities_sha256": capabilities_sha256(caps),
+        }
+        rec["record_sha256"] = canonical_json_sha256(rec)
+        self.negotiation_record = rec
 
     # MARK: - Official runtime binding
 
@@ -282,38 +321,73 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
     # MARK: - Inference (LeRobot contract)
 
     def _emit(self, event: str, **fields: Any) -> None:
+        """Append a v3 trace event. Only the 4 common fields are implicit; every
+        causal id (prediction/chunk/request/action) is passed EXPLICITLY by the
+        event that carries it, so the discriminated schema stays exact."""
         if not self.record_queue_events:
             return
         rec = {"event_index": self._event_index, "event": event,
                "execution_id": self._execution_id,
-               "prediction_id": self._active_prediction_id,
-               "chunk_id": self._active_chunk_id}
+               "relative_monotonic_ns": max(0, time.monotonic_ns() - self._clock_base_ns)}
         rec.update(fields)
         self.queue_events.append(rec)
         self._event_index += 1
 
     def begin_evidence_session(self, run_id: str) -> None:
-        """Open a causal evidence session (v1.3.18): fresh, isolated event stream."""
+        """Open a causal evidence session (v1.3.19). Rejects a double-begin so an
+        incomplete execution can never be silently overwritten (P1.9)."""
+        if not run_id:
+            raise PluginBindingError("begin_evidence_session requires a non-empty run_id.")
+        if self._session_state == "ACTIVE":
+            raise PluginBindingError(
+                "an evidence session is already active; end (or abort) it first.")
         self.record_queue_events = True
+        self._session_state = "ACTIVE"
         self.queue_events = []
         self._event_index = 0
         self._prediction_index = 0
+        self._rollout_step = 0
+        self._pops_since_commit = 0
+        self._pending_responses = []
         self._active_prediction_id = None
         self._active_chunk_id = None
         self._execution_id = run_id
+        self._clock_base_ns = time.monotonic_ns()
         self._emit("execution.started")
 
     def end_evidence_session(self) -> None:
-        self._emit("execution.completed")
+        """Seal the session. Rejects end-without-begin / double-end (P1.8). Declares
+        any actions still cached in the queue as unused (P1.11)."""
+        if self._session_state != "ACTIVE":
+            raise PluginBindingError(
+                "end_evidence_session called without an active session.")
+        extra: dict[str, Any] = {}
+        cached = len(self._queue)
+        if cached:
+            hashes = [_action_sha256(a) for a in self._queue]
+            extra = {"unused_action_count": cached, "unused_action_sha256s": hashes,
+                     "termination_reason": "rollout_complete_with_cached_actions"}
+        self._emit("execution.completed", **extra)
         self.record_queue_events = False
+        self._session_state = "IDLE"
 
     def reset(self) -> None:
-        self._queue.clear()
+        n = len(self._queue)
+        if n:
+            # abort: a partially drained queue is being discarded (P1.10). Record the
+            # discarded count + order-sensitive hash so it is not a silent drop.
+            discarded = [a.detach().to("cpu").tolist() for a in self._queue]
+            self._queue.clear()
+            from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
+            self._emit("policy.reset", reset_kind="abort", queue_size_after=0,
+                       discarded_action_count=n,
+                       discarded_queue_sha256=(canonical_json_sha256(discarded)
+                                               if self.record_queue_events else
+                                               "sha256:" + "0" * 64))
+        else:
+            self._emit("policy.reset", reset_kind="normal", queue_size_after=0)
         self._active_batch_size = None
-        # NOTE (v1.3.18): reset does NOT clear the evidence buffer/counters — that is
-        # the session boundary's job — so a second episode never contaminates the
-        # first. Pops keep their own chunk's prediction id.
-        self._emit("policy.reset", queue_size_after=0)
+        self._pops_since_commit = 0
         # Invalidate the negotiated protocol + cached caps: a runner may restart
         # with different capabilities, so re-negotiate on the next inference.
         self._protocol = None
@@ -344,16 +418,22 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             opts["batch_size"] = batch_size
         return opts
 
-    def _runner_call(self, fn, *args, **kwargs):
-        """Invoke a runner call, emitting request_started/response_received (v1.3.18)."""
-        self._emit("runner.request_started")
+    def _runner_call(self, fn, *args, sample_index=None, **kwargs):
+        """Invoke a runner call, emitting request_started/response_received with a
+        unique request_id bound to the active chunk (v1.3.19, P1.2)."""
+        cid = self._active_chunk_id
+        rid = (f"{cid}/sample-{sample_index}" if sample_index is not None
+               else f"{cid}/native")
+        self._emit("runner.request_started", prediction_id=self._active_prediction_id,
+                   chunk_id=cid, request_id=rid, sample_index=sample_index)
         raw = fn(*args, **kwargs)
         if self.record_queue_events:
             from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
+            sha = canonical_json_sha256({"action": raw})
+            self._pending_responses.append(sha)
             self._emit("runner.response_received",
-                       response_sha256=canonical_json_sha256({"action": raw}))
-        else:
-            self._emit("runner.response_received")
+                       prediction_id=self._active_prediction_id, chunk_id=cid,
+                       request_id=rid, sample_index=sample_index, response_sha256=sha)
         return raw
 
     def _predict_single_chunk(self, batch, proto) -> torch.Tensor:
@@ -407,7 +487,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             try:
                 raw = self._runner_call(
                     self.coreai_policy.predict_action_chunk, obs,
-                    runner_options=self._runner_options(proto, sha))
+                    sample_index=i, runner_options=self._runner_options(proto, sha))
                 chunk = normalize_and_validate_action_chunk(
                     raw, representation=rep, expected_batch_size=1,
                     expected_horizon=horizon, expected_action_dim=dim,
@@ -452,34 +532,46 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             raise PluginBindingError(
                 f"batch size changed ({self._active_batch_size} -> {b}) while the "
                 "action queue is non-empty; drain or reset() first.")
-        from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
         if not self._queue:
+            pid = self._prediction_index
+            cid = f"chunk-{pid}"
             self._emit("queue.empty", queue_size_after=0)
             # Allocate the prediction/chunk id BEFORE the refill and keep it on every
-            # request/response/validate/commit/pop of this chunk (v1.3.18, P1.1).
-            self._active_prediction_id = self._prediction_index
-            self._active_chunk_id = f"chunk-{self._prediction_index}"
-            self._emit("queue.refill_requested", queue_size_before=0, queue_size_after=0)
+            # request/response/validate/commit/pop of this chunk (P1.1).
+            self._active_prediction_id = pid
+            self._active_chunk_id = cid
+            self._pending_responses = []
+            self._emit("queue.refill_requested", prediction_id=pid, chunk_id=cid,
+                       queue_size_before=0, queue_size_after=0)
             chunk = self.predict_action_chunk(batch, **kwargs)       # [B, H, A]
             self._active_batch_size = int(chunk.shape[0])
             h = int(chunk.shape[1])
-            chunk_hash = (canonical_json_sha256(chunk.detach().to("cpu").tolist())
-                          if self.record_queue_events else None)
-            self._emit("chunk.validated", chunk_sha256=chunk_hash, horizon=h)
+            chunk_hash = _action_sha256(chunk) if self.record_queue_events else None
+            self._emit("chunk.validated", prediction_id=pid, chunk_id=cid,
+                       chunk_sha256=chunk_hash, horizon=h,
+                       ordered_response_sha256s=list(self._pending_responses))
             before = len(self._queue)
             # atomic commit: materialize the whole chunk, then a single extend.
             pending = tuple(chunk.transpose(0, 1))                   # each [B, A]
             self._queue.extend(pending)
-            self._emit("chunk.committed", chunk_sha256=chunk_hash, committed=h,
+            self._emit("chunk.committed", prediction_id=pid, chunk_id=cid,
+                       chunk_sha256=chunk_hash, committed=h,
                        queue_size_before=before, queue_size_after=len(self._queue))
             self._prediction_index += 1
+            self._pops_since_commit = 0
         before = len(self._queue)
         action = self._queue.popleft()                               # [B, A]
-        self._emit("action.popped", queue_size_before=before,
-                   queue_size_after=len(self._queue),
-                   selected_action_sha256=(
-                       canonical_json_sha256(action.detach().to("cpu").tolist())
-                       if self.record_queue_events else None))
+        step = self._rollout_step
+        self._emit("action.popped", prediction_id=self._active_prediction_id,
+                   chunk_id=self._active_chunk_id,
+                   action_id=f"{self._active_chunk_id}/t{self._pops_since_commit}",
+                   rollout_step=step, chunk_timestep=self._pops_since_commit,
+                   queue_size_before=before, queue_size_after=len(self._queue),
+                   selected_action_sha256=(_action_sha256(action)
+                                           if self.record_queue_events else
+                                           "sha256:" + "0" * 64))
+        self._rollout_step += 1
+        self._pops_since_commit += 1
         if not self._queue:
             self._emit("queue.exhausted", queue_size_after=0)
         return action

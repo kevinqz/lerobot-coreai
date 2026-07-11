@@ -15,7 +15,7 @@ from typing import Any
 
 from .coreai_observation_serialization import observation_sha256
 from .rollout_evidence_schema import (
-    MEASUREMENTS_SCHEMA, REQUIRED_CHECKS, canonical_json_sha256,
+    MEASUREMENTS_SCHEMA, NEGOTIATION_SCHEMA, REQUIRED_CHECKS, canonical_json_sha256,
 )
 
 _LEAK_KEYS = ("action", "reward", "done", "success", "index", "episode_index",
@@ -72,6 +72,7 @@ def _first_done_matches(done, terminate_at) -> bool:
 
 def _wire_ok(raw) -> bool:
     B, native = raw["batch_size"], raw["mode"] == "native_batch"
+    neg = raw.get("negotiation")
     exact = set(raw["required_obs_keys"]) | {"task"}
     for body in raw["request_bodies"]:
         obs = body.get("observation", {})
@@ -100,12 +101,38 @@ def _wire_ok(raw) -> bool:
         # v1.3.16: recompute observation_sha256 from the sent observation (P1.3).
         if opts.get("observation_sha256") != observation_sha256(obs):
             return False
-        if opts.get("observation_encoding") not in ("nested_json_v1",
-                                                     "typed_array_envelope_v1"):
-            return False
         if not isinstance(opts.get("protocol_version"), str):
             return False
+        # v1.3.19 (P1.14): if a NegotiationRecord is persisted, the request options
+        # MUST equal the negotiated result — no hardcoded allowlist. Otherwise fall
+        # back to the known-encoding allowlist (legacy bundles).
+        if neg is not None:
+            if opts.get("observation_encoding") != neg["negotiated_encoding"]:
+                return False
+            if opts.get("protocol_version") != neg["negotiated_protocol"]:
+                return False
+        elif opts.get("observation_encoding") not in ("nested_json_v1",
+                                                       "typed_array_envelope_v1"):
+            return False
     return True
+
+
+def _negotiation_ok(raw) -> bool:
+    """Validate the persisted NegotiationRecord is schema-valid + self-consistent."""
+    neg = raw.get("negotiation")
+    if neg is None:
+        return True                          # optional (legacy bundles)
+    import jsonschema
+    try:
+        jsonschema.validate(neg, NEGOTIATION_SCHEMA)
+    except Exception:  # noqa: BLE001
+        return False
+    # negotiated protocol/encoding must be an option the runner announced.
+    if neg["negotiated_encoding"] not in neg["runner_encodings"]:
+        return False
+    # record_sha256 must recompute from the negotiated content (tamper-evident).
+    body = {k: v for k, v in neg.items() if k not in ("record_sha256",)}
+    return neg["record_sha256"] == canonical_json_sha256(body)
 
 
 def _response_valid(raw) -> bool:
@@ -160,37 +187,77 @@ def _fixture_ok(raw) -> bool:
     return _wire_ok(raw)   # fixture shape validation is part of the wire check
 
 
-def _queue_lifecycle(events, predictions: int, seq: int, H: int,
-                     reqs_per_refill: int) -> tuple[bool, bool]:
-    """Formal state-machine replay of the queue evidence protocol v2 (v1.3.18).
+def _pred_response_hashes(raw, pred: int) -> list[str]:
+    """The response-body hashes the runner returned for prediction ``pred``."""
+    B = raw["batch_size"]
+    if raw["mode"] == "split_and_stack":
+        idxs = range(pred * B, pred * B + B)
+    else:
+        idxs = [pred]
+    bodies = raw["response_bodies"]
+    return [canonical_json_sha256(bodies[i]) for i in idxs if 0 <= i < len(bodies)]
 
-    Proves causal ordering, per-chunk prediction/chunk-id attribution, queue
-    before/after arithmetic, validated==committed chunk identity, atomic commit
-    (before -> before+H), and exact refill/commit/pop counts. Fail-closed.
+
+def _selected_action_hash(raw, step: int) -> str | None:
+    """canonical hash of the [B, A] action recorded at rollout timestep ``step``."""
+    final = raw["final_action"]                 # [B, seq, A]
+    B, seq = raw["batch_size"], raw["sequence_length"]
+    if _per_sample_shape(final) != [B, seq, raw["action_dim"]] or step >= seq:
+        return None
+    try:
+        return canonical_json_sha256([final[b][step] for b in range(B)])
+    except (IndexError, TypeError):
+        return None
+
+
+def _execution_lifecycle(raw) -> tuple[bool, bool]:
+    """State-machine replay of Execution Trace Protocol v3 (v1.3.19). Fail-closed.
+
+    Proves, over and above v1.3.18: a discriminated per-event schema, monotonic
+    timestamps, constant execution_id, unique request/action IDs with exact
+    request->response pairing, ordered_response_sha256s bound to the recomputed
+    response bodies of that prediction (P1.3/P1.4), each popped action's hash bound
+    to the final_action slice at its rollout_step (P1.5), a mandatory queue.exhausted
+    after the queue empties (P1.11), and normal/abort reset semantics (P1.10).
     Returns (lifecycle_valid, refill_count_exact).
     """
-    from .rollout_evidence_schema import QUEUE_EVENT_SCHEMA
+    from .rollout_evidence_schema import EXECUTION_EVENT_SCHEMA
     import jsonschema
+    events = raw.get("queue_events", [])
+    H = raw["horizon"]
+    seq = raw["sequence_length"]
+    predictions = math.ceil(seq / H)
+    reqs_per_refill = raw["batch_size"] if raw["mode"] == "split_and_stack" else 1
     if not events:
         return False, False
     try:
         for e in events:
-            jsonschema.validate(e, QUEUE_EVENT_SCHEMA)
+            jsonschema.validate(e, EXECUTION_EVENT_SCHEMA)
     except Exception:  # noqa: BLE001
         return False, False
     if [e["event_index"] for e in events] != list(range(len(events))):
         return False, False
-    if events[0]["event"] != "execution.started" or events[-1]["event"] != "execution.completed":
+    if events[0]["event"] != "execution.started" \
+            or events[-1]["event"] != "execution.completed":
+        return False, False
+    exec_id = events[0]["execution_id"]
+    if any(e["execution_id"] != exec_id for e in events):     # constancy (P1.6)
+        return False, False
+    ts = [e["relative_monotonic_ns"] for e in events]
+    if any(b < a for a, b in zip(ts, ts[1:])):                # monotonic (P1.7)
         return False, False
 
     st = "STARTED"
-    committed = popped = refills = resets = 0
-    reqs = 0
+    committed = popped = refills = 0
     qsize = 0
     validated_hash = None
-    active_pid = None
-    active_cid = None
+    active_pid = active_cid = None
     seen_pids: set = set()
+    seen_reqs: set = set()
+    open_reqs: set = set()
+    seen_actions: set = set()
+    resp_hashes: list = []
+    sample_seen: set = set()
     pops_since_commit = 0
 
     def bad():
@@ -199,50 +266,78 @@ def _queue_lifecycle(events, predictions: int, seq: int, H: int,
     for e in events[1:-1]:
         ev = e["event"]
         if ev == "policy.reset":
-            if st not in ("STARTED", "EMPTY"):
-                return bad()
-            resets += 1
+            kind = e["reset_kind"]
+            if kind == "normal":
+                if st not in ("STARTED", "EMPTY") or qsize != 0:
+                    return bad()               # normal reset only when already empty
+            else:                               # abort: may discard a partial queue
+                if e.get("discarded_action_count") != qsize \
+                        or "discarded_queue_sha256" not in e:
+                    return bad()
             qsize = 0
             st = "EMPTY"
         elif ev == "queue.empty":
-            if e.get("queue_size_after", 0) != 0 or qsize != 0:
+            if e["queue_size_after"] != 0 or qsize != 0:
                 return bad()
             st = "EMPTY"
         elif ev == "queue.refill_requested":
-            if st != "EMPTY" or qsize != 0:      # refill ONLY when empty (P1.3)
+            if st != "EMPTY" or qsize != 0 \
+                    or e["queue_size_before"] != 0 or e["queue_size_after"] != 0:
                 return bad()
-            pid, cid = e.get("prediction_id"), e.get("chunk_id")
-            if pid is None or cid is None or pid in seen_pids:   # no reuse (P1.1)
+            pid, cid = e["prediction_id"], e["chunk_id"]
+            if pid in seen_pids:                # never reused (P1.1)
                 return bad()
             active_pid, active_cid = pid, cid
             seen_pids.add(pid)
             refills += 1
-            reqs = 0
+            resp_hashes = []
+            sample_seen = set()
             validated_hash = None
             st = "REFILL"
         elif ev == "runner.request_started":
-            # allowed after the refill (native/single) or after a prior response
-            # (split issues B requests per refill).
-            if st not in ("REFILL", "RESP") or e.get("prediction_id") != active_pid:
+            if st not in ("REFILL", "RESP") \
+                    or e["prediction_id"] != active_pid or e["chunk_id"] != active_cid:
                 return bad()
+            rid = e["request_id"]
+            if rid in seen_reqs:                # unique request id (P1.2)
+                return bad()
+            si = e.get("sample_index")
+            if reqs_per_refill > 1:             # split: distinct 0..B-1
+                if si is None or si in sample_seen:
+                    return bad()
+                sample_seen.add(si)
+            elif si is not None:                # native/single: no sample index
+                return bad()
+            seen_reqs.add(rid)
+            open_reqs.add(rid)
             st = "REQ"
         elif ev == "runner.response_received":
-            if st != "REQ" or e.get("prediction_id") != active_pid:
+            rid = e["request_id"]
+            if st != "REQ" or e["prediction_id"] != active_pid \
+                    or rid not in open_reqs:    # exactly one response per open request
                 return bad()
-            reqs += 1
+            open_reqs.discard(rid)
+            resp_hashes.append(e["response_sha256"])
             st = "RESP"
         elif ev == "chunk.validated":
-            if st != "RESP" or reqs != reqs_per_refill:   # request(s) before validate
+            if st != "RESP" or e["prediction_id"] != active_pid \
+                    or len(resp_hashes) != reqs_per_refill or open_reqs:
                 return bad()
-            validated_hash = e.get("chunk_sha256")
+            if e["horizon"] != H:
+                return bad()
+            # ordered response hashes bound to the recomputed response bodies (F).
+            if e["ordered_response_sha256s"] != resp_hashes \
+                    or resp_hashes != _pred_response_hashes(raw, active_pid):
+                return bad()
+            validated_hash = e["chunk_sha256"]
             st = "VALIDATED"
         elif ev == "chunk.committed":
-            if st != "VALIDATED" or e.get("prediction_id") != active_pid:
+            if st != "VALIDATED" or e["prediction_id"] != active_pid \
+                    or e["chunk_sha256"] != validated_hash:  # committed == validated
                 return bad()
-            if e.get("chunk_sha256") != validated_hash:  # committed == validated (identity)
-                return bad()
-            if e.get("queue_size_before") != qsize or e.get("queue_size_after") != qsize + H:
-                return bad()                     # atomic commit before->before+H (P1.4/P1.8)
+            if e["queue_size_before"] != qsize or e["queue_size_after"] != qsize + H \
+                    or e["committed"] != H:
+                return bad()                     # atomic commit before->before+H
             qsize += H
             committed += 1
             pops_since_commit = 0
@@ -250,25 +345,47 @@ def _queue_lifecycle(events, predictions: int, seq: int, H: int,
         elif ev == "action.popped":
             if st not in ("READY", "DRAINING") or committed == 0:
                 return bad()
-            if e.get("prediction_id") != active_pid or e.get("chunk_id") != active_cid:
-                return bad()                     # pop attributed to its own chunk (P1.1)
-            if e.get("queue_size_before") != qsize or e.get("queue_size_after") != qsize - 1:
+            if e["prediction_id"] != active_pid or e["chunk_id"] != active_cid:
+                return bad()                     # pop attributed to its own chunk
+            if e["queue_size_before"] != qsize or e["queue_size_after"] != qsize - 1:
+                return bad()
+            step = e["rollout_step"]
+            if step != popped or e["chunk_timestep"] != pops_since_commit:
+                return bad()                     # global + within-chunk step order
+            aid = e["action_id"]
+            if aid in seen_actions:              # action id never reused (P1.2)
+                return bad()
+            seen_actions.add(aid)
+            # selected action hash bound to the final_action slice (P1.5).
+            if e["selected_action_sha256"] != _selected_action_hash(raw, step):
                 return bad()
             qsize -= 1
             popped += 1
             pops_since_commit += 1
             if pops_since_commit > H:
                 return bad()
-            st = "EMPTY" if qsize == 0 else "DRAINING"
+            st = "AWAITING_EXHAUSTED" if qsize == 0 else "DRAINING"
         elif ev == "queue.exhausted":
-            if qsize != 0:
-                return bad()
+            if st != "AWAITING_EXHAUSTED" or qsize != 0 or e["queue_size_after"] != 0:
+                return bad()                     # mandatory after emptying (P1.11)
             st = "EMPTY"
         else:
             return bad()
 
-    lifecycle_ok = (resets >= 1 and committed == refills and st in ("EMPTY", "READY", "DRAINING"))
-    refill_exact = (refills == predictions and committed == predictions and popped == seq)
+    # completion (execution.completed) terminal-state + cached-action accounting.
+    done = events[-1]
+    if st not in ("EMPTY", "DRAINING"):
+        return bad()
+    unused = done.get("unused_action_count")
+    if st == "DRAINING":                          # actions left in the queue
+        if unused != qsize or qsize == 0 or "termination_reason" not in done:
+            return bad()
+    elif unused not in (None, 0):
+        return bad()
+
+    lifecycle_ok = committed == refills and open_reqs == set()
+    refill_exact = (refills == predictions and committed == predictions
+                    and popped == seq)
     return lifecycle_ok, refill_exact
 
 
@@ -279,15 +396,13 @@ def derive_checks(raw: dict) -> dict[str, bool]:
         else predictions
     req_count = len(raw["request_bodies"])
     done = raw["done_mask"]
-    reqs_per_refill = raw["batch_size"] if raw["mode"] == "split_and_stack" else 1
-    ql, rc = _queue_lifecycle(raw.get("queue_events", []), predictions,
-                             raw["sequence_length"], raw["horizon"], reqs_per_refill)
+    ql, rc = _execution_lifecycle(raw)
     checks = {
         "official_rollout_called": req_count > 0,
         "all_environments_reached_done": all(any(r) for r in done) and bool(done),
         "done_mask_cumulative": _done_cumulative(done),
         "done_mask_matches_terminate_at": _first_done_matches(done, raw["terminate_at"]),
-        "queue_lifecycle_valid": ql,
+        "queue_lifecycle_valid": ql and _negotiation_ok(raw),
         "queue_refill_count_exact": rc,
         "wire_payload_valid": _wire_ok(raw),
         "request_count_exact": req_count == expected,
@@ -352,5 +467,15 @@ def replay_rollout_evidence(case_dir: str) -> ReplayResult:
     if report["action"]["done_mask_sha256"] != canonical_json_sha256(
             [list(r) for r in raw["done_mask"]]):
         errors.append("done_mask_sha256 mismatch")
+
+    # v1.3.19: the report's execution envelope must bind the persisted negotiation
+    # record + execution id (fail if the report claims a different negotiation).
+    neg = raw.get("negotiation")
+    execu = report.get("execution", {})
+    if neg is not None and execu.get("negotiation_sha256") != neg.get("record_sha256"):
+        errors.append("execution.negotiation_sha256 != persisted negotiation record")
+    events = raw.get("queue_events", [])
+    if events and execu.get("execution_id") != events[0].get("execution_id"):
+        errors.append("execution.execution_id != trace execution id")
 
     return ReplayResult(not errors, derived, errors)

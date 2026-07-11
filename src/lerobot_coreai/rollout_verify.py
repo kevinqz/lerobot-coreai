@@ -18,6 +18,8 @@ import jsonschema
 
 from .rollout_evidence_schema import (
     BUNDLE_MANIFEST_SCHEMA,
+    EXECUTION_ENVELOPE_SCHEMA,
+    FAILURE_REPORT_SCHEMA,
     MATRIX_SCHEMA,
     READINESS_SCHEMA,
     REQUIRED_CASES,
@@ -25,6 +27,11 @@ from .rollout_evidence_schema import (
     canonical_json_sha256,
 )
 from .rollout_replay import replay_rollout_evidence
+
+FAILURE_REPORT_FILE = "failure_report.json"
+FAILURE_MANIFEST_FILE = "failure_bundle_manifest.json"
+_FAILURE_CONTENT = ("failure_report.json", "execution_envelope.json",
+                    "environment_identity.json", "partial_trace.jsonl")
 
 REPORT_FILE = "official_rollout_readiness_report.json"
 BUNDLE_MANIFEST_FILE = "bundle_manifest.json"
@@ -81,26 +88,96 @@ class VerifyEvidenceResult:
         return {"ok": self.ok, "checks": self.checks}
 
 
-def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str | None]:
+def _verify_failure_case(case_dir: Path, checks: dict,
+                         prefix: str) -> tuple[bool, bool, str | None]:
+    """Verify a FailureEvidence v2 bundle (v1.3.19): schema-valid, all-claims-false,
+    manifest/checksum-recomputable — independently, like a success bundle."""
     def ok(name, cond, reason=""):
         checks[f"{prefix}:{name}"] = "passed" if cond else f"failed: {reason}"
         return cond
 
     if not ok("no_symlinks", not any(p.is_symlink() for p in case_dir.iterdir()),
               "symlink present"):
-        return False, None
+        return False, False, None
+    actual = {p.name for p in case_dir.iterdir()}
+    expected = set(_FAILURE_CONTENT) | {FAILURE_MANIFEST_FILE, CHECKSUMS_FILE}
+    if not ok("exact_file_coverage", actual == expected,
+              f"unexpected: {sorted(actual ^ expected)}"):
+        return False, False, None
+    try:
+        recorded = json.loads((case_dir / CHECKSUMS_FILE).read_text())
+    except Exception as exc:  # noqa: BLE001
+        ok("checksums_parse", False, str(exc)); return False, False, None
+    ok("checksums_paths_safe", all(_safe_name(k) for k in recorded), "unsafe path")
+    ok("checksums_match", all(
+        (case_dir / n).exists() and _sha256_file(case_dir / n) == d
+        for n, d in recorded.items()), "a listed file was modified")
+    try:
+        report = json.loads((case_dir / FAILURE_REPORT_FILE).read_text())
+        jsonschema.validate(report, FAILURE_REPORT_SCHEMA)
+        envelope = json.loads((case_dir / "execution_envelope.json").read_text())
+        jsonschema.validate(envelope, EXECUTION_ENVELOPE_SCHEMA)
+        ok("schemas", True)
+    except Exception as exc:  # noqa: BLE001
+        ok("schemas", False, str(exc)); return False, False, None
+    # every claim must be false (schema pins them, but re-check defensively).
+    ok("no_forbidden_claims", all(v is False for v in report["claims"].values()),
+       "a claim is true")
+    ok("envelope_status", envelope["status"] in ("failed", "aborted"),
+       "envelope status not terminal-failure")
+    ok("no_secrets", _scan_secret(report) is None and _scan_secret(envelope) is None,
+       "secret detected")
+    # partial trace events (if any) must each be schema-valid.
+    try:
+        from .rollout_evidence_schema import EXECUTION_EVENT_SCHEMA
+        events = [json.loads(ln) for ln in
+                  (case_dir / "partial_trace.jsonl").read_text().splitlines() if ln.strip()]
+        for e in events:
+            jsonschema.validate(e, EXECUTION_EVENT_SCHEMA)
+        ok("partial_trace_schema", True)
+    except Exception as exc:  # noqa: BLE001
+        ok("partial_trace_schema", False, str(exc))
+    try:
+        bm = json.loads((case_dir / FAILURE_MANIFEST_FILE).read_text())
+    except Exception as exc:  # noqa: BLE001
+        ok("failure_manifest_parse", False, str(exc)); return False, False, None
+    ok("failure_manifest_coverage", set(bm.get("files", {})) == set(_FAILURE_CONTENT),
+       "manifest does not cover exactly the failure content")
+    root = bm.get("bundle_root_sha256")
+    ok("failure_root", canonical_json_sha256(sorted(bm.get("files", {}).items())) == root,
+       "failure bundle root mismatch")
+    ok("failure_files_match", all(
+        _safe_name(p) and (case_dir / p).exists() and _sha256_file(case_dir / p) == h
+        for p, h in bm.get("files", {}).items()), "a failure-bundle digest mismatch")
+    case_ok = all(v == "passed" for k, v in checks.items() if k.startswith(prefix))
+    return case_ok, False, root       # a failure case never counts as rollout-passed
+
+
+def _verify_case(case_dir: Path, checks: dict,
+                 prefix: str) -> tuple[bool, bool, str | None]:
+    """Verify one case bundle. Returns (bundle_verified, rollout_passed, root)."""
+    if (case_dir / FAILURE_REPORT_FILE).exists():
+        return _verify_failure_case(case_dir, checks, prefix)
+
+    def ok(name, cond, reason=""):
+        checks[f"{prefix}:{name}"] = "passed" if cond else f"failed: {reason}"
+        return cond
+
+    if not ok("no_symlinks", not any(p.is_symlink() for p in case_dir.iterdir()),
+              "symlink present"):
+        return False, False, None
     for fn in (REPORT_FILE, BUNDLE_MANIFEST_FILE, CHECKSUMS_FILE, MEASUREMENTS_FILE):
         if not ok(f"present:{fn}", (case_dir / fn).exists(), "missing"):
-            return False, None
+            return False, False, None
 
     # checksums: path-safe, exact coverage, no tamper.
     try:
         recorded = json.loads((case_dir / CHECKSUMS_FILE).read_text())
     except Exception as exc:  # noqa: BLE001
-        ok("checksums_parse", False, str(exc)); return False, None
+        ok("checksums_parse", False, str(exc)); return False, False, None
     if not ok("checksums_paths_safe", all(_safe_name(k) for k in recorded),
               "unsafe path in checksums"):
-        return False, None
+        return False, False, None
     ok("checksums_exact_coverage", set(recorded) == _EXPECTED_CHECKSUMS,
        f"{sorted(recorded)} != {sorted(_EXPECTED_CHECKSUMS)}")
     ok("checksums_match", all(
@@ -113,7 +190,7 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str |
         jsonschema.validate(report, READINESS_SCHEMA)
         ok("report_schema", True)
     except Exception as exc:  # noqa: BLE001
-        ok("report_schema", False, str(exc)); return False, None
+        ok("report_schema", False, str(exc)); return False, False, None
     ok("no_forbidden_claims", all(
         report["claims"].get(k) is not True for k in
         ("official_eval_certified", "authenticity_verified", "proves_task_success",
@@ -158,7 +235,7 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str |
         bm = json.loads((case_dir / BUNDLE_MANIFEST_FILE).read_text())
         jsonschema.validate(bm, BUNDLE_MANIFEST_SCHEMA)
     except Exception as exc:  # noqa: BLE001
-        ok("bundle_manifest_schema", False, str(exc)); return False, None
+        ok("bundle_manifest_schema", False, str(exc)); return False, False, None
     ok("bundle_manifest_paths_safe", all(_safe_name(p) for p in bm["files"]),
        "unsafe path in bundle manifest")
     ok("bundle_manifest_coverage", set(bm["files"]) == set(_CONTENT),
@@ -170,7 +247,8 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str |
         for p, h in bm["files"].items()), "a bundle-manifest digest mismatch")
 
     case_ok = all(v == "passed" for k, v in checks.items() if k.startswith(prefix))
-    return case_ok, bm.get("bundle_root_sha256")
+    passed = bool(report["claims"].get("official_rollout_pipeline_smoke_passed"))
+    return case_ok, passed, bm.get("bundle_root_sha256")
 
 
 def verify_official_rollout_evidence(
@@ -187,13 +265,13 @@ def verify_official_rollout_evidence(
         return VerifyEvidenceResult(False, checks)
 
     case_roots: dict[str, str] = {}
-    case_results: dict[str, bool] = {}
+    case_passed: dict[str, bool] = {}
     seen = {p.name: p for p in sorted(root.iterdir()) if p.is_dir()}
     all_ok = True
     for name, cdir in seen.items():
-        cok, broot = _verify_case(cdir, checks, f"case[{name}]")
+        cok, passed, broot = _verify_case(cdir, checks, f"case[{name}]")
         all_ok &= cok
-        case_results[name] = cok
+        case_passed[name] = passed
         if broot:
             case_roots[name] = broot
 
@@ -220,19 +298,25 @@ def verify_official_rollout_evidence(
         for c, entry in mx["cases"].items():
             all_ok &= ok(f"matrix_binding:{c}",
                          case_roots.get(c) == entry["bundle_root_sha256"]
-                         and case_results.get(c) == entry["passed"],
+                         and case_passed.get(c) == entry["passed"],
                          "matrix entry != verified case")
-        # matrix.target must equal every case's report environment target (P1.1).
+        # matrix.target must equal every case's target (success: report environment;
+        # failure: execution envelope) — v1.3.19 supports mixed matrices.
         target_ok = True
         for c in mx["cases"]:
             try:
-                env_t = json.loads(
-                    (root / c / REPORT_FILE).read_text())["environment"]["target"]
+                cdir = root / c
+                if (cdir / FAILURE_REPORT_FILE).exists():
+                    env_t = json.loads(
+                        (cdir / "execution_envelope.json").read_text())["target"]
+                else:
+                    env_t = json.loads(
+                        (cdir / REPORT_FILE).read_text())["environment"]["target"]
                 target_ok &= (env_t == mx["target"])
             except Exception:  # noqa: BLE001
                 target_ok = False
         all_ok &= ok("matrix_target_binding", target_ok,
-                     "matrix.target != a case environment target")
+                     "matrix.target != a case target")
     elif require_complete_matrix:
         all_ok &= ok("matrix_present", False, f"{MATRIX_FILE} missing")
 
