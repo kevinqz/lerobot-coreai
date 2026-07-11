@@ -33,6 +33,16 @@ DATASET_METADATA_EVIDENCE_SCHEMA = {
         "codebase_version": {"type": ["string", "null"]},
         "root_kind": {"enum": list(_METADATA_SOURCE_MODES)},
         "resolved_commit": {"type": ["string", "null"]},
+        # v1.3.26.3: certificate grade requires the REAL loader identity (no
+        # duck-typed stand-in); diagnostic grade may omit it.
+        "evidence_grade": {"enum": ["diagnostic", "certificate"]},
+        "loader_identity": {"anyOf": [{"type": "null"}, {
+            "type": "object", "additionalProperties": False,
+            "required": ["module", "class_name", "lerobot_version"],
+            "properties": {"module": {"type": "string"}, "class_name": {"type": "string"},
+                           "lerobot_version": {"type": ["string", "null"]},
+                           "source_commit": {"type": ["string", "null"]},
+                           "wheel_digest": {"type": ["string", "null"]}}}]},
         "metadata_tree_algorithm": {"const": METADATA_TREE_HASH_ALGORITHM},
         "metadata_tree_sha256": _SHA256,
         "files": {"type": "object", "additionalProperties": _SHA256},
@@ -68,20 +78,41 @@ def _feature_dict(features: Any) -> dict:
     return out
 
 
+def _derive_loader_identity(meta: Any) -> dict:
+    """The concrete loader class identity + its LeRobot distribution version."""
+    cls = type(meta)
+    try:
+        from importlib.metadata import version
+        lv = version("lerobot")
+    except Exception:  # noqa: BLE001
+        lv = None
+    return {"module": cls.__module__, "class_name": cls.__qualname__,
+            "lerobot_version": lv, "source_commit": None, "wheel_digest": None}
+
+
 def capture_dataset_metadata_evidence(
     meta: Any, *, root: str, repo_id: str, revision: str | None = None,
     root_kind: str = "local_fixture", resolved_commit: str | None = None,
+    evidence_grade: str = "diagnostic", loader_identity: dict | None = None,
 ) -> dict:
     """Build DatasetMetadataEvidence from a metadata object + its on-disk tree.
 
-    ``meta`` is duck-typed: it must expose robot_type, fps, features, camera_keys,
-    names, shapes, total_tasks, total_episodes (the real LeRobotDatasetMetadata does).
-    """
+    ``meta`` is duck-typed for DIAGNOSTIC grade. In CERTIFICATE grade the real loader
+    identity is recorded (module/class/version) and must come from the official
+    ``LeRobotDatasetMetadata`` — a stand-in/adapter is refused (v1.3.26.3)."""
     files, tree_sha = compute_metadata_tree(root)
     fps = int(getattr(meta, "fps"))
     if fps < 1:
         raise ValueError(f"fps must be positive, got {fps}")
+    if evidence_grade == "certificate":
+        loader_identity = loader_identity or _derive_loader_identity(meta)
+        if not (loader_identity.get("module", "").startswith("lerobot.")
+                and loader_identity.get("class_name") == "LeRobotDatasetMetadata"):
+            raise ValueError(
+                "certificate-grade metadata evidence requires the official "
+                f"LeRobotDatasetMetadata loader; got {loader_identity}")
     return {
+        "evidence_grade": evidence_grade, "loader_identity": loader_identity,
         "schema_version": DATASET_METADATA_EVIDENCE_SCHEMA_VERSION,
         "repo_id": repo_id, "revision": revision,
         "codebase_version": getattr(meta, "_version", None) and str(getattr(meta, "_version")),
@@ -122,4 +153,11 @@ def verify_dataset_metadata_evidence(evidence: dict, root: str) -> tuple[bool, l
         errors.append("metadata_tree_sha256 mismatch")
     if evidence["root_kind"] == "hub_snapshot" and not evidence.get("resolved_commit"):
         errors.append("hub_snapshot without a resolved_commit is not certificate-grade")
+    # v1.3.26.3: certificate grade requires the official loader identity.
+    if evidence.get("evidence_grade") == "certificate":
+        li = evidence.get("loader_identity") or {}
+        if not (str(li.get("module", "")).startswith("lerobot.")
+                and li.get("class_name") == "LeRobotDatasetMetadata"):
+            errors.append("certificate grade requires the official LeRobotDatasetMetadata "
+                          "loader identity")
     return (not errors), errors

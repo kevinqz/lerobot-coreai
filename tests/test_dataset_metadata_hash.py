@@ -98,6 +98,27 @@ def test_evidence_tamper_detected(tmp_path):
     assert not ok
 
 
+def test_certificate_grade_rejects_duck_typed_loader(tmp_path):
+    # a SimpleNamespace stand-in is fine for diagnostic, refused for certificate grade.
+    _build_tree(tmp_path)
+    with pytest.raises(ValueError):
+        capture_dataset_metadata_evidence(
+            _meta_obj(), root=str(tmp_path), repo_id="local/fixture", revision="v1",
+            evidence_grade="certificate")
+
+
+def test_certificate_grade_requires_official_loader_identity(tmp_path):
+    _build_tree(tmp_path)
+    ev = capture_dataset_metadata_evidence(
+        _meta_obj(), root=str(tmp_path), repo_id="local/fixture", revision="v1")
+    # forge a certificate grade with a bogus loader -> verifier rejects.
+    ev["evidence_grade"] = "certificate"
+    ev["loader_identity"] = {"module": "impostor", "class_name": "Fake",
+                             "lerobot_version": "0.6.0"}
+    ok, errs = verify_dataset_metadata_evidence(ev, str(tmp_path))
+    assert not ok and any("official LeRobotDatasetMetadata" in e for e in errs)
+
+
 def test_hub_snapshot_without_commit_not_certificate(tmp_path):
     _build_tree(tmp_path)
     ev = capture_dataset_metadata_evidence(
