@@ -982,11 +982,59 @@ def build_parser() -> argparse.ArgumentParser:
     p_dm_bind.add_argument("--fail-on-mismatch", action="store_true")
     p_dm_bind.set_defaults(func=cmd_dataset_metadata_bind)
 
+    # --- processor-parity (v1.3.26) — reference-vs-candidate stage parity ---
+    p_pp = sub.add_parser("processor-parity",
+                          help="Processor parity report (v1.3.26)")
+    pp_sub = p_pp.add_subparsers(dest="pp_command")
+    p_pp_run = pp_sub.add_parser("run", help="Build a parity report from a case spec")
+    p_pp_run.add_argument("--spec", required=True,
+                          help="JSON list of cases {feature_id,mode,reference,candidate,...}")
+    p_pp_run.add_argument("--output", required=True)
+    p_pp_run.set_defaults(func=cmd_processor_parity_run)
+    p_pp_ver = pp_sub.add_parser("verify", help="Verify a parity report offline")
+    p_pp_ver.add_argument("--report", required=True)
+    p_pp_ver.set_defaults(func=cmd_processor_parity_verify)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_processor_parity_run(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .processor_parity import ParityCase, build_processor_parity_report
+    with open(args.spec) as fh:
+        spec = _json.load(fh)
+    cases = [ParityCase(
+        feature_id=c["feature_id"], source_stage=c.get("source_stage", ""),
+        target_stage=c.get("target_stage", ""), mode=c["mode"],
+        reference=c["reference"], candidate=c["candidate"],
+        thresholds=c.get("thresholds", {})) for c in spec.get("cases", spec)]
+    report = build_processor_parity_report(
+        cases, dataset_metadata_sha256=spec.get("dataset_metadata_sha256") if
+        isinstance(spec, dict) else None,
+        feature_contract_sha256=spec.get("feature_contract_sha256") if
+        isinstance(spec, dict) else None)
+    with open(args.output, "w") as fh:
+        _json.dump(report, fh, indent=2)
+    print(f"processor_parity_verified={report['claims']['processor_parity_verified']}")
+    return 0 if report["passed"] else 1
+
+
+def cmd_processor_parity_verify(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .processor_parity import verify_processor_parity_report
+    with open(args.report) as fh:
+        report = _json.load(fh)
+    ok, errs = verify_processor_parity_report(report)
+    for e in errs:
+        print(f"  ✗ {e}")
+    print(f"parity report {'VERIFIED' if ok else 'FAILED'}.")
+    return 0 if ok else 1
 
 
 def cmd_dataset_metadata_inspect(args: argparse.Namespace) -> int:
