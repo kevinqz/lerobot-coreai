@@ -124,6 +124,28 @@ def test_bundle_tamper_detected_by_replay():
     assert not ok and any("hash mismatch" in e or "recomputed parity" in e for e in errs)
 
 
+def test_metrics_tamper_detected_by_replay():
+    # P1.1: forge the recorded metrics while keeping a consistent verdict — the replay
+    # recomputes the metrics from the bundle and catches the mismatch.
+    ref, cand = [[1.0, 2.0, 3.0]], [[1.0005, 2.0004, 2.9996]]
+    ev = _build(ref, cand, _TOL)
+    ev["numeric_parity"]["metrics"]["max_abs_error"] = 0.0    # forged (was ~5e-4)
+    ok, errs = verify_model_conversion_evidence(ev)
+    assert not ok and any("metrics" in e for e in errs)
+
+
+def test_reference_inputs_tamper_detected():
+    # P1.1: reference_inputs digest is re-derived from the bundle.
+    ref, cand = [[1.0]], [[1.0]]
+    ev = build_model_conversion_evidence(
+        source=_source(), exporter=_exporter(), export_configuration={"opset": 17},
+        artifact=_artifact(), reference_outputs=ref, candidate_outputs=cand,
+        tolerance=_TOL, reference_inputs=[[0.5]])
+    ev["numeric_parity"]["reference_inputs_sha256"] = "sha256:" + "c" * 64   # forged
+    ok, errs = verify_model_conversion_evidence(ev)
+    assert not ok and any("reference_inputs" in e for e in errs)
+
+
 def test_diagnostic_grade_never_promotes():
     ref = [[1.0, 2.0, 3.0]]
     cand = [[1.0005, 2.0004, 2.9996]]            # parity WOULD pass

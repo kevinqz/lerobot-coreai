@@ -245,6 +245,24 @@ def test_ttl_exceeds_maximum_fails():
     assert not ok and any("TTL" in r for r in reasons)
 
 
+def test_malformed_expires_at_fails():
+    # P1.6: a non-null but unparseable expires_at must fail, not be treated as no-expiry.
+    key = generate_keypair(dev=False)
+    st = _statement(); st["predicate"]["expires_at"] = "not-a-timestamp"
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("expires_at is malformed" in r for r in reasons)
+
+
+def test_certificate_outliving_key_fails():
+    # P1.6: a certificate may not expire after the signing key's valid_until.
+    key = generate_keypair(dev=False)
+    st = _statement(expires_at="2027-06-01T00:00:00Z")
+    tp = _trust_policy(key, valid_until="2027-01-01T00:00:00Z")   # key dies earlier
+    ok, reasons = verify_signed_evidence(_resign(st, key), trust_policy=tp, now=_NOW)
+    assert not ok and any("valid_until" in r for r in reasons)
+
+
 def test_dsse_and_intoto_shape():
     env, _ = _sign()
     import json

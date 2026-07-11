@@ -9,7 +9,7 @@ from lerobot_coreai.authority import (
     AuthorityError, verify_official_eval_execution_receipt,
 )
 from lerobot_coreai.official_eval_certificate import (
-    REQUIRED_CASES, build_diagnostic_official_eval_report,
+    _ROOT_KEYS, REQUIRED_CASES, build_diagnostic_official_eval_report,
     promote_official_eval_certificate, verify_official_eval_certificate,
 )
 
@@ -33,8 +33,7 @@ def _scope(cases=REQUIRED_CASES):
 
 
 def _inputs():
-    return {"artifact_root_sha256": _H, "feature_contract_sha256": _H,
-            "dataset_metadata_sha256": _H, "processor_parity_sha256": _H}
+    return {k: _H for k in _ROOT_KEYS}      # full evidence-graph root set, non-null
 
 
 def _receipt(**overrides):
@@ -43,7 +42,10 @@ def _receipt(**overrides):
          "executable_realpath": "/usr/local/bin/lerobot-eval", "argv": list(_CLI_ARGV),
          "lerobot_distribution_sha256": _H, "coreai_env_instantiated": True,
          "cases": list(REQUIRED_CASES), "exit_code": 0, "command_sha256": _H,
-         "resolved_config_sha256": _H, "output_tree_sha256": _H}
+         "resolved_config_sha256": _H, "output_tree_sha256": _H,
+         "schema_report": {"outputs_schema_valid": True, "output_manifest_sha256": _H},
+         "replay_report": {"evidence_replay_passed": True, "replay_root_sha256": _H},
+         "verified_cases_root_sha256": _H}
     r.update(overrides)
     return r
 
@@ -165,3 +167,45 @@ def test_task_success_and_safety_always_false():
         receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
     assert cert["claims"]["proves_general_task_success"] is False
     assert cert["claims"]["proves_physical_safety"] is False
+
+
+# --- P0.3: checks derived from receipt reports, not hardcoded ---
+
+def test_failed_schema_report_receipt_refused():
+    with pytest.raises(AuthorityError):
+        verify_official_eval_execution_receipt(
+            _receipt(schema_report={"outputs_schema_valid": False,
+                                    "output_manifest_sha256": _H}))
+
+
+def test_failed_replay_report_receipt_refused():
+    with pytest.raises(AuthorityError):
+        verify_official_eval_execution_receipt(
+            _receipt(replay_report={"evidence_replay_passed": False,
+                                    "replay_root_sha256": _H}))
+
+
+# --- P0.4/WS5: full evidence-graph root set, non-null ---
+
+def test_incomplete_root_graph_cannot_certify():
+    receipt = verify_official_eval_execution_receipt(_receipt())
+    inputs = _inputs(); inputs["model_conversion_sha256"] = None    # a null root
+    cert = promote_official_eval_certificate(receipt=receipt, inputs=inputs)
+    assert cert["claims"]["official_eval_certified"] is False        # root graph incomplete
+
+
+def test_full_root_graph_certifies_and_verifies():
+    cert = promote_official_eval_certificate(
+        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+    assert cert["claims"]["official_eval_certified"] is True
+    assert all(cert["inputs"][k] for k in _ROOT_KEYS)
+    ok, errs = verify_official_eval_certificate(cert)
+    assert ok, errs
+
+
+def test_certified_with_forged_null_root_detected_by_verifier():
+    cert = promote_official_eval_certificate(
+        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+    cert["inputs"]["rollout_matrix_sha256"] = None      # strip a bound root post-hoc
+    ok, errs = verify_official_eval_certificate(cert)
+    assert not ok and any("root graph" in e for e in errs)

@@ -17,6 +17,15 @@ OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION = "lerobot-coreai.official-eval-certifi
 _SHA256 = {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
 _SHA256_OR_NULL = {"anyOf": [_SHA256, {"type": "null"}]}
 REQUIRED_CASES = ("single-b1", "native-b2", "native-b4", "split-b2", "split-b4")
+# the full evidence-graph root set an official-eval certificate binds (v1.3.26.11,
+# P0.4/WS5). In certificate grade EVERY root must be present + non-null, so the run is
+# tied to concrete artifacts/contracts, not a nullable free input.
+_ROOT_KEYS = ("artifact_root_sha256", "feature_contract_sha256",
+              "dataset_metadata_sha256", "processor_parity_sha256",
+              "policy_execution_contract_sha256", "model_conversion_sha256",
+              "processor_stage_contract_sha256", "runtime_support_profile_sha256",
+              "negotiation_record_sha256", "runner_capabilities_sha256",
+              "rollout_matrix_sha256")
 _CHECK_KEYS = ("official_cli_entrypoint_used", "third_party_plugin_registration_used",
                "all_required_cases_passed", "outputs_schema_valid",
                "evidence_replay_passed")
@@ -39,10 +48,7 @@ OFFICIAL_EVAL_CERTIFICATE_SCHEMA = {
         "inputs": {
             "type": "object", "additionalProperties": False,
             "required": ["artifact_root_sha256"],
-            "properties": {"artifact_root_sha256": _SHA256_OR_NULL,
-                           "feature_contract_sha256": _SHA256_OR_NULL,
-                           "dataset_metadata_sha256": _SHA256_OR_NULL,
-                           "processor_parity_sha256": _SHA256_OR_NULL}},
+            "properties": {k: _SHA256_OR_NULL for k in _ROOT_KEYS}},
         "execution": {
             "type": "object", "additionalProperties": False,
             "required": ["argv", "command_sha256", "resolved_config_sha256",
@@ -100,10 +106,11 @@ def build_diagnostic_official_eval_report(*, scope: dict, inputs: dict, executio
 
 
 def promote_official_eval_certificate(*, receipt, inputs: dict) -> dict:
-    """Promote a TRUE official-eval certificate (v1.3.26.8, P0.1). Accepts ONLY a
+    """Promote a TRUE official-eval certificate (v1.3.26.8 / v1.3.26.11). Accepts ONLY a
     ``VerifiedOfficialEvalExecutionReceipt`` (a dict raises TypeError) whose substance
-    was re-derived from a real lerobot-eval subprocess. Checks + execution are DERIVED
-    from the receipt, never supplied."""
+    was re-derived from a real lerobot-eval subprocess. Execution AND checks are DERIVED
+    from the receipt's own verifier reports — never hardcoded (P0.3). The full
+    evidence-graph root set (``inputs``) must be present + non-null (P0.4/WS5)."""
     from .authority import VerifiedOfficialEvalExecutionReceipt
     if not isinstance(receipt, VerifiedOfficialEvalExecutionReceipt):
         raise TypeError("receipt must be a VerifiedOfficialEvalExecutionReceipt "
@@ -116,10 +123,11 @@ def promote_official_eval_certificate(*, receipt, inputs: dict) -> dict:
                  "resolved_config_sha256": r["resolved_config_sha256"],
                  "output_tree_sha256": r["output_tree_sha256"],
                  "exit_code": r["exit_code"]}
+    # checks DERIVED from the receipt's verifier reports (P0.3) — not hardcoded True.
     checks = {"third_party_plugin_registration_used": bool(r["coreai_env_instantiated"]),
-              "all_required_cases_passed": True,      # enforced at mint (full matrix)
-              "outputs_schema_valid": True,           # captured output tree
-              "evidence_replay_passed": True}         # verified by the executor
+              "all_required_cases_passed": set(r["cases"]) == set(REQUIRED_CASES),
+              "outputs_schema_valid": bool(r["schema_report"]["outputs_schema_valid"]),
+              "evidence_replay_passed": bool(r["replay_report"]["evidence_replay_passed"])}
     return _assemble(scope=scope, inputs=inputs, execution=execution, checks=checks,
                      authority=object.__new__(_PromotionAuthority))
 
@@ -134,7 +142,10 @@ def _assemble(*, scope: dict, inputs: dict, execution: dict, checks: dict,
     full_checks["official_cli_entrypoint_used"] = _argv_is_official_eval(
         execution.get("argv", []))
     promoted = isinstance(authority, _PromotionAuthority)
-    certified = _gate(execution, full_checks, scope.get("cases", [])) if promoted else False
+    # certificate grade requires the FULL evidence-graph root set, non-null (P0.4/WS5).
+    roots_complete = all(inputs.get(k) for k in _ROOT_KEYS)
+    certified = (promoted and roots_complete
+                 and _gate(execution, full_checks, scope.get("cases", [])))
     cert = {
         "schema_version": OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION,
         "evidence_grade": "certificate" if promoted else "diagnostic",
@@ -176,6 +187,11 @@ def verify_official_eval_certificate(cert: dict, *, output_tree_sha256: str | No
                           "(direct-rollout / hand-built evidence can never certify)")
     if require_complete_cases and claimed and set(scope["cases"]) != set(REQUIRED_CASES):
         errors.append(f"incomplete case set {sorted(scope['cases'])}")
+    # a certified certificate must bind the FULL evidence-graph root set, non-null.
+    if claimed:
+        missing = [k for k in _ROOT_KEYS if not cert["inputs"].get(k)]
+        if missing:
+            errors.append(f"certified without a complete root graph (null: {missing})")
     if output_tree_sha256 is not None and output_tree_sha256 != execution["output_tree_sha256"]:
         errors.append("recomputed output_tree_sha256 mismatch (output tamper)")
     return (not errors), errors

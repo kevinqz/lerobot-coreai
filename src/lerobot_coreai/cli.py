@@ -1019,7 +1019,9 @@ def build_parser() -> argparse.ArgumentParser:
     ar_sub = p_ar.add_subparsers(dest="ar_command")
     p_ar_probe = ar_sub.add_parser("probe", help="Capture the runtime identity")
     p_ar_probe.add_argument("--coreai-runner-version", default=None)
+    p_ar_probe.add_argument("--coreai-runner-binary-path", default=None)
     p_ar_probe.add_argument("--aimodel-sha256", default=None)
+    p_ar_probe.add_argument("--aimodel-path", default=None)
     p_ar_probe.add_argument("--output", required=True)
     p_ar_probe.set_defaults(func=cmd_apple_runtime_probe)
     p_ar_ver = ar_sub.add_parser("verify", help="Verify an Apple runtime certificate")
@@ -1041,7 +1043,9 @@ def cmd_apple_runtime_probe(args: argparse.Namespace) -> int:
     from .apple_runtime import capture_apple_runtime_identity
     idy = capture_apple_runtime_identity(
         coreai_runner_version=args.coreai_runner_version,
-        aimodel_sha256=args.aimodel_sha256)
+        coreai_runner_binary_path=getattr(args, "coreai_runner_binary_path", None),
+        aimodel_sha256=args.aimodel_sha256,
+        aimodel_path=getattr(args, "aimodel_path", None))
     with open(args.output, "w") as fh:
         _json.dump(idy, fh, indent=2)
     print(f"cpu_arch={idy['hardware']['cpu_arch']} "
