@@ -233,7 +233,7 @@ def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
     cfg = PreTrainedConfig.from_pretrained(str(art))
     cfg.pretrained_path = str(art); cfg.batch_mode = batch_mode
     policy = make_policy(cfg, ds_meta=_ds_meta())
-    policy.record_queue_events = True        # v1.3.17: capture queue lifecycle events
+    policy.begin_evidence_session("rollout")   # v1.3.18: causal evidence session
     pre, post = make_pre_post_processors(cfg, pretrained_path=str(art))
     venv = gym.vector.SyncVectorEnv(
         [lambda t=t, s=s: _Env(t, s) for s, t in enumerate(terminate_ats)])
@@ -241,6 +241,7 @@ def _setup(tmp_path, monkeypatch, native, batch_mode, terminate_ats):
 
 
 def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
+    policy.end_evidence_session()                         # seal the causal event stream
     if policy._capabilities is None:                      # P1.2: no fallback
         raise EvidenceBindingError("evidence requires negotiated Runner capabilities")
     verified = verify_plugin_artifact(str(art), deep=True)   # P1.3: recompute

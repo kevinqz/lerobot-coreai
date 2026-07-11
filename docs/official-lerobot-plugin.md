@@ -550,19 +550,51 @@ remaining cheap verifier gaps are closed.
 - **Tighter measurements schema** — `done` values are `enum [0,1]`,
   `single_only ⇒ batch_size==1` (if/then), `required_obs_keys` unique.
 
+## v1.3.18 — Runtime Evidence Protocol v2
+
+The queue event stream is upgraded from a loose transition log to a **causal,
+hash-bound protocol** that a formal offline state machine replays and refuses to
+accept when tampered.
+
+- **Evidence sessions** — `begin_evidence_session(run_id)` /
+  `end_evidence_session()` bracket a rollout with `execution.started` /
+  `execution.completed`. `reset()` now emits `policy.reset` **without** clearing the
+  buffer, so a rollout that calls `reset()` once (as `lerobot_eval.rollout` does)
+  no longer contaminates or truncates the evidence (P1.7).
+- **Causal identity** — every chunk carries a `prediction_id` (monotonic, never
+  reused) and a `chunk_id`; each `action.popped` is attributed to the **committing**
+  chunk's `prediction_id`, fixing the v1.3.17 off-by-one where a pop was tagged with
+  the *next* prediction index (P1.1). The state machine rejects reused ids and pops
+  attributed to a non-active prediction.
+- **Typed, closed event schema** — `QUEUE_EVENT_SCHEMA` (base) with
+  `additionalProperties:false` over the closed `QUEUE_EVENT_TYPES`; each event is
+  `jsonschema`-validated offline (P1.2). Adds `runner.request_started` /
+  `runner.response_received` (with `response_sha256`) and `queue.exhausted`.
+- **Queue arithmetic proven** — `chunk.committed` must satisfy `after == before + H`
+  and `action.popped` must satisfy `after == before - 1`, with the empty→refill
+  precondition (`queue.empty` before any `queue.refill_requested`) required (P1.3,
+  P1.4, P1.9).
+- **Per-event hashes + atomic commit** — the committed `chunk_sha256` must equal the
+  validated one, the popped `selected_action_sha256` is recorded, and the commit is a
+  single atomic queue extend (a `pending` tuple, one `extend`) so no partial chunk is
+  ever observable (P1.5, P1.6, P1.8).
+- **Single engine** — the base `_queue_lifecycle` is one state machine shared by the
+  producer's derived checks and the offline verifier; `reqs_per_refill` is `B` in
+  `split_and_stack` (B requests per refill) and `1` otherwise.
+
 ## Not yet
 
 - **Failure-evidence v2** (schema-valid, per-stage envelope with checksums + bundle
-  root, representable in the matrix) — v1.3.18.
+  root, representable in the matrix) — v1.3.19.
 - **Negotiation binding** (persist negotiated protocol/encoding/capabilities in
   measurements; require the request options to equal the negotiated result rather
-  than a hardcoded allowlist) — v1.3.18.
+  than a hardcoded allowlist) — v1.3.19.
 - **Processor-stage typed enum** (`ObservationStage`/`ActionStage`, removing
   `raw_lerobot_observation`) + single canonical BatchContract v3 schema file — a
-  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.18.
+  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.19.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
   `universal_feature_contract_verified` true) + stable **wheel-distribution
-  digest** — v1.3.18.
+  digest** — v1.3.19.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so
