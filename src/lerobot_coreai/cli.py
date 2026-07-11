@@ -1013,11 +1013,60 @@ def build_parser() -> argparse.ArgumentParser:
     p_vse.add_argument("--json", action="store_true")
     p_vse.set_defaults(func=cmd_verify_signed_evidence)
 
+    # --- apple-runtime (v1.4.0 machinery) — diagnostic identity + certificate ---
+    p_ar = sub.add_parser("apple-runtime",
+                          help="Apple/CoreAI runtime identity + certificate (v1.4.0)")
+    ar_sub = p_ar.add_subparsers(dest="ar_command")
+    p_ar_probe = ar_sub.add_parser("probe", help="Capture the runtime identity")
+    p_ar_probe.add_argument("--coreai-runner-version", default=None)
+    p_ar_probe.add_argument("--aimodel-sha256", default=None)
+    p_ar_probe.add_argument("--output", required=True)
+    p_ar_probe.set_defaults(func=cmd_apple_runtime_probe)
+    p_ar_ver = ar_sub.add_parser("verify", help="Verify an Apple runtime certificate")
+    p_ar_ver.add_argument("--certificate", required=True)
+    p_ar_ver.add_argument("--identity", required=True)
+    p_ar_ver.add_argument("--json", action="store_true")
+    p_ar_ver.set_defaults(func=cmd_apple_runtime_verify)
+
     # --- serve (spec §12, serve) — v0.2 ---
     p_serve = sub.add_parser("serve", help="Start or connect to coreai-runner (future)")
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_apple_runtime_probe(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .apple_runtime import capture_apple_runtime_identity
+    idy = capture_apple_runtime_identity(
+        coreai_runner_version=args.coreai_runner_version,
+        aimodel_sha256=args.aimodel_sha256)
+    with open(args.output, "w") as fh:
+        _json.dump(idy, fh, indent=2)
+    print(f"cpu_arch={idy['hardware']['cpu_arch']} "
+          f"macos={idy['software']['macos_version']} -> {args.output}")
+    return 0
+
+
+def cmd_apple_runtime_verify(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .apple_runtime import verify_apple_runtime_certificate
+    with open(args.certificate) as fh:
+        cert = _json.load(fh)
+    with open(args.identity) as fh:
+        idy = _json.load(fh)
+    ok, reasons = verify_apple_runtime_certificate(cert, idy)
+    if args.json:
+        print(_json.dumps({"ok": ok,
+                           "apple_runtime_certified": cert.get("claims", {}).get(
+                               "apple_runtime_certified"), "reasons": reasons}, indent=2))
+    else:
+        for r in reasons:
+            print(f"  ✗ {r}")
+        print(f"apple_runtime certificate {'VERIFIED' if ok else 'FAILED'}.")
+    return 0 if ok else 1
 
 
 def cmd_sign_evidence(args: argparse.Namespace) -> int:
