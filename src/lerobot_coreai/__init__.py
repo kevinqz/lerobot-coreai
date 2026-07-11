@@ -2,7 +2,7 @@
 #
 # Canonical sentence: Same LeRobot workflow. CoreAI runtime.
 
-__version__ = "1.3.17"
+__version__ = "1.3.18"
 
 from .policy import CoreAIPolicy
 from .config import CoreAIRuntimeConfig, CoreAIPolicyConfig

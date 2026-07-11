@@ -203,6 +203,32 @@ TRACE_EVENT_SCHEMA = {
     },
 }
 
+QUEUE_EVENT_TYPES = (
+    "execution.started", "policy.reset", "queue.empty", "queue.refill_requested",
+    "runner.request_started", "runner.response_received", "chunk.validated",
+    "chunk.committed", "action.popped", "queue.exhausted", "execution.completed",
+)
+QUEUE_EVENT_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["event_index", "event"],
+    "properties": {
+        "event_index": {"type": "integer", "minimum": 0},
+        "event": {"enum": list(QUEUE_EVENT_TYPES)},
+        "execution_id": {"type": ["string", "null"]},
+        "prediction_id": {"type": ["integer", "null"]},
+        "chunk_id": {"type": ["string", "null"]},
+        "queue_size_before": {"type": ["integer", "null"], "minimum": 0},
+        "queue_size_after": {"type": ["integer", "null"], "minimum": 0},
+        "chunk_sha256": {"type": ["string", "null"]},
+        "response_sha256": {"type": ["string", "null"]},
+        "selected_action_sha256": {"type": ["string", "null"]},
+        "horizon": {"type": ["integer", "null"], "minimum": 1},
+        "committed": {"type": ["integer", "null"], "minimum": 1},
+    },
+}
+
 MATRIX_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",

@@ -160,46 +160,115 @@ def _fixture_ok(raw) -> bool:
     return _wire_ok(raw)   # fixture shape validation is part of the wire check
 
 
-def _queue_lifecycle(events, predictions: int, seq: int, H: int) -> tuple[bool, bool]:
-    """Replay the queue state machine from recorded events (P1.8).
+def _queue_lifecycle(events, predictions: int, seq: int, H: int,
+                     reqs_per_refill: int) -> tuple[bool, bool]:
+    """Formal state-machine replay of the queue evidence protocol v2 (v1.3.18).
 
-    Returns (lifecycle_valid, refill_count_exact). Fail-closed when no events.
+    Proves causal ordering, per-chunk prediction/chunk-id attribution, queue
+    before/after arithmetic, validated==committed chunk identity, atomic commit
+    (before -> before+H), and exact refill/commit/pop counts. Fail-closed.
+    Returns (lifecycle_valid, refill_count_exact).
     """
+    from .rollout_evidence_schema import QUEUE_EVENT_SCHEMA
+    import jsonschema
     if not events:
         return False, False
-    if events[0].get("event") != "queue.reset":
+    try:
+        for e in events:
+            jsonschema.validate(e, QUEUE_EVENT_SCHEMA)
+    except Exception:  # noqa: BLE001
         return False, False
-    if [e.get("event_index") for e in events] != list(range(len(events))):
+    if [e["event_index"] for e in events] != list(range(len(events))):
         return False, False
-    committed = popped = refills = 0
-    validated = False
+    if events[0]["event"] != "execution.started" or events[-1]["event"] != "execution.completed":
+        return False, False
+
+    st = "STARTED"
+    committed = popped = refills = resets = 0
+    reqs = 0
+    qsize = 0
+    validated_hash = None
+    active_pid = None
+    active_cid = None
+    seen_pids: set = set()
     pops_since_commit = 0
-    for e in events[1:]:
-        ev = e.get("event")
-        if ev == "queue.refill_requested":
-            if e.get("queue_size", 1) != 0:      # refill only when empty
-                return False, False
+
+    def bad():
+        return False, False
+
+    for e in events[1:-1]:
+        ev = e["event"]
+        if ev == "policy.reset":
+            if st not in ("STARTED", "EMPTY"):
+                return bad()
+            resets += 1
+            qsize = 0
+            st = "EMPTY"
+        elif ev == "queue.empty":
+            if e.get("queue_size_after", 0) != 0 or qsize != 0:
+                return bad()
+            st = "EMPTY"
+        elif ev == "queue.refill_requested":
+            if st != "EMPTY" or qsize != 0:      # refill ONLY when empty (P1.3)
+                return bad()
+            pid, cid = e.get("prediction_id"), e.get("chunk_id")
+            if pid is None or cid is None or pid in seen_pids:   # no reuse (P1.1)
+                return bad()
+            active_pid, active_cid = pid, cid
+            seen_pids.add(pid)
             refills += 1
+            reqs = 0
+            validated_hash = None
+            st = "REFILL"
+        elif ev == "runner.request_started":
+            # allowed after the refill (native/single) or after a prior response
+            # (split issues B requests per refill).
+            if st not in ("REFILL", "RESP") or e.get("prediction_id") != active_pid:
+                return bad()
+            st = "REQ"
+        elif ev == "runner.response_received":
+            if st != "REQ" or e.get("prediction_id") != active_pid:
+                return bad()
+            reqs += 1
+            st = "RESP"
         elif ev == "chunk.validated":
-            validated = True
+            if st != "RESP" or reqs != reqs_per_refill:   # request(s) before validate
+                return bad()
+            validated_hash = e.get("chunk_sha256")
+            st = "VALIDATED"
         elif ev == "chunk.committed":
-            if not validated:                    # commit only after validation
-                return False, False
+            if st != "VALIDATED" or e.get("prediction_id") != active_pid:
+                return bad()
+            if e.get("chunk_sha256") != validated_hash:  # committed == validated (identity)
+                return bad()
+            if e.get("queue_size_before") != qsize or e.get("queue_size_after") != qsize + H:
+                return bad()                     # atomic commit before->before+H (P1.4/P1.8)
+            qsize += H
             committed += 1
-            validated = False
             pops_since_commit = 0
+            st = "READY"
         elif ev == "action.popped":
-            if committed == 0:                   # pop only after a commit
-                return False, False
-            pops_since_commit += 1
+            if st not in ("READY", "DRAINING") or committed == 0:
+                return bad()
+            if e.get("prediction_id") != active_pid or e.get("chunk_id") != active_cid:
+                return bad()                     # pop attributed to its own chunk (P1.1)
+            if e.get("queue_size_before") != qsize or e.get("queue_size_after") != qsize - 1:
+                return bad()
+            qsize -= 1
             popped += 1
-            if pops_since_commit > H:             # at most H pops per committed chunk
-                return False, False
-        elif ev != "queue.empty":
-            return False, False                  # unknown event
-    lifecycle_ok = committed == refills and not validated
-    refill_exact = (refills == predictions and committed == predictions
-                    and popped == seq)
+            pops_since_commit += 1
+            if pops_since_commit > H:
+                return bad()
+            st = "EMPTY" if qsize == 0 else "DRAINING"
+        elif ev == "queue.exhausted":
+            if qsize != 0:
+                return bad()
+            st = "EMPTY"
+        else:
+            return bad()
+
+    lifecycle_ok = (resets >= 1 and committed == refills and st in ("EMPTY", "READY", "DRAINING"))
+    refill_exact = (refills == predictions and committed == predictions and popped == seq)
     return lifecycle_ok, refill_exact
 
 
@@ -210,8 +279,9 @@ def derive_checks(raw: dict) -> dict[str, bool]:
         else predictions
     req_count = len(raw["request_bodies"])
     done = raw["done_mask"]
+    reqs_per_refill = raw["batch_size"] if raw["mode"] == "split_and_stack" else 1
     ql, rc = _queue_lifecycle(raw.get("queue_events", []), predictions,
-                             raw["sequence_length"], raw["horizon"])
+                             raw["sequence_length"], raw["horizon"], reqs_per_refill)
     checks = {
         "official_rollout_called": req_count > 0,
         "all_environments_reached_done": all(any(r) for r in done) and bool(done),

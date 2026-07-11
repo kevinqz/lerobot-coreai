@@ -72,38 +72,70 @@ def _raw_with_events(events):
             "required_obs_keys": [], "fixture_contract": {}, "queue_events": events}
 
 
-def _ev(i, name, **kw):
-    return {"event_index": i, "event": name, "queue_size": kw.get("qs", 0),
-            "prediction_index": 0}
+def _valid_events():
+    """A minimal valid protocol-v2 stream: single_only B=1, seq=3, H=3 (1 chunk)."""
+    ch = "sha256:" + "a" * 64
+    ev, i = [], 0
+
+    def add(name, **kw):
+        nonlocal i
+        e = {"event_index": i, "event": name, "execution_id": "x",
+             "prediction_id": kw.pop("pid", None), "chunk_id": kw.pop("cid", None)}
+        e.update(kw)
+        ev.append(e)
+        i += 1
+    add("execution.started")
+    add("policy.reset", queue_size_after=0)
+    add("queue.empty", queue_size_after=0)
+    add("queue.refill_requested", pid=0, cid="chunk-0", queue_size_before=0, queue_size_after=0)
+    add("runner.request_started", pid=0, cid="chunk-0")
+    add("runner.response_received", pid=0, cid="chunk-0", response_sha256=ch)
+    add("chunk.validated", pid=0, cid="chunk-0", chunk_sha256=ch, horizon=3)
+    add("chunk.committed", pid=0, cid="chunk-0", chunk_sha256=ch,
+        queue_size_before=0, queue_size_after=3)
+    for b in range(3):
+        add("action.popped", pid=0, cid="chunk-0",
+            queue_size_before=3 - b, queue_size_after=2 - b)
+    add("queue.exhausted", pid=0, cid="chunk-0", queue_size_after=0)
+    add("execution.completed")
+    return ev
+
+
+def _reindex(ev):
+    for j, e in enumerate(ev):
+        e["event_index"] = j
+    return ev
 
 
 def test_queue_lifecycle_valid_sequence():
     from lerobot_coreai.rollout_replay import derive_checks
-    events = [_ev(0, "queue.reset"), _ev(1, "queue.empty"),
-              _ev(2, "queue.refill_requested", qs=0), _ev(3, "chunk.validated"),
-              _ev(4, "chunk.committed"), _ev(5, "action.popped"),
-              _ev(6, "action.popped"), _ev(7, "action.popped")]
-    c = derive_checks(_raw_with_events(events))
+    c = derive_checks(_raw_with_events(_valid_events()))
     assert c["queue_lifecycle_valid"] and c["queue_refill_count_exact"]
 
 
 def test_queue_commit_before_validation_fails():
     from lerobot_coreai.rollout_replay import derive_checks
-    events = [_ev(0, "queue.reset"), _ev(1, "queue.empty"),
-              _ev(2, "queue.refill_requested", qs=0), _ev(3, "chunk.committed")]
-    assert derive_checks(_raw_with_events(events))["queue_lifecycle_valid"] is False
+    ev = [e for e in _valid_events() if e["event"] != "chunk.validated"]
+    assert derive_checks(_raw_with_events(_reindex(ev)))["queue_lifecycle_valid"] is False
 
 
-def test_queue_pop_before_commit_fails():
+def test_queue_pop_wrong_prediction_id_fails():
     from lerobot_coreai.rollout_replay import derive_checks
-    events = [_ev(0, "queue.reset"), _ev(1, "action.popped")]
-    assert derive_checks(_raw_with_events(events))["queue_lifecycle_valid"] is False
+    ev = _valid_events()
+    for e in ev:
+        if e["event"] == "action.popped":
+            e["prediction_id"] = 99          # not the committing chunk's id (P1.1)
+            break
+    assert derive_checks(_raw_with_events(ev))["queue_lifecycle_valid"] is False
 
 
-def test_queue_refill_while_nonempty_fails():
+def test_queue_bad_commit_arithmetic_fails():
     from lerobot_coreai.rollout_replay import derive_checks
-    events = [_ev(0, "queue.reset"), _ev(1, "queue.refill_requested", qs=2)]
-    assert derive_checks(_raw_with_events(events))["queue_lifecycle_valid"] is False
+    ev = _valid_events()
+    for e in ev:
+        if e["event"] == "chunk.committed":
+            e["queue_size_after"] = 99       # not before + H
+    assert derive_checks(_raw_with_events(ev))["queue_lifecycle_valid"] is False
 
 
 def test_no_queue_events_fails_closed():
