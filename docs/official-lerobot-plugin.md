@@ -822,3 +822,25 @@ certify. That self-certification path is closed:
 The fully-live executor (running the real `lerobot-eval` subprocess against a
 registered `coreai_cert_env` and deriving the receipt from captured outputs) lands in
 v1.3.27; this ships the receipt type + gate + anti-forgery closure.
+
+## v1.3.26.10 — full replay + root closure (P1.1 / P1.3)
+
+Certificate-grade evidence is now **independently replayable**, not merely
+self-consistent:
+
+- **Processor parity (P1.1)** — a `certificate`-grade `ProcessorParityReport` persists
+  each case's **raw reference/candidate arrays**; the verifier **re-derives** metrics,
+  hashes, and pass/fail from them. A report with forged metrics (but a consistent
+  `passed`/`reasons` pair) is caught by the fresh recomputation.
+- **Model conversion (P1.3)** — a `certificate`-grade `ModelConversionEvidence` must
+  carry a **`replay_bundle`** (raw reference/candidate outputs); the verifier recomputes
+  numeric parity from it offline. `model_conversion_verified` is promoted **only** in
+  certificate grade with passing parity; a certificate evidence missing the bundle, or
+  whose bundle doesn't reproduce the record, is rejected. `diagnostic` grade omits the
+  bundle and never promotes the claim.
+
+**Honestly deferred (interdependent, not above authority closure):** the reference =
+real LeRobot `NormalizerProcessor` loaded from serialized config (P1.2, needs a lerobot
+rollout CI job), and the OfficialEvalCertificate root-set expansion (policy-execution /
+model-conversion / processor-stage / runtime-support / negotiation / runner-capabilities
+/ rollout-matrix roots) — both land with the v1.3.27 live-run work.

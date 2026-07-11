@@ -94,3 +94,47 @@ def test_missing_weights_digest_fails_schema():
     del ev["source"]["weights_sha256"]
     ok, _ = verify_model_conversion_evidence(ev)
     assert not ok        # schema requires the source weights digest
+
+
+# --- P1.3: mandatory ConversionReplayBundle in certificate grade ---
+
+def test_certificate_grade_persists_and_replays_bundle():
+    ref = [[1.0, 2.0, 3.0]]
+    cand = [[1.0005, 2.0004, 2.9996]]
+    ev = _build(ref, cand, _TOL)                 # default = certificate
+    assert ev["evidence_grade"] == "certificate"
+    assert ev["replay_bundle"]["reference_outputs"] == ref
+    assert ev["replay_bundle"]["candidate_outputs"] == cand
+    ok, errs = verify_model_conversion_evidence(ev)      # no external arrays needed
+    assert ok, errs
+
+
+def test_certificate_grade_without_bundle_rejected():
+    ev = _build([[1.0]], [[1.0]], _TOL)
+    ev["replay_bundle"] = None                   # strip the bundle
+    ok, errs = verify_model_conversion_evidence(ev)
+    assert not ok and any("replay_bundle" in e for e in errs)
+
+
+def test_bundle_tamper_detected_by_replay():
+    ref, cand = [[1.0, 2.0]], [[1.0, 2.0]]
+    ev = _build(ref, cand, _TOL)
+    ev["replay_bundle"]["candidate_outputs"] = [[9.0, 9.0]]   # tamper the bundle
+    ok, errs = verify_model_conversion_evidence(ev)
+    assert not ok and any("hash mismatch" in e or "recomputed parity" in e for e in errs)
+
+
+def test_diagnostic_grade_never_promotes():
+    ref = [[1.0, 2.0, 3.0]]
+    cand = [[1.0005, 2.0004, 2.9996]]            # parity WOULD pass
+    ev = build_model_conversion_evidence(
+        source=_source(), exporter=_exporter(),
+        export_configuration={"opset": 17}, artifact=_artifact(),
+        reference_outputs=ref, candidate_outputs=cand, tolerance=_TOL,
+        evidence_grade="diagnostic")
+    assert ev["evidence_grade"] == "diagnostic"
+    assert ev["replay_bundle"] is None
+    assert ev["claims"]["model_conversion_verified"] is False   # diagnostic never promotes
+    assert ev["claims"]["numeric_parity_verified"] is True      # parity honestly recorded
+    ok, errs = verify_model_conversion_evidence(ev)
+    assert ok, errs
