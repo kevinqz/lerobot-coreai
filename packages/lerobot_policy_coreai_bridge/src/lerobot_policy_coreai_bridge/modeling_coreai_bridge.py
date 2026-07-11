@@ -89,6 +89,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self.negotiation_record: dict[str, Any] | None = None
         self.runner_capabilities_raw: dict[str, Any] | None = None
         self.runner_capabilities_normalized: dict[str, Any] | None = None
+        self._normalized_capabilities: Any = None   # typed authority for decisions
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self.last_batch_mode: str | None = None
@@ -171,11 +172,20 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         backward-compatibility list + announced capabilities. The offline verifier
         RE-RUNS the negotiation algorithm from these inputs and requires equality."""
         from lerobot_coreai.capabilities_normalize import (
-            normalize_capabilities, normalized_capabilities_sha256)
+            normalize_capabilities, normalized_capabilities_sha256,
+            typed_normalized_capabilities)
         from lerobot_coreai.rollout_evidence_schema import (
             NEGOTIATION_SCHEMA_VERSION, canonical_json_sha256)
         from lerobot_coreai.runner import capabilities_sha256
         raw = dict(getattr(caps, "raw", {}) or {})
+        # v1.3.23 (P1.1/P1.3): the typed NORMALIZED capabilities are the runtime
+        # authority; a fail-closed normalization is the ONLY gate that produces them.
+        typed = typed_normalized_capabilities(raw)
+        if not typed.supports_action:
+            raise PluginBindingError(
+                "runner does not announce supports.action; refusing to bind for "
+                "policy inference.")
+        self._normalized_capabilities = typed
         rec = {
             "schema_version": NEGOTIATION_SCHEMA_VERSION,
             "selection_policy": "minimum_compatible",
@@ -423,19 +433,34 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._session_state = "IDLE"
 
     @contextmanager
-    def _evidence_stage(self, failed_stage: str):
+    def _evidence_stage(self, failed_stage: str, classify=None):
         """Classify a failing boundary AUTOMATICALLY (v1.3.22, P1.6/P1.7).
 
         If the wrapped boundary raises during an active evidence session, the RUNTIME
         emits the stage-specific failure event + terminal ``execution.failed`` tagged
         ``runtime_exception_boundary`` — the caller does NOT choose the stage. Inner
-        boundaries win (``_failed_sealed`` guards against a re-tag while unwinding)."""
+        boundaries win (``_failed_sealed`` guards against a re-tag while unwinding).
+        ``classify`` (v1.3.23, P1.6) may refine the stage from the exception TYPE
+        (e.g. a transport error is ``request``; a response-contract error is
+        ``response``) so a non-finite response is not mislabeled as a generic request."""
         try:
             yield
         except Exception as exc:  # noqa: BLE001
             if self.record_queue_events and self._session_state == "ACTIVE":
-                self._seal_failed(failed_stage, str(exc), "runtime_exception_boundary")
+                stage = classify(exc) if classify is not None else failed_stage
+                self._seal_failed(stage, str(exc), "runtime_exception_boundary")
             raise
+
+    @staticmethod
+    def _classify_runner_exc(exc: Exception) -> str:
+        """request (transport) vs response (the runner's response violated the
+        contract). A non-finite / wrong-shape / malformed response is ``response``."""
+        from lerobot_coreai.errors import (
+            ActionValidationError, RunnerProtocolError,
+        )
+        if isinstance(exc, (RunnerProtocolError, ActionValidationError)):
+            return "response"
+        return "request"
 
     def abort_evidence_session(self, failed_stage: str, detail: str = "") -> list:
         """Explicit, POST-HOC failure seal (diagnostic). Prefer ``_evidence_stage``,
@@ -466,6 +491,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         # with different capabilities, so re-negotiate on the next inference.
         self._protocol = None
         self._capabilities = None
+        self._normalized_capabilities = None
         if self.coreai_policy is not None and hasattr(self.coreai_policy, "reset"):
             self.coreai_policy.reset()
 
@@ -501,7 +527,7 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._emit("runner.request_started", prediction_id=self._active_prediction_id,
                    chunk_id=cid, request_id=rid, sample_index=sample_index)
         self._open_requests += 1
-        with self._evidence_stage("request"):
+        with self._evidence_stage("request", classify=self._classify_runner_exc):
             raw = fn(*args, **kwargs)
         if self.record_queue_events:
             from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
@@ -597,8 +623,11 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         b = self._batch_size(batch)
         with self._evidence_stage("runner_negotiate"):
             proto = self._resolve_protocol()  # also caches self._capabilities
+        # v1.3.23 (P1.1/P1.4): the batch decision reads capability facts from the
+        # typed NORMALIZED authority, not the raw/parsed object.
         decision = select_batch_execution_mode(
-            self.config, self._batch_contract, self._capabilities, b)
+            self.config, self._batch_contract,
+            self._normalized_capabilities or self._capabilities, b)
         self.last_batch_mode = decision.mode
         if decision.mode == MODE_SINGLE:
             return self._predict_single_chunk(batch, proto)          # [1, H, A]

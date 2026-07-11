@@ -353,20 +353,24 @@ def write_matrix_manifest(matrix_dir: str, target: str, cases: dict[str, dict]) 
     """Aggregate per-case {passed, bundle_root_sha256} into a matrix + root."""
     out = Path(matrix_dir)
     out.mkdir(parents=True, exist_ok=True)
-    # v1.3.16 (P1.1): the matrix root binds target + passed + bundle root, so a
-    # target/pass flip changes the root (not just the bundle-root list).
+    # v1.3.21 (P1.14): declare the runtime support profile alongside the matrix.
+    # v1.3.23 (P1.7): its hash is folded into the matrix root and covered by the
+    # matrix checksums, so removing or tampering with the profile fails the root.
+    from lerobot_coreai.runtime_support import runtime_support_profile
+    profile = runtime_support_profile()
+    profile_sha = canonical_json_sha256(profile)
+    (out / "runtime_support_profile.json").write_text(json.dumps(profile, indent=2))
     root = canonical_json_sha256(
         {"schema_version": MATRIX_SCHEMA_VERSION, "target": target,
+         "runtime_support_profile_sha256": profile_sha,
          "cases": sorted((c, bool(v["passed"]), v["bundle_root_sha256"])
                          for c, v in cases.items())})
-    mx = {"schema_version": MATRIX_SCHEMA_VERSION, "target": target,
-          "cases": cases, "matrix_root_sha256": root}
+    mx = {"schema_version": MATRIX_SCHEMA_VERSION, "target": target, "cases": cases,
+          "runtime_support_profile_sha256": profile_sha, "matrix_root_sha256": root}
     (out / "official_rollout_matrix_manifest.json").write_text(json.dumps(mx, indent=2))
-    # v1.3.21 (P1.14): declare the runtime support profile alongside the matrix.
-    from lerobot_coreai.runtime_support import runtime_support_profile
-    (out / "runtime_support_profile.json").write_text(
-        json.dumps(runtime_support_profile(), indent=2))
     (out / "matrix_checksums.json").write_text(json.dumps(
         {"official_rollout_matrix_manifest.json":
-         _sha256_file(out / "official_rollout_matrix_manifest.json")}, indent=2))
+         _sha256_file(out / "official_rollout_matrix_manifest.json"),
+         "runtime_support_profile.json":
+         _sha256_file(out / "runtime_support_profile.json")}, indent=2))
     return mx

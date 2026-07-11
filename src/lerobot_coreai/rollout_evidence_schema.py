@@ -457,6 +457,9 @@ MATRIX_SCHEMA = {
                 "required": ["passed", "bundle_root_sha256"],
                 "properties": {"passed": {"type": "boolean"},
                                "bundle_root_sha256": _SHA256}}},
+        # v1.3.23 (P1.7): the RuntimeSupportProfile hash is folded into the matrix
+        # root, so removing or tampering with the profile changes the root.
+        "runtime_support_profile_sha256": _SHA256,
         "matrix_root_sha256": _SHA256,
     },
 }
