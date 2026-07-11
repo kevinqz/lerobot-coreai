@@ -69,3 +69,45 @@ def identity_transition_preserves_hash(source_sha256: str, target_sha256: str,
     if transform == "identity":
         return source_sha256 == target_sha256
     return transform == "nontrivial"
+
+
+# v1.3.24 Phase 0: map the legacy processor-contract ownership strings
+# (`expects`/`returns`) onto canonical stages, so a canonical ProcessorStageContract
+# v1 can be produced from a legacy artifact without inventing semantics. The legacy
+# strings remain accepted only in the READER; new writers emit the enum forms.
+_LEGACY_EXPECTS_TO_SOURCE = {
+    "raw_lerobot_observation": ObservationStage.LEROBOT_PREPROCESS_OUTPUT.value,
+    "policy_preprocessed_observation": ObservationStage.POLICY_PROCESSOR_OUTPUT.value,
+}
+_LEGACY_RETURNS_TO_TARGET = {
+    "postprocessed_action": ActionStage.ENVIRONMENT_ACTION.value,
+    "normalized_action": ActionStage.VALIDATED_ACTION_CHUNK.value,
+}
+
+
+def build_processor_stage_contract(*, expects: str, returns: str,
+                                   transform: str = "identity") -> dict:
+    """Canonical ProcessorStageContract v1 derived from a legacy processor contract.
+
+    ``expects`` is what the runner consumes (its observation source stage → the
+    CoreAI runner input); ``returns`` is what the runner emits (CoreAI runner output
+    → the environment/validated action stage). Unknown legacy values fail closed."""
+    source = _LEGACY_EXPECTS_TO_SOURCE.get(expects)
+    target_action = _LEGACY_RETURNS_TO_TARGET.get(returns)
+    if source is None or target_action is None:
+        raise ValueError(
+            f"cannot map legacy processor contract expects={expects!r} "
+            f"returns={returns!r} to canonical stages.")
+    return {
+        "schema_version": PROCESSOR_STAGE_CONTRACT_SCHEMA_VERSION,
+        "observation": {"source": source,
+                        "target": ObservationStage.COREAI_RUNNER_INPUT.value,
+                        "transform": transform},
+        "action": {"source": ActionStage.COREAI_RUNNER_OUTPUT.value,
+                   "target": target_action, "transform": transform},
+    }
+
+
+def processor_stage_contract_sha256(contract: dict) -> str:
+    from .rollout_evidence_schema import canonical_json_sha256
+    return canonical_json_sha256(contract)

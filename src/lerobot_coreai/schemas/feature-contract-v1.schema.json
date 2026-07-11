@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lerobot-coreai/feature-contract-v1",
+  "title": "FeatureContract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_id", "observations", "actions", "context"],
+  "properties": {
+    "schema_version": {"const": "lerobot-coreai.feature-contract.v1"},
+    "contract_id": {"type": "string", "minLength": 1},
+    "robot_type": {"type": ["string", "null"]},
+    "policy_path": {"type": ["string", "null"]},
+    "processor_stage_contract_sha256": {"type": ["string", "null"]},
+    "runtime_support_profile_sha256": {"type": ["string", "null"]},
+    "observations": {"type": "array", "items": {"$ref": "#/definitions/feature"}},
+    "actions": {"type": "array", "items": {"$ref": "#/definitions/feature"}},
+    "context": {"type": "array", "items": {"$ref": "#/definitions/feature"}},
+    "claims": {
+      "type": "object", "additionalProperties": false,
+      "required": ["feature_contract_verified", "proves_task_success",
+                   "proves_physical_safety"],
+      "properties": {
+        "feature_contract_verified": {"type": "boolean"},
+        "proves_task_success": {"const": false},
+        "proves_physical_safety": {"const": false}}}
+  },
+  "definitions": {
+    "feature": {
+      "type": "object", "additionalProperties": false,
+      "required": ["feature_id", "key", "role", "modality", "stage", "required",
+                   "dtype", "shape", "axes", "value_domain", "normalization"],
+      "properties": {
+        "feature_id": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1},
+        "role": {"enum": ["observation", "action", "context"]},
+        "modality": {"enum": ["vector", "image", "video", "depth", "text", "scalar"]},
+        "stage": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"},
+        "dtype": {"type": "string", "minLength": 1},
+        "shape": {"type": "array",
+                  "items": {"type": ["integer", "string"]}},
+        "axes": {"type": "array", "items": {"type": "string"}},
+        "layout": {"type": ["string", "null"]},
+        "value_domain": {
+          "type": "object", "additionalProperties": false,
+          "required": ["finite"],
+          "properties": {"finite": {"type": "boolean"},
+                         "minimum": {"type": ["number", "null"]},
+                         "maximum": {"type": ["number", "null"]},
+                         "closed_interval": {"type": "boolean"}}},
+        "units": {},
+        "coordinate_frame": {"type": ["string", "null"]},
+        "names": {"type": ["array", "null"], "items": {"type": "string"}},
+        "normalization": {
+          "type": "object", "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": {"enum": ["none", "raw", "normalized", "unknown"]},
+            "method": {"type": ["string", "null"]},
+            "owner": {"type": ["string", "null"]},
+            "stats_ref": {"type": ["string", "null"]}}}
+      }
+    }
+  }
+}
