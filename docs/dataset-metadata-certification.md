@@ -59,12 +59,31 @@ lerobot-coreai dataset-metadata bind-feature-contract \
   --metadata-evidence ev.json --feature-contract fc.json --fail-on-mismatch
 ```
 
+## v1.3.26.3 — multimodal + static cross-version + certificate grade
+
+Closes the external review's remaining v1.3.25 gaps:
+
+- **Multimodal fixture** — a committed, static, byte-exact metadata tree at
+  `tests/fixtures/lerobot_dataset_v3_multimodal/` exercising `observation.state`,
+  **`observation.images.front` + `observation.images.wrist`** (two cameras), `action`
+  and `task` — so `camera_keys`, image modality, shapes and per-feature names are all
+  covered.
+- **Static cross-version** — both the `lerobot-stable` (0.6.0) and `lerobot-dev`
+  rollout jobs read the **same committed bytes** through the real
+  `LeRobotDatasetMetadata` and must reproduce the **pinned** `metadata_tree_sha256`
+  (`sha256:07cefa4a…`) + identical semantic evidence — proving cross-version
+  interpretation of *one* artifact (the runtime `create→…→finalize` test still covers
+  intra-version round-trip).
+- **Certificate grade** — `capture_dataset_metadata_evidence(..., evidence_grade=
+  "certificate")` records the real **loader identity** (module/class/lerobot version)
+  and **refuses a duck-typed stand-in**; the verifier requires the official
+  `lerobot.…LeRobotDatasetMetadata` loader for certificate-grade evidence.
+
 ## Not yet
 
-- **Full episode/stats/content verification** (`dataset_content_verified`) — v1.3.25
-  proves metadata *identity*, not the frame content.
-- **Committed static fixture** at `tests/fixtures/lerobot_dataset_v3/` — the current
-  fixture is generated at runtime for cross-version loadability; a committed byte-exact
-  tree can be added once a single lerobot version is pinned for certification.
-- Processor parity (v1.3.26), official-eval CLI (v1.3.27), signed evidence (v1.3.28),
-  Apple runtime (v1.4.0) — each promoted only by its own proof.
+- **Full episode/stats/content verification** (`dataset_content_verified`) — still
+  metadata *identity* only.
+- A **video-mode** fixture variant (ffmpeg-encoded) alongside the image-mode one —
+  deferred (ffmpeg dependency).
+- Official-eval CLI (v1.3.27), signed evidence (v1.3.28), Apple runtime (v1.4.0) —
+  each promoted only by its own proof.

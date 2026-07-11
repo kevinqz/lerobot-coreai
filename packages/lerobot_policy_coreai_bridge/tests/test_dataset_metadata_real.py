@@ -4,6 +4,7 @@
 # No SimpleNamespace in this path — the real upstream class is loaded. No network.
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -115,3 +116,32 @@ def test_real_metadata_binds_feature_contract(tmp_path):
     # a contract with mismatched action names must fail the binding.
     bad = bind_metadata_to_feature_contract(ev, _contract(action_names=("x", "y")))
     assert not bad.ok
+
+
+# --- v1.3.26.3: static, byte-exact, multimodal, cross-version fixture ---
+
+# committed under tests/fixtures/lerobot_dataset_v3_multimodal (generated with 0.6.0).
+_FIXTURE_ROOT = (Path(__file__).resolve().parents[3]
+                 / "tests" / "fixtures" / "lerobot_dataset_v3_multimodal")
+_PINNED_TREE_SHA256 = "sha256:07cefa4af2846794960732b4e9033bcef60baf501cdf35eda2365076066a2937"
+
+
+def test_static_multimodal_fixture_certificate_grade():
+    # BOTH stable (0.6.0) and dev CI read the SAME committed bytes through the REAL
+    # LeRobotDatasetMetadata and must produce the SAME semantic evidence + tree hash.
+    from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata as MetaCls
+    from lerobot_coreai.dataset_metadata_evidence import (
+        verify_dataset_metadata_evidence,
+    )
+    meta = MetaCls(repo_id="local/coreai-cert-fixture-mm", root=str(_FIXTURE_ROOT))
+    assert set(meta.camera_keys) == {"observation.images.front",
+                                     "observation.images.wrist"}
+    ev = capture_dataset_metadata_evidence(
+        meta, root=str(_FIXTURE_ROOT), repo_id="local/coreai-cert-fixture-mm",
+        revision="fixture-v1", evidence_grade="certificate")
+    # byte-exact cross-version pin: identical bytes -> identical root on every version.
+    assert ev["metadata_tree_sha256"] == _PINNED_TREE_SHA256
+    assert ev["evidence_grade"] == "certificate"
+    assert ev["loader_identity"]["class_name"] == "LeRobotDatasetMetadata"
+    ok, errs = verify_dataset_metadata_evidence(ev, str(_FIXTURE_ROOT))
+    assert ok, errs
