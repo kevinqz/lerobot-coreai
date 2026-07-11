@@ -135,12 +135,114 @@ def test_private_key_never_in_envelope():
 
 def test_signature_asserts_no_forbidden_claim():
     # the statement pins asserts_task_success / asserts_physical_safety to False; a
-    # forged True must be rejected even with an otherwise-valid signature.
+    # forged True must be rejected (now at the closed statement schema layer).
     key = generate_keypair(dev=False)
     st = _statement(); st["predicate"]["asserts_physical_safety"] = True
     env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
     ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW)
-    assert not ok and any("forbidden claim" in r for r in reasons)
+    assert not ok and any("schema" in r or "forbidden" in r for r in reasons)
+
+
+# --- v1.3.26.7 verifier-closure attacks ---
+
+def _resign(statement, key):
+    return sign_statement(statement, private_key_hex=key["private_key_hex"],
+                          key_id=key["key_id"])
+
+
+def test_subject_root_mismatch_fails():
+    key = generate_keypair(dev=False)
+    st = _statement()
+    st["subject"][0]["digest"]["sha256"] = "b" * 64      # != certificate_root
+    env = _resign(st, key)
+    ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("subject.digest" in r for r in reasons)
+
+
+def test_unknown_predicate_type_fails():
+    key = generate_keypair(dev=False)
+    st = _statement(); st["predicateType"] = "https://evil/predicate/v1"
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("schema" in r for r in reasons)
+
+
+def test_missing_required_root_for_type_fails():
+    key = generate_keypair(dev=False)
+    st = _statement()
+    del st["predicate"]["roots"]["feature_contract_sha256"]   # official_eval needs it
+    st["subject"][0]["digest"]["sha256"] = st["predicate"]["certificate_root_sha256"].split(":")[-1]
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("required root" in r for r in reasons)
+
+
+def test_extra_unsigned_semantic_field_fails():
+    key = generate_keypair(dev=False)
+    st = _statement(); st["predicate"]["sneaky_grant"] = True   # extra field
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("schema" in r for r in reasons)
+
+
+def test_future_issued_at_fails():
+    key = generate_keypair(dev=False)
+    st = _statement()                                    # issued_at = _NOW (2026-07-11)
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key),
+                                         now="2026-01-01T00:00:00Z")   # "now" is earlier
+    assert not ok and any("future" in r for r in reasons)
+
+
+def test_naive_timestamp_rejected():
+    key = generate_keypair(dev=False)
+    st = _statement()
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key),
+                                         now="2026-07-11 00:00:00")   # no timezone
+    assert not ok and any("timezone" in r or "RFC-3339" in r for r in reasons)
+
+
+def test_required_claims_false_is_applied():
+    key = generate_keypair(dev=False)
+    st = _statement()
+    st["predicate"]["roots"]["proves_physical_safety"] = "sha256:" + "c" * 64
+    st["subject"][0]["digest"]["sha256"] = st["predicate"]["certificate_root_sha256"].split(":")[-1]
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("required-false" in r for r in reasons)
+
+
+def test_key_id_not_matching_public_key_fails():
+    key = generate_keypair(dev=False)
+    env, _ = _sign(key=key)
+    tp = _trust_policy(key)
+    tp["trusted_keys"][0]["key_id"] = "ed25519:" + "0" * 32   # arbitrary id
+    env["signatures"][0]["keyid"] = "ed25519:" + "0" * 32
+    ok, reasons = verify_signed_evidence(env, trust_policy=tp, now=_NOW)
+    assert not ok and any("derived from its public key" in r for r in reasons)
+
+
+def test_empty_signatures_fails_schema():
+    env, key = _sign()
+    env["signatures"] = []
+    ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("schema" in r for r in reasons)
+
+
+def test_duplicate_signatures_fails_schema():
+    env, key = _sign()
+    env["signatures"] = env["signatures"] * 2
+    ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("schema" in r for r in reasons)
+
+
+def test_ttl_exceeds_maximum_fails():
+    key = generate_keypair(dev=False)
+    st = _statement(expires_at="2099-01-01T00:00:00Z")   # ~73y after issued_at
+    ok, reasons = verify_signed_evidence(_resign(st, key),
+                                         trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("TTL" in r for r in reasons)
 
 
 def test_dsse_and_intoto_shape():

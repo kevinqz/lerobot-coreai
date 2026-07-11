@@ -52,6 +52,24 @@ lerobot-coreai verify-signed-evidence --envelope signed.json \
   --trust-policy trust/official-release.json --now 2026-07-11T00:00:00Z --json
 ```
 
+## v1.3.26.7 — Verifier Closure (verify what is signed)
+
+The verifier no longer trusts the decoded payload. It now:
+
+- schema-validates the **DSSE envelope** (closed; **exactly one** signature) and the
+  **in-toto Statement** (closed `_type`/`predicateType`/`subject`/`predicate`, no extra
+  fields — an unsigned semantic field is rejected);
+- cross-binds `subject.digest.sha256 == predicate.certificate_root_sha256`;
+- requires the **certificate-type's mandatory roots** to be present + hash-formatted;
+- **recomputes `key_id` from the public key** and refuses a trust-policy entry whose id
+  doesn't match its own key;
+- parses timestamps as **RFC-3339 timezone-aware** and enforces
+  `valid_from ≤ issued_at ≤ now < expires_at ≤ valid_until` + a max **TTL**; a naive
+  stamp or a future `issued_at` fails;
+- **applies `TrustPolicy.required_claims_false` dynamically** (no longer two hardcoded
+  claims);
+- enforces strict base64 and rejects empty/duplicate signatures.
+
 ## Not yet
 
 - **Wiring the signing onto the official-eval certificate** (v1.3.27 → v1.3.28) — this
