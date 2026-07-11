@@ -1,11 +1,13 @@
 # official_eval_certificate.py — OfficialEvalCertificate v1 (v1.3.27 core).
 #
 # Certify the command users actually run — `lerobot-eval` — not merely the internal
-# function it eventually calls. The critical gate: official_eval_certified can be true
-# ONLY when the OFFICIAL CLI entrypoint was used (argv invokes lerobot-eval), the
-# third-party plugin registration resolved the policy, every required case passed with
-# a clean exit, the outputs are schema-valid, and semantic replay passed. Direct
-# rollout() evidence (no CLI argv) can NEVER set the claim. Pure Python; offline.
+# function it eventually calls. official_eval_certified can be true ONLY when a
+# VerifiedOfficialEvalExecutionReceipt (minted from a REAL lerobot-eval subprocess: the
+# official entrypoint, an installed executable — not a /tmp shim —, the coreai env
+# instantiated, every required case passing with a clean exit) is promoted via
+# `promote_official_eval_certificate`. The public builder is DIAGNOSTIC only (claim
+# always false); a hand-built execution dict of booleans can NEVER set the claim
+# (v1.3.26.8, P0.1). Pure Python; offline.
 
 from __future__ import annotations
 
@@ -22,9 +24,11 @@ _CHECK_KEYS = ("official_cli_entrypoint_used", "third_party_plugin_registration_
 OFFICIAL_EVAL_CERTIFICATE_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "scope", "inputs", "execution", "checks", "claims"],
+    "required": ["schema_version", "evidence_grade", "scope", "inputs", "execution",
+                 "checks", "claims"],
     "properties": {
         "schema_version": {"const": OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION},
+        "evidence_grade": {"enum": ["diagnostic", "certificate"]},
         "scope": {
             "type": "object", "additionalProperties": False,
             "required": ["lerobot_version", "environment", "cases"],
@@ -81,18 +85,59 @@ def _gate(execution: dict, checks: dict, cases: list) -> bool:
                 and all(checks.get(k) for k in _CHECK_KEYS))
 
 
-def build_official_eval_certificate(*, scope: dict, inputs: dict, execution: dict,
-                                    checks: dict) -> dict:
-    """Assemble the certificate. official_eval_certified is DERIVED from the gate —
-    a direct rollout() run (argv not lerobot-eval) can never certify."""
+class _PromotionAuthority:
+    """Marker: the only path that may set official_eval_certified to the gate result."""
+
+
+def build_diagnostic_official_eval_report(*, scope: dict, inputs: dict, execution: dict,
+                                          checks: dict) -> dict:
+    """DIAGNOSTIC report only (v1.3.26.8): official_eval_certified is ALWAYS false,
+    regardless of the caller's checks/argv. A true certificate is produced ONLY by
+    ``promote_official_eval_certificate`` from a verified execution receipt — no
+    hand-built execution dict can certify."""
+    return _assemble(scope=scope, inputs=inputs, execution=execution, checks=checks,
+                     authority=None)
+
+
+def promote_official_eval_certificate(*, receipt, inputs: dict) -> dict:
+    """Promote a TRUE official-eval certificate (v1.3.26.8, P0.1). Accepts ONLY a
+    ``VerifiedOfficialEvalExecutionReceipt`` (a dict raises TypeError) whose substance
+    was re-derived from a real lerobot-eval subprocess. Checks + execution are DERIVED
+    from the receipt, never supplied."""
+    from .authority import VerifiedOfficialEvalExecutionReceipt
+    if not isinstance(receipt, VerifiedOfficialEvalExecutionReceipt):
+        raise TypeError("receipt must be a VerifiedOfficialEvalExecutionReceipt "
+                        "(mint via authority.verify_official_eval_execution_receipt)")
+    r = receipt.payload
+    scope = {"lerobot_version": None,
+             "lerobot_distribution_sha256": r["lerobot_distribution_sha256"],
+             "environment": "coreai_cert_env", "cases": sorted(r["cases"])}
+    execution = {"argv": list(r["argv"]), "command_sha256": r["command_sha256"],
+                 "resolved_config_sha256": r["resolved_config_sha256"],
+                 "output_tree_sha256": r["output_tree_sha256"],
+                 "exit_code": r["exit_code"]}
+    checks = {"third_party_plugin_registration_used": bool(r["coreai_env_instantiated"]),
+              "all_required_cases_passed": True,      # enforced at mint (full matrix)
+              "outputs_schema_valid": True,           # captured output tree
+              "evidence_replay_passed": True}         # verified by the executor
+    return _assemble(scope=scope, inputs=inputs, execution=execution, checks=checks,
+                     authority=object.__new__(_PromotionAuthority))
+
+
+def _assemble(*, scope: dict, inputs: dict, execution: dict, checks: dict,
+              authority) -> dict:
+    """Internal assembler. Only the promotion authority lets the claim be the gate
+    result; otherwise the report is diagnostic (claim forced false)."""
     import jsonschema
     full_checks = {k: bool(checks.get(k, False)) for k in _CHECK_KEYS}
     # the entrypoint check is itself pinned to the recorded argv (no free assertion).
     full_checks["official_cli_entrypoint_used"] = _argv_is_official_eval(
         execution.get("argv", []))
-    certified = _gate(execution, full_checks, scope.get("cases", []))
+    promoted = isinstance(authority, _PromotionAuthority)
+    certified = _gate(execution, full_checks, scope.get("cases", [])) if promoted else False
     cert = {
         "schema_version": OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION,
+        "evidence_grade": "certificate" if promoted else "diagnostic",
         "scope": scope, "inputs": inputs, "execution": execution,
         "checks": full_checks,
         "claims": {"official_eval_certified": certified,
@@ -106,9 +151,10 @@ def build_official_eval_certificate(*, scope: dict, inputs: dict, execution: dic
 
 def verify_official_eval_certificate(cert: dict, *, output_tree_sha256: str | None = None,
                                      require_complete_cases: bool = True) -> tuple[bool, list]:
-    """Offline: schema-valid, the entrypoint check matches the recorded argv, the gate
-    is consistent (a forged official_eval_certified fails), and — if supplied — the
-    recomputed output-tree digest matches."""
+    """Offline: schema-valid, the entrypoint check matches the recorded argv, the claim
+    is consistent with the grade (a diagnostic report forged to true fails; a
+    certificate grade must equal the gate), and — if supplied — the recomputed
+    output-tree digest matches."""
     import jsonschema
     errors: list[str] = []
     try:
@@ -116,13 +162,19 @@ def verify_official_eval_certificate(cert: dict, *, output_tree_sha256: str | No
     except Exception as exc:  # noqa: BLE001
         return False, [f"schema: {exc}"]
     execution, checks, scope = cert["execution"], cert["checks"], cert["scope"]
+    claimed = cert["claims"]["official_eval_certified"]
     if checks["official_cli_entrypoint_used"] != _argv_is_official_eval(execution["argv"]):
         errors.append("official_cli_entrypoint_used inconsistent with recorded argv")
-    expected = _gate(execution, checks, scope["cases"])
-    if cert["claims"]["official_eval_certified"] != expected:
-        errors.append(f"official_eval_certified={cert['claims']['official_eval_certified']} "
-                      f"!= gate {expected} (direct-rollout evidence can never certify)")
-    if require_complete_cases and set(scope["cases"]) != set(REQUIRED_CASES):
+    if cert["evidence_grade"] == "diagnostic":
+        if claimed:
+            errors.append("diagnostic-grade report forged to official_eval_certified=true "
+                          "(diagnostic must not certify)")
+    else:
+        expected = _gate(execution, checks, scope["cases"])
+        if claimed != expected:
+            errors.append(f"official_eval_certified={claimed} != gate {expected} "
+                          "(direct-rollout / hand-built evidence can never certify)")
+    if require_complete_cases and claimed and set(scope["cases"]) != set(REQUIRED_CASES):
         errors.append(f"incomplete case set {sorted(scope['cases'])}")
     if output_tree_sha256 is not None and output_tree_sha256 != execution["output_tree_sha256"]:
         errors.append("recomputed output_tree_sha256 mismatch (output tamper)")

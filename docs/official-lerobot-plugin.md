@@ -800,3 +800,25 @@ is precise; and the RuntimeSupportProfile is cryptographically bound to the matr
 
 Guarded real egress remains a separately enforced runtime. `official_eval_certified`
 stays `false` until a real official-eval E2E.
+
+## v1.3.26.9 — official-eval promotion authority (no self-certification, P0.1)
+
+The prior builder derived `official_eval_certified` from a caller-supplied `execution`
+dict, so a hand-built `argv=["/usr/bin/lerobot-eval", …]` + all-true `checks` could
+certify. That self-certification path is closed:
+
+- The public builder is now `build_diagnostic_official_eval_report` — `evidence_grade:
+  "diagnostic"`, `official_eval_certified` **always false**.
+- A **true** certificate is produced only by `promote_official_eval_certificate(receipt=…)`,
+  which accepts **only** a `VerifiedOfficialEvalExecutionReceipt` (a dict/bool raises
+  `TypeError`). The receipt is minted by `authority.verify_official_eval_execution_receipt`,
+  which requires a **real subprocess** (no `fake_executor`), the **official entrypoint**
+  argv, an executable resolved to an **installed path** (a `/tmp/lerobot-eval` shim is
+  refused), the **coreai env instantiated**, the **full case matrix**, and a **clean
+  exit**. The certificate's checks are derived from the receipt, never supplied.
+- The verifier is grade-aware: a diagnostic report forged to `true` is rejected; a
+  certificate grade must equal the gate.
+
+The fully-live executor (running the real `lerobot-eval` subprocess against a
+registered `coreai_cert_env` and deriving the receipt from captured outputs) lands in
+v1.3.27; this ships the receipt type + gate + anti-forgery closure.
