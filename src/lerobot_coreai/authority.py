@@ -54,6 +54,12 @@ class VerifiedCoreAIRuntimeReceipt(_Sealed):
     numeric parity) was checked."""
 
 
+class VerifiedOfficialEvalExecutionReceipt(_Sealed):
+    """A receipt from a REAL `lerobot-eval` subprocess (the official CLI entrypoint,
+    not a wrapper, not a temp-dir shim), with the coreai env instantiated, the full
+    case matrix, and a clean exit — the ONLY thing that may promote official_eval."""
+
+
 # --- runtime receipt schema (what a REAL run must emit) ---
 
 _HASH = {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
@@ -76,6 +82,69 @@ COREAI_RUNTIME_RECEIPT_SCHEMA = {
     },
 }
 _REQUIRED_RUNTIME_CASES = ("single-b1", "native-b2", "native-b4", "split-b2", "split-b4")
+
+
+# --- official-eval execution receipt (what a REAL lerobot-eval subprocess emits) ---
+
+OFFICIAL_EVAL_EXECUTION_RECEIPT_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object", "additionalProperties": False,
+    "required": ["real_subprocess", "fake_executor", "resolution_method",
+                 "executable_realpath", "argv", "lerobot_distribution_sha256",
+                 "coreai_env_instantiated", "cases", "exit_code",
+                 "command_sha256", "resolved_config_sha256", "output_tree_sha256"],
+    "properties": {
+        "real_subprocess": {"type": "boolean"},
+        "fake_executor": {"type": "boolean"},
+        "resolution_method": {"enum": ["console_script", "python_-m"]},
+        "executable_realpath": {"type": "string", "minLength": 1},
+        "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "lerobot_distribution_sha256": _HASH,
+        "coreai_env_instantiated": {"type": "boolean"},
+        "cases": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "exit_code": {"type": "integer"},
+        "command_sha256": _HASH, "resolved_config_sha256": _HASH,
+        "output_tree_sha256": _HASH,
+    },
+}
+_TEMP_DIR_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/dev/shm/")
+_REQUIRED_EVAL_CASES = ("single-b1", "native-b2", "native-b4", "split-b2", "split-b4")
+
+
+def _argv_is_official_eval(argv) -> bool:
+    """True iff argv invoked the public lerobot-eval CLI (console script or
+    `python -m lerobot.scripts.lerobot_eval`)."""
+    if not argv:
+        return False
+    if argv[0].rsplit("/", 1)[-1] == "lerobot-eval":
+        return True
+    return "lerobot.scripts.lerobot_eval" in " ".join(argv) and "-m" in argv
+
+
+def verify_official_eval_execution_receipt(receipt: dict) -> VerifiedOfficialEvalExecutionReceipt:
+    """Mint an execution receipt ONLY from a REAL lerobot-eval run: a real subprocess
+    (not a fake executor), the official entrypoint argv, an executable resolved OUTSIDE
+    any temp dir (a `/tmp/lerobot-eval` shim is refused), the coreai env actually
+    instantiated, the full case matrix, a clean exit, and a captured output tree."""
+    import jsonschema
+    jsonschema.validate(receipt, OFFICIAL_EVAL_EXECUTION_RECEIPT_SCHEMA)
+    realpath = receipt["executable_realpath"]
+    fails = []
+    if not receipt["real_subprocess"] or receipt["fake_executor"]:
+        fails.append("not a real subprocess (or fake_executor set)")
+    if not _argv_is_official_eval(receipt["argv"]):
+        fails.append("argv did not invoke the official lerobot-eval entrypoint")
+    if not realpath.startswith("/") or any(realpath.startswith(p) for p in _TEMP_DIR_PREFIXES):
+        fails.append(f"executable not resolved to an installed path: {realpath!r}")
+    if not receipt["coreai_env_instantiated"]:
+        fails.append("coreai_cert_env was not instantiated")
+    if set(receipt["cases"]) != set(_REQUIRED_EVAL_CASES):
+        fails.append("incomplete case matrix")
+    if receipt["exit_code"] != 0:
+        fails.append(f"non-zero exit {receipt['exit_code']}")
+    if fails:
+        raise AuthorityError(f"official-eval receipt is not certificate-grade: {fails}")
+    return VerifiedOfficialEvalExecutionReceipt(dict(receipt), _AUTHORITY)
 
 
 # --- mint functions (the ONLY way to obtain a Verified*) ---
