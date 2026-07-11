@@ -704,26 +704,61 @@ failure paths through the real stack.
   BatchContract language from the *supported* subset (P1.14). A tamper adding native
   `shared` or split `global` fails.
 
+## v1.3.22 — Semantic Authority Closure
+
+One negotiation engine, one normalized capability truth, one stage language, and no
+post-hoc failure claims. v1.3.21 persisted and revalidated negotiation/capabilities/
+failures; v1.3.22 makes those representations the runtime's real authority.
+
+- **One negotiation engine** — the plugin's `negotiate_runner_protocol` is now a thin
+  adapter: the protocol + encoding **decision** lives only in the base
+  `negotiate_runner_contract`, which the offline verifier also runs. No parallel
+  selection logic remains (P1.1). A parity test asserts runtime and base agree.
+- **Fail-closed capabilities normalization** — normalization **never coerces**: a JSON
+  string where a bool/int is required, or an unknown enum, now **raises** instead of
+  being silently promoted (the old `bool("false") is True` / `int("4") == 4` traps are
+  gone) (P1.2). The raw payload is validated against a strict `RawCapabilitiesContract`
+  first (P1.3), and the normalized form uses **closed enums** for
+  semantics/slot-isolation/scope/reset-scope (P1.4). A typed, immutable
+  `NormalizedRunnerCapabilities` is the single authority object (P1.5).
+- **Automatic failure-stage classification** — an `_evidence_stage(...)` context
+  manager wraps each boundary (negotiate / request / validation); on an exception the
+  **runtime** emits the stage-specific failure event + terminal `execution.failed`
+  tagged `runtime_exception_boundary` — the caller no longer chooses `failed_stage`
+  (P1.6, P1.7). `abort_evidence_session` remains as an explicit, post-hoc
+  (`runtime_api_posthoc`) diagnostic path.
+- **Evidence grades** — `verify-official-rollout-evidence --evidence-grade
+  certificate` requires negotiation, a `runtime_exception_boundary` failure terminal,
+  and the RuntimeSupportProfile; `diagnostic` (default) accepts writer-synthesized
+  terminals (P1.8). A writer-synthesized bundle passes diagnostic but fails
+  certificate.
+- **RuntimeSupportProfile mandatory in certificate grade** — a certificate-grade
+  matrix must declare it; the canonical profile is verified byte-for-byte (P1.10).
+
 ## Not yet
 
 - **Failure injection through the official `lerobot_eval.rollout` CI matrix** — the
-  failure paths run E2E through the real policy/transport/negotiation stack (negotiation,
-  HTTP, validation) with runtime-origin terminal events and offline verification;
-  wiring them as dedicated failure cases *inside* the stable/dev rollout jobs is
-  v1.3.22.
+  failure paths run E2E through the real policy/transport/negotiation stack with
+  runtime-boundary classification + certificate-grade offline verification; driving
+  them *inside* the stable/dev rollout jobs (incl. preprocessor / env.step / batched
+  failures) is v1.3.23.
 - **Stable wheel-distribution digest** — `lerobot_distribution_sha256` for the stable
-  target — v1.3.22.
+  target — v1.3.23.
 - **Chunk happy-path sub-stage events** (`chunk.assembly_started`/`assembled`/
   `validation_started`/`commit_started`) + commit-fault rollback fixture (the
-  failed-refill/no-partial-commit case is in) — v1.3.22.
+  failed-refill/no-partial-commit case is in) — v1.3.23.
 - **Full `raw_lerobot_observation` removal** — the `ObservationStage`/`ActionStage`
   vocabulary + `ProcessorStageContract` + `RuntimeSupportProfile` are in; migrating
   the manifest + every consumer off the legacy ownership string (a wide rename across
-  ~10 files incl. the E2E fixtures) is its own isolated PR — v1.3.22.
+  ~10 files incl. the E2E fixtures) + making `ProcessorStageContract` mandatory &
+  hash-bound is its own isolated PR — v1.3.23.
 - **`observation_stage` closure in BatchContract** (required + enum, or moved to the
-  stage contract) — v1.3.22.
+  stage contract) — v1.3.23.
+- **RuntimeSupportProfile matrix-root binding** (currently verified against the
+  canonical profile + required in certificate grade; folding its hash into the matrix
+  root + per-case reports) — v1.3.23.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true) — v1.3.22+.
+  `universal_feature_contract_verified` true) — v1.3.23+.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

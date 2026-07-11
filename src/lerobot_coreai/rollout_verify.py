@@ -95,10 +95,15 @@ class VerifyEvidenceResult:
         return {"ok": self.ok, "checks": self.checks}
 
 
-def _verify_failure_case(case_dir: Path, checks: dict,
-                         prefix: str) -> tuple[bool, bool, str | None]:
+def _verify_failure_case(case_dir: Path, checks: dict, prefix: str,
+                         evidence_grade: str = "diagnostic",
+                         ) -> tuple[bool, bool, str | None]:
     """Verify a FailureEvidence v2 bundle (v1.3.19): schema-valid, all-claims-false,
-    manifest/checksum-recomputable — independently, like a success bundle."""
+    manifest/checksum-recomputable — independently, like a success bundle.
+
+    v1.3.22 (P1.8): in ``certificate`` grade the terminal event must have been emitted
+    by the runtime at the failing boundary — a writer-synthesized or post-hoc terminal
+    is diagnostic-only."""
     def ok(name, cond, reason=""):
         checks[f"{prefix}:{name}"] = "passed" if cond else f"failed: {reason}"
         return cond
@@ -138,6 +143,11 @@ def _verify_failure_case(case_dir: Path, checks: dict,
        "a claim is true")
     ok("envelope_status", envelope["status"] in ("failed", "aborted"),
        "envelope status not terminal-failure")
+    if evidence_grade == "certificate":
+        ok("certificate_runtime_terminal",
+           report.get("terminal_event_origin") == "runtime_exception_boundary",
+           f"terminal_event_origin={report.get('terminal_event_origin')} "
+           "is not certificate-grade (needs runtime_exception_boundary)")
     ok("no_secrets", _scan_secret(report) is None and _scan_secret(envelope) is None
        and _scan_secret(identity) is None, "secret detected")
     # partial trace: each event schema-valid, and it must END with a terminal
@@ -236,10 +246,11 @@ def _verify_negotiation(case_dir: Path, checks: dict, prefix: str,
 
 
 def _verify_case(case_dir: Path, checks: dict, prefix: str, *,
-                 require_negotiation: bool = True) -> tuple[bool, bool, str | None]:
+                 require_negotiation: bool = True,
+                 evidence_grade: str = "diagnostic") -> tuple[bool, bool, str | None]:
     """Verify one case bundle. Returns (bundle_verified, rollout_passed, root)."""
     if (case_dir / FAILURE_REPORT_FILE).exists():
-        return _verify_failure_case(case_dir, checks, prefix)
+        return _verify_failure_case(case_dir, checks, prefix, evidence_grade)
 
     def ok(name, cond, reason=""):
         checks[f"{prefix}:{name}"] = "passed" if cond else f"failed: {reason}"
@@ -338,8 +349,13 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str, *,
 
 def verify_official_rollout_evidence(
     bundle_dir: str, *, require_complete_matrix: bool = True,
-    require_negotiation: bool = True,
+    require_negotiation: bool = True, evidence_grade: str = "diagnostic",
 ) -> VerifyEvidenceResult:
+    # v1.3.22 (P1.8): certificate grade is strictly stronger than diagnostic —
+    # negotiation + a runtime-boundary failure terminal + the RuntimeSupportProfile
+    # are all mandatory.
+    if evidence_grade == "certificate":
+        require_negotiation = True
     root = Path(bundle_dir)
     checks: dict[str, str] = {}
 
@@ -356,7 +372,8 @@ def verify_official_rollout_evidence(
     all_ok = True
     for name, cdir in seen.items():
         cok, passed, broot = _verify_case(
-            cdir, checks, f"case[{name}]", require_negotiation=require_negotiation)
+            cdir, checks, f"case[{name}]", require_negotiation=require_negotiation,
+            evidence_grade=evidence_grade)
         all_ok &= cok
         case_passed[name] = passed
         if broot:
@@ -420,5 +437,9 @@ def verify_official_rollout_evidence(
                          "profile != canonical runtime support profile")
         except Exception as exc:  # noqa: BLE001
             all_ok &= ok("runtime_support_profile", False, str(exc))
+    elif evidence_grade == "certificate":
+        # a certificate-grade matrix MUST declare the runtime support profile (P1.10).
+        all_ok &= ok("runtime_support_profile", False,
+                     "runtime_support_profile.json missing (required for certificate)")
 
     return VerifyEvidenceResult(bool(all_ok), checks, case_roots)

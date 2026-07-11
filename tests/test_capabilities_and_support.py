@@ -39,6 +39,34 @@ def test_normalization_rejects_duplicates():
                                                           "nested_json_v1"]})
 
 
+def test_normalization_is_fail_closed_no_string_to_bool():
+    # the audit's bug: bool("false") is True. A JSON string must NOT become a bool.
+    with pytest.raises(CapabilitiesNormalizationError):
+        normalize_capabilities({"supports": {"action": "false"}})
+
+
+def test_normalization_is_fail_closed_no_string_to_int():
+    with pytest.raises(CapabilitiesNormalizationError):
+        normalize_capabilities({"action_batching": {"max_batch_size": "4"}})
+
+
+def test_normalization_rejects_unknown_enum():
+    with pytest.raises(CapabilitiesNormalizationError):
+        normalize_capabilities({"action_batching": {"slot_isolation": "telepathic"}})
+
+
+def test_typed_normalized_capabilities_roundtrip():
+    from lerobot_coreai.capabilities_normalize import typed_normalized_capabilities
+    raw = {"protocol_version": "coreai-runner.v2", "supports": {"action": True},
+           "observation_encodings": ["nested_json_v1"],
+           "action_batching": {"supported": True, "max_batch_size": 4,
+                               "semantics": "native", "slot_isolation": "independent"}}
+    typed = typed_normalized_capabilities(raw)
+    assert typed.supports_action is True and typed.max_batch_size == 4
+    assert typed.slot_isolation == "independent"
+    assert normalize_capabilities(raw) == typed.to_dict()   # typed <-> dict parity
+
+
 def test_runtime_support_profile_schema_valid():
     jsonschema.validate(runtime_support_profile(), RUNTIME_SUPPORT_SCHEMA)
 
