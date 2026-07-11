@@ -80,6 +80,7 @@ class RolloutMeasurements:
     final_action: Any                       # nested list [B, seq, A]
     required_obs_keys: tuple[str, ...] = ()
     fixture_contract: dict = field(default_factory=dict)   # {key: expected per-sample shape}
+    queue_events: tuple[dict, ...] = ()
 
     def to_raw(self) -> dict:
         """Canonical, replayable raw record (persisted as measurements.json)."""
@@ -93,6 +94,7 @@ class RolloutMeasurements:
             "final_action": self.final_action,
             "required_obs_keys": list(self.required_obs_keys),
             "fixture_contract": dict(self.fixture_contract),
+            "queue_events": list(self.queue_events),
         }
 
 

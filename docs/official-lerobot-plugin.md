@@ -528,17 +528,41 @@ cross-bound; the verifier cannot crash on a malformed bundle.
 - **Full-bundle secret scan** — report + measurements are scanned for sensitive
   keys / credential URLs.
 
+## v1.3.17 — queue lifecycle evidence + verifier closure
+
+The queue's internal state transitions are now proven by recorded events, and the
+remaining cheap verifier gaps are closed.
+
+- **Queue lifecycle observer** — `CoreAIBridgePolicy` records a typed event stream
+  (`queue.reset`/`empty`/`refill_requested`/`chunk.validated`/`chunk.committed`/
+  `action.popped`) when `record_queue_events=True` (off by default, trivial
+  overhead). Persisted in `measurements.json` and validated offline as a **state
+  machine**: reset first, monotonic indices, refill only when empty, commit only
+  after validation, pop only after commit, ≤H pops per chunk. The `queue_refilled`
+  proxy is replaced by derived `queue_lifecycle_valid` + `queue_refill_count_exact`
+  (refills == commits == predictions, pops == sequence length).
+- **`TRACE_EVENT_SCHEMA` enforced** — the verifier now `jsonschema.validate`s each
+  trace event (was defined but unapplied), and the trace check recomputes
+  `raw_resp` too so it is self-sufficient (not merely transitively bound).
+- **Strict rectangular arrays** — `_rect_shape` validates that **every** branch of a
+  nested array matches (a ragged response/final/fixture with an extra horizon or dim
+  on a later slot fails, not just the first branch).
+- **Tighter measurements schema** — `done` values are `enum [0,1]`,
+  `single_only ⇒ batch_size==1` (if/then), `required_obs_keys` unique.
+
 ## Not yet
 
-- **Queue-refill event instrumentation** (`ActionQueueObserver` emitting
-  reset/empty/refill/validated/committed/popped) so the queue lifecycle is proven
-  by events, not the `ceil(seq/H)` proxy — v1.3.17.
 - **Failure-evidence v2** (schema-valid, per-stage envelope with checksums + bundle
-  root, representable in the matrix) — v1.3.17.
-- **Processor-stage typed enum** + single canonical BatchContract v3 schema file,
-  **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true), stable **wheel-distribution digest** —
-  v1.3.17.
+  root, representable in the matrix) — v1.3.18.
+- **Negotiation binding** (persist negotiated protocol/encoding/capabilities in
+  measurements; require the request options to equal the negotiated result rather
+  than a hardcoded allowlist) — v1.3.18.
+- **Processor-stage typed enum** (`ObservationStage`/`ActionStage`, removing
+  `raw_lerobot_observation`) + single canonical BatchContract v3 schema file — a
+  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.18.
+- **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
+  `universal_feature_contract_verified` true) + stable **wheel-distribution
+  digest** — v1.3.18.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

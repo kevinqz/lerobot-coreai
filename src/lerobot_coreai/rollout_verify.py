@@ -21,6 +21,7 @@ from .rollout_evidence_schema import (
     MATRIX_SCHEMA,
     READINESS_SCHEMA,
     REQUIRED_CASES,
+    TRACE_EVENT_SCHEMA,
     canonical_json_sha256,
 )
 from .rollout_replay import replay_rollout_evidence
@@ -131,15 +132,19 @@ def _verify_case(case_dir: Path, checks: dict, prefix: str) -> tuple[bool, str |
     try:
         events = [json.loads(ln) for ln in
                   (case_dir / TRACE_FILE).read_text().splitlines() if ln.strip()]
+        for ev in events:                          # apply the schema (P1.1)
+            jsonschema.validate(ev, TRACE_EVENT_SCHEMA)
         raw = json.loads((case_dir / MEASUREMENTS_FILE).read_text())
-        tr_req = [e.get("request_sha256") for e in events]
-        tr_resp = [e.get("response_sha256") for e in events]
-        idx_ok = [e.get("index") for e in events] == list(range(len(events)))
+        tr_req = [e["request_sha256"] for e in events]
+        tr_resp = [e["response_sha256"] for e in events]
+        idx_ok = [e["index"] for e in events] == list(range(len(events)))
         rep_req = report["observation"]["ordered_request_sha256s"]
         rep_resp = report["action"]["ordered_response_sha256s"]
         raw_req = [canonical_json_sha256(b) for b in raw["request_bodies"]]
+        raw_resp = [canonical_json_sha256(b) for b in raw["response_bodies"]]
         ok("trace_cross_binding",
-           idx_ok and tr_req == rep_req == raw_req and tr_resp == rep_resp,
+           idx_ok and tr_req == rep_req == raw_req
+           and tr_resp == rep_resp == raw_resp,     # self-sufficient (P1.7)
            "trace does not match report/measurements")
     except Exception as exc:  # noqa: BLE001
         ok("trace_cross_binding", False, str(exc))

@@ -22,15 +22,21 @@ _LEAK_KEYS = ("action", "reward", "done", "success", "index", "episode_index",
               "frame_index", "timestamp", "next.reward", "next.done", "next.truncated")
 
 
+def _rect_shape(v: Any) -> list[int] | None:
+    """Strict rectangular shape: EVERY branch must match (P1.4). None if ragged."""
+    if not isinstance(v, list):
+        return []                       # scalar leaf
+    child_shapes = [_rect_shape(x) for x in v]
+    if any(cs is None for cs in child_shapes):
+        return None
+    if child_shapes and any(cs != child_shapes[0] for cs in child_shapes):
+        return None                     # ragged: sibling shapes differ
+    return [len(v)] + (child_shapes[0] if child_shapes else [])
+
+
 def _per_sample_shape(v: Any) -> list[int]:
-    if isinstance(v, list):
-        s = [len(v)]
-        cur = v
-        while cur and isinstance(cur[0], list):
-            s.append(len(cur[0]))
-            cur = cur[0]
-        return s
-    return []
+    s = _rect_shape(v)
+    return s if s is not None else [-1]   # ragged -> never matches an expected shape
 
 
 def _finite(v: Any) -> bool:
@@ -154,6 +160,49 @@ def _fixture_ok(raw) -> bool:
     return _wire_ok(raw)   # fixture shape validation is part of the wire check
 
 
+def _queue_lifecycle(events, predictions: int, seq: int, H: int) -> tuple[bool, bool]:
+    """Replay the queue state machine from recorded events (P1.8).
+
+    Returns (lifecycle_valid, refill_count_exact). Fail-closed when no events.
+    """
+    if not events:
+        return False, False
+    if events[0].get("event") != "queue.reset":
+        return False, False
+    if [e.get("event_index") for e in events] != list(range(len(events))):
+        return False, False
+    committed = popped = refills = 0
+    validated = False
+    pops_since_commit = 0
+    for e in events[1:]:
+        ev = e.get("event")
+        if ev == "queue.refill_requested":
+            if e.get("queue_size", 1) != 0:      # refill only when empty
+                return False, False
+            refills += 1
+        elif ev == "chunk.validated":
+            validated = True
+        elif ev == "chunk.committed":
+            if not validated:                    # commit only after validation
+                return False, False
+            committed += 1
+            validated = False
+            pops_since_commit = 0
+        elif ev == "action.popped":
+            if committed == 0:                   # pop only after a commit
+                return False, False
+            pops_since_commit += 1
+            popped += 1
+            if pops_since_commit > H:             # at most H pops per committed chunk
+                return False, False
+        elif ev != "queue.empty":
+            return False, False                  # unknown event
+    lifecycle_ok = committed == refills and not validated
+    refill_exact = (refills == predictions and committed == predictions
+                    and popped == seq)
+    return lifecycle_ok, refill_exact
+
+
 def derive_checks(raw: dict) -> dict[str, bool]:
     """Re-derive the closed check set from raw recorded data (single source)."""
     predictions = math.ceil(raw["sequence_length"] / raw["horizon"])
@@ -161,12 +210,15 @@ def derive_checks(raw: dict) -> dict[str, bool]:
         else predictions
     req_count = len(raw["request_bodies"])
     done = raw["done_mask"]
+    ql, rc = _queue_lifecycle(raw.get("queue_events", []), predictions,
+                             raw["sequence_length"], raw["horizon"])
     checks = {
         "official_rollout_called": req_count > 0,
         "all_environments_reached_done": all(any(r) for r in done) and bool(done),
         "done_mask_cumulative": _done_cumulative(done),
         "done_mask_matches_terminate_at": _first_done_matches(done, raw["terminate_at"]),
-        "queue_refilled": predictions > 1,
+        "queue_lifecycle_valid": ql,
+        "queue_refill_count_exact": rc,
         "wire_payload_valid": _wire_ok(raw),
         "request_count_exact": req_count == expected,
         "response_action_chain_valid": _chain_ok(raw),

@@ -59,6 +59,13 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self.dataset_meta = dataset_meta
         self._queue: deque = deque()          # deque[Tensor[B, A]] (temporal)
         self._active_batch_size: int | None = None
+        # v1.3.17: optional queue-lifecycle observer for evidence (off by default —
+        # set record_queue_events=True). Records a typed event stream the offline
+        # verifier replays as a state machine (reset/refill/validated/committed/pop).
+        self.record_queue_events: bool = False
+        self.queue_events: list[dict[str, Any]] = []
+        self._event_index: int = 0
+        self._prediction_index: int = 0
         self.last_observation_sha256: str | None = None
         self.last_observation_audit: dict[str, Any] = {}
         self.last_batch_mode: str | None = None
@@ -270,9 +277,20 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
 
     # MARK: - Inference (LeRobot contract)
 
+    def _emit(self, event: str, **fields: Any) -> None:
+        if not self.record_queue_events:
+            return
+        self.queue_events.append({
+            "event_index": self._event_index, "event": event,
+            "queue_size": len(self._queue),
+            "prediction_index": self._prediction_index, **fields})
+        self._event_index += 1
+
     def reset(self) -> None:
         self._queue.clear()
         self._active_batch_size = None
+        self._prediction_index = 0
+        self._emit("queue.reset")
         # Invalidate the negotiated protocol + cached caps: a runner may restart
         # with different capabilities, so re-negotiate on the next inference.
         self._protocol = None
@@ -398,11 +416,18 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 f"batch size changed ({self._active_batch_size} -> {b}) while the "
                 "action queue is non-empty; drain or reset() first.")
         if not self._queue:
+            self._emit("queue.empty")
+            self._emit("queue.refill_requested")
             chunk = self.predict_action_chunk(batch, **kwargs)       # [B, H, A]
             self._active_batch_size = int(chunk.shape[0])
+            self._emit("chunk.validated", horizon=int(chunk.shape[1]))
             for timestep in chunk.transpose(0, 1):                   # each [B, A]
                 self._queue.append(timestep)
-        return self._queue.popleft()                                 # [B, A]
+            self._emit("chunk.committed", committed=int(chunk.shape[1]))
+            self._prediction_index += 1
+        action = self._queue.popleft()                               # [B, A]
+        self._emit("action.popped")
+        return action
 
     # MARK: - Training boundary (runtime-only)
 

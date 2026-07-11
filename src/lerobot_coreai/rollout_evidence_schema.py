@@ -18,12 +18,13 @@ CANONICAL_HASH_ALGORITHM = "canonical-json-sha256.v1"
 
 _SHA256 = {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
 
-# The closed, required check set (v1.3.14, P1.12).
+# The closed, required check set (v1.3.14; v1.3.17 replaces the queue_refilled proxy
+# with event-derived queue_lifecycle_valid + queue_refill_count_exact).
 REQUIRED_CHECKS = (
     "official_rollout_called", "all_environments_reached_done", "done_mask_cumulative",
-    "done_mask_matches_terminate_at", "queue_refilled", "wire_payload_valid",
-    "request_count_exact", "response_action_chain_valid",
-    "fixture_feature_semantics_verified",
+    "done_mask_matches_terminate_at", "queue_lifecycle_valid",
+    "queue_refill_count_exact", "wire_payload_valid", "request_count_exact",
+    "response_action_chain_valid", "fixture_feature_semantics_verified",
 )
 REQUIRED_CASES = ("single_only-b1", "native_batch-b2", "native_batch-b4",
                   "split_and_stack-b2", "split_and_stack-b4")
@@ -179,11 +180,16 @@ MEASUREMENTS_SCHEMA = {
         "request_bodies": {"type": "array", "items": {"type": "object"}},
         "response_bodies": {"type": "array", "items": {"type": "object"}},
         "done_mask": {"type": "array",
-                      "items": {"type": "array", "items": {"type": "integer"}}},
+                      "items": {"type": "array", "items": {"enum": [0, 1]}}},
         "final_action": {"type": "array"},
-        "required_obs_keys": {"type": "array", "items": {"type": "string"}},
+        "required_obs_keys": {"type": "array", "items": {"type": "string"},
+                              "uniqueItems": True},
         "fixture_contract": {"type": "object"},
+        "queue_events": {"type": "array", "items": {"type": "object"}},
     },
+    # single_only must be B=1 (P1.5).
+    "if": {"properties": {"mode": {"const": "single_only"}}},
+    "then": {"properties": {"batch_size": {"const": 1}}},
 }
 
 TRACE_EVENT_SCHEMA = {
