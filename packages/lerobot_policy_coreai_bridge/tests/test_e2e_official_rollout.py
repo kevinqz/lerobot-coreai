@@ -255,7 +255,8 @@ def _evidence(evidence_dir, out, state, art, policy, B, mode, terminate_ats):
         request_bodies=tuple(state.bodies), response_bodies=tuple(state.responses),
         done_mask=tuple(tuple(int(x) for x in r) for r in out["done"].int().tolist()),
         final_action=out["action"].to("cpu").tolist(), required_obs_keys=tuple(_FIXTURE),
-        fixture_contract=_FIXTURE, queue_events=tuple(policy.queue_events))
+        fixture_contract=_FIXTURE, queue_events=tuple(policy.queue_events),
+        negotiation=policy.negotiation_record)
     ev = evaluate_rollout_measurements(m)
     report = build_rollout_readiness_report(
         ev, m, environment=capture_environment_identity(target),

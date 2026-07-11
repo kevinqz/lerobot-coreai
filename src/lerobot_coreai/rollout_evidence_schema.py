@@ -83,6 +83,15 @@ _ENVIRONMENT_SCHEMA = {
         "repository_head_sha": {"type": ["string", "null"]},
         "workflow_run_id": {"type": ["string", "null"]},
         "workflow_job": {"type": ["string", "null"]},
+        # v1.3.19 EnvironmentIdentity v2: separate the provenance SHAs a PR merge
+        # conflates (source branch head vs merge commit vs base), plus run attempt
+        # and runner image, so a rerun/merge is distinguishable in evidence.
+        "source_head_sha": {"type": ["string", "null"]},
+        "base_sha": {"type": ["string", "null"]},
+        "merge_sha": {"type": ["string", "null"]},
+        "workflow_sha": {"type": ["string", "null"]},
+        "workflow_run_attempt": {"type": ["string", "null"]},
+        "runner_image": {"type": ["string", "null"]},
     },
 }
 
@@ -107,7 +116,13 @@ READINESS_SCHEMA = {
                 "horizon": {"type": "integer", "minimum": 1},
                 "request_count": {"type": "integer", "minimum": 0},
                 "failed_stage": {"type": ["string", "null"]},
-                "errors": {"type": "array", "items": {"type": "string"}}}},
+                "errors": {"type": "array", "items": {"type": "string"}},
+                # v1.3.19 execution envelope (optional; present for real rollouts).
+                "execution_id": {"type": ["string", "null"]},
+                "status": {"enum": ["completed", "failed", "aborted"]},
+                "termination_reason": {"type": ["string", "null"]},
+                "unused_action_count": {"type": ["integer", "null"], "minimum": 0},
+                "negotiation_sha256": {"anyOf": [_SHA256, {"type": "null"}]}}},
         "contracts": {
             "type": "object", "additionalProperties": False,
             "required": ["artifact_root_sha256", "batch_contract_sha256",
@@ -186,6 +201,8 @@ MEASUREMENTS_SCHEMA = {
                               "uniqueItems": True},
         "fixture_contract": {"type": "object"},
         "queue_events": {"type": "array", "items": {"type": "object"}},
+        # v1.3.19: the persisted NegotiationRecord (bound into wire validation).
+        "negotiation": {"type": "object"},
     },
     # single_only must be B=1 (P1.5).
     "if": {"properties": {"mode": {"const": "single_only"}}},
@@ -203,31 +220,168 @@ TRACE_EVENT_SCHEMA = {
     },
 }
 
+# v1.3.19: Runtime Evidence Protocol v3 — a DISCRIMINATED trace-event schema.
+# v1.3.18's QUEUE_EVENT_SCHEMA was closed on properties but every field was optional
+# for every event, so {"event":"execution.started","chunk_sha256":null} was
+# structurally valid (P1.1). The v3 schema is a oneOf keyed on `event` where each
+# branch declares exactly the fields that event must and may carry.
+EXECUTION_EVENT_SCHEMA_VERSION = "lerobot-coreai.execution_trace.v3"
 QUEUE_EVENT_TYPES = (
-    "execution.started", "policy.reset", "queue.empty", "queue.refill_requested",
-    "runner.request_started", "runner.response_received", "chunk.validated",
-    "chunk.committed", "action.popped", "queue.exhausted", "execution.completed",
+    "execution.started", "execution.completed", "policy.reset", "queue.empty",
+    "queue.refill_requested", "runner.request_started", "runner.response_received",
+    "chunk.validated", "chunk.committed", "action.popped", "queue.exhausted",
 )
-QUEUE_EVENT_SCHEMA = {
+
+# reusable field schemas
+_NON_NEG = {"type": "integer", "minimum": 0}
+_POS = {"type": "integer", "minimum": 1}
+_NE_STR = {"type": "string", "minLength": 1}
+_HASH_OR = {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
+_COMMON_REQ = ["event_index", "event", "execution_id", "relative_monotonic_ns"]
+_COMMON_PROPS = {
+    "event_index": _NON_NEG, "event": {"type": "string"},
+    "execution_id": _NE_STR, "relative_monotonic_ns": _NON_NEG,
+}
+
+# per-event: (required-beyond-common, {optional-prop: schema})
+_EVENT_SPEC: dict[str, tuple[dict, list]] = {
+    "execution.started": ({}, []),
+    "execution.completed": ({"termination_reason": _NE_STR,
+                             "unused_action_count": _NON_NEG,
+                             "unused_action_sha256s": {"type": "array",
+                                                       "items": _HASH_OR}}, []),
+    "policy.reset": ({"reset_kind": {"enum": ["normal", "abort"]},
+                      "queue_size_after": _NON_NEG,
+                      "discarded_action_count": _NON_NEG,
+                      "discarded_queue_sha256": _HASH_OR},
+                     ["reset_kind", "queue_size_after"]),
+    "queue.empty": ({"queue_size_after": _NON_NEG}, ["queue_size_after"]),
+    "queue.refill_requested": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                                "queue_size_before": _NON_NEG,
+                                "queue_size_after": _NON_NEG},
+                               ["prediction_id", "chunk_id",
+                                "queue_size_before", "queue_size_after"]),
+    "runner.request_started": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                                "request_id": _NE_STR,
+                                "sample_index": {"type": ["integer", "null"],
+                                                 "minimum": 0}},
+                               ["prediction_id", "chunk_id", "request_id"]),
+    "runner.response_received": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                                  "request_id": _NE_STR, "response_sha256": _HASH_OR,
+                                  "sample_index": {"type": ["integer", "null"],
+                                                   "minimum": 0}},
+                                 ["prediction_id", "chunk_id", "request_id",
+                                  "response_sha256"]),
+    "chunk.validated": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                         "chunk_sha256": _HASH_OR, "horizon": _POS,
+                         "ordered_response_sha256s": {"type": "array",
+                                                      "items": _HASH_OR}},
+                        ["prediction_id", "chunk_id", "chunk_sha256", "horizon",
+                         "ordered_response_sha256s"]),
+    "chunk.committed": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                         "chunk_sha256": _HASH_OR, "committed": _POS,
+                         "queue_size_before": _NON_NEG,
+                         "queue_size_after": _NON_NEG},
+                        ["prediction_id", "chunk_id", "chunk_sha256", "committed",
+                         "queue_size_before", "queue_size_after"]),
+    "action.popped": ({"prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                       "action_id": _NE_STR, "rollout_step": _NON_NEG,
+                       "chunk_timestep": _NON_NEG,
+                       "selected_action_sha256": _HASH_OR,
+                       "queue_size_before": _NON_NEG, "queue_size_after": _NON_NEG},
+                      ["prediction_id", "chunk_id", "action_id", "rollout_step",
+                       "chunk_timestep", "selected_action_sha256",
+                       "queue_size_before", "queue_size_after"]),
+    "queue.exhausted": ({"queue_size_after": _NON_NEG}, ["queue_size_after"]),
+}
+
+
+def _event_branch(name: str) -> dict:
+    extra_props, extra_req = _EVENT_SPEC[name]
+    props = {**_COMMON_PROPS, **extra_props, "event": {"const": name}}
+    return {"type": "object", "additionalProperties": False, "properties": props,
+            "required": _COMMON_REQ + list(extra_req)}
+
+
+EXECUTION_EVENT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["event_index", "event"],
+    "oneOf": [_event_branch(n) for n in QUEUE_EVENT_TYPES],
+}
+# Back-compat alias (the offline verifier + replay import the current name).
+QUEUE_EVENT_SCHEMA = EXECUTION_EVENT_SCHEMA
+
+EXECUTION_ENVELOPE_SCHEMA_VERSION = "lerobot-coreai.execution_envelope.v1"
+EXECUTION_ENVELOPE_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object", "additionalProperties": False,
+    "required": ["schema_version", "execution_id", "case", "target", "mode",
+                 "batch_size", "status", "negotiation_sha256"],
     "properties": {
-        "event_index": {"type": "integer", "minimum": 0},
-        "event": {"enum": list(QUEUE_EVENT_TYPES)},
-        "execution_id": {"type": ["string", "null"]},
-        "prediction_id": {"type": ["integer", "null"]},
-        "chunk_id": {"type": ["string", "null"]},
-        "queue_size_before": {"type": ["integer", "null"], "minimum": 0},
-        "queue_size_after": {"type": ["integer", "null"], "minimum": 0},
-        "chunk_sha256": {"type": ["string", "null"]},
-        "response_sha256": {"type": ["string", "null"]},
-        "selected_action_sha256": {"type": ["string", "null"]},
-        "horizon": {"type": ["integer", "null"], "minimum": 1},
-        "committed": {"type": ["integer", "null"], "minimum": 1},
+        "schema_version": {"const": EXECUTION_ENVELOPE_SCHEMA_VERSION},
+        "execution_id": _NE_STR, "case": _NE_STR,
+        "target": {"enum": ["stable", "development", "local"]},
+        "mode": {"enum": ["single_only", "native_batch", "split_and_stack"]},
+        "batch_size": _POS,
+        "status": {"enum": ["completed", "failed", "aborted"]},
+        "negotiation_sha256": {"anyOf": [_HASH_OR, {"type": "null"}]},
+        "termination_reason": {"type": ["string", "null"]},
     },
 }
+
+NEGOTIATION_SCHEMA_VERSION = "lerobot-coreai.negotiation_record.v1"
+NEGOTIATION_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object", "additionalProperties": False,
+    "required": ["schema_version", "minimum_protocol", "runner_protocol",
+                 "negotiated_protocol", "runner_encodings", "negotiated_encoding",
+                 "runner_capabilities_sha256", "record_sha256"],
+    "properties": {
+        "schema_version": {"const": NEGOTIATION_SCHEMA_VERSION},
+        "requested_protocol": {"type": ["string", "null"]},
+        "minimum_protocol": _NE_STR,
+        "runner_protocol": _NE_STR,
+        "negotiated_protocol": _NE_STR,
+        "requested_encoding": {"type": ["string", "null"]},
+        "runner_encodings": {"type": "array", "items": {"type": "string"}},
+        "negotiated_encoding": _NE_STR,
+        "runner_capabilities_sha256": _HASH_OR,
+        "record_sha256": _HASH_OR,
+    },
+}
+
+FAILURE_STAGES = (
+    "setup", "artifact_verify", "factory_load", "processor_load",
+    "runner_negotiate", "request", "response", "chunk_assembly", "validation",
+    "queue_commit", "rollout", "measurement_build", "bundle_write",
+    "semantic_replay", "offline_verify",
+)
+FAILURE_REPORT_SCHEMA_VERSION = "lerobot-coreai.official_rollout_failure.v2"
+FAILURE_REPORT_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object", "additionalProperties": False,
+    "required": ["schema_version", "case", "target", "failed_stage",
+                 "exception_type", "message", "claims"],
+    "properties": {
+        "schema_version": {"const": FAILURE_REPORT_SCHEMA_VERSION},
+        "case": _NE_STR, "target": {"enum": ["stable", "development", "local"]},
+        "failed_stage": {"enum": list(FAILURE_STAGES)},
+        "exception_type": _NE_STR,
+        "message": {"type": "string"},
+        "execution_id": {"type": ["string", "null"]},
+        "claims": {
+            "type": "object", "additionalProperties": False,
+            "required": ["official_rollout_pipeline_smoke_passed",
+                         "official_eval_certified", "authenticity_verified",
+                         "proves_task_success", "proves_physical_safety"],
+            "properties": {
+                "official_rollout_pipeline_smoke_passed": {"const": False},
+                "official_eval_certified": {"const": False},
+                "authenticity_verified": {"const": False},
+                "proves_task_success": {"const": False},
+                "proves_physical_safety": {"const": False}}},
+    },
+}
+FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION = "lerobot-coreai.official_rollout_failure_bundle.v1"
 
 MATRIX_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",

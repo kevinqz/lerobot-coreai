@@ -582,19 +582,72 @@ accept when tampered.
   producer's derived checks and the offline verifier; `reqs_per_refill` is `B` in
   `split_and_stack` (B requests per refill) and `1` otherwise.
 
+## v1.3.19 — Execution Envelope + Negotiation Binding + Failure Evidence
+
+Every execution must be complete, negotiated, terminal and independently explainable
+— even when it fails. v1.3.18 proved the queue's *happy path* causally; v1.3.19
+closes the execution envelope: its start, negotiation, termination and failure path.
+
+- **Session state machine** — `begin_evidence_session(run_id)` /
+  `end_evidence_session()` enforce IDLE→ACTIVE→IDLE. A double-begin, an
+  end-without-begin and a double-end all raise, so an incomplete execution can never
+  be silently overwritten or double-sealed (P1.8, P1.9). Completion declares any
+  actions still cached in the queue (`unused_action_count` + hashes +
+  `termination_reason`), so a truncated rollout is explicit, not a silent drop.
+- **Discriminated trace-event schema (v3)** — `EXECUTION_EVENT_SCHEMA` is a
+  `oneOf` keyed on `event`: each event declares exactly the fields it must and may
+  carry (`additionalProperties:false` per branch), so
+  `{"event":"execution.started","chunk_sha256":null}` is no longer structurally valid
+  (P1.1). The permissive v2 schema (every field optional for every event) is gone.
+- **Full causal identity** — `request_id`, `sample_index`, `action_id` and
+  `rollout_step` join `prediction_id`/`chunk_id`. Request ids are unique with exactly
+  one response per request; split issues `B` slot-bound requests per refill; action
+  ids never repeat and `rollout_step`/`chunk_timestep` are ordered (P1.2).
+- **Constant id + monotonic clock** — `execution_id` must be identical on every
+  event, and `relative_monotonic_ns` (relative to session start) must be
+  non-decreasing (P1.6, P1.7).
+- **Response→chunk binding** — `chunk.validated` carries `ordered_response_sha256s`,
+  which the verifier binds to the **recomputed** response bodies of that prediction
+  (native: 1; split: the ordered `B`), and the committed chunk hash still equals the
+  validated one (P1.3, P1.4).
+- **Selected-action binding** — each `action.popped.selected_action_sha256` must
+  equal the canonical hash of the `final_action` slice at its `rollout_step`, binding
+  the trace's popped action to the rollout's recorded action (P1.5).
+- **Terminal queue semantics** — a pop that empties the queue forces
+  `AWAITING_EXHAUSTED`; only `queue.exhausted` may follow (P1.11). Normal vs abort
+  reset is distinguished — an `abort` must record `discarded_action_count` +
+  `discarded_queue_sha256`; a normal reset is only valid on an already-empty queue
+  (P1.10).
+- **NegotiationRecord v1** — the negotiated protocol/encoding + runner-capabilities
+  hash are persisted (`measurements.negotiation`) and self-hashed. Wire validation
+  now requires every request's `observation_encoding`/`protocol_version` to **equal
+  the negotiated result** (no hardcoded allowlist when a record is present), and the
+  report binds the record hash (P1.14).
+- **FailureEvidence v2** — `write_failure_evidence` emits a schema-valid bundle
+  (`failure_report.json` with all claims pinned false, `execution_envelope.json`,
+  `environment_identity.json`, `partial_trace.jsonl`, manifest + checksums) that the
+  offline verifier re-proves exactly like a success bundle. Success and failure cases
+  are representable together in one matrix (`passed` bound per case) (P1.13).
+- **EnvironmentIdentity v2** — separates the provenance SHAs a PR merge conflates
+  (`source_head_sha` / `base_sha` / `merge_sha` / `workflow_sha`) plus run attempt +
+  runner image.
+
 ## Not yet
 
-- **Failure-evidence v2** (schema-valid, per-stage envelope with checksums + bundle
-  root, representable in the matrix) — v1.3.19.
-- **Negotiation binding** (persist negotiated protocol/encoding/capabilities in
-  measurements; require the request options to equal the negotiated result rather
-  than a hardcoded allowlist) — v1.3.19.
+- **Exhaustive per-stage failure injection in CI** — the FailureEvidence v2 bundle,
+  writer, offline verifier and unit-level injection are in; driving a *real* injected
+  failure at every one of the 15 stages through the stable/dev rollout E2E is
+  v1.3.20.
+- **Stable wheel-distribution digest** — `lerobot_distribution_sha256` for the stable
+  target (a stable content digest of the installed wheel) — v1.3.20.
+- **Chunk sub-stage granularity** — `chunk.assembly_started`/`assembled`/
+  `validation_started`/`commit_started`/`commit_failed`/`queue.rollback_completed`
+  and rollback-proven (not just single-extend) commit atomicity — v1.3.20.
 - **Processor-stage typed enum** (`ObservationStage`/`ActionStage`, removing
   `raw_lerobot_observation`) + single canonical BatchContract v3 schema file — a
-  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.19.
+  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.20.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true) + stable **wheel-distribution
-  digest** — v1.3.19.
+  `universal_feature_contract_verified` true) — v1.3.20.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so
