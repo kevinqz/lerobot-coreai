@@ -90,6 +90,27 @@ def test_failure_bundle_tamper_detected(tmp_path):
         str(tmp_path), require_complete_matrix=False).ok
 
 
+def test_runtime_support_profile_is_matrix_root_bound(tmp_path):
+    # v1.3.23 (P1.7): the profile hash is folded into the matrix root — tampering
+    # with (or removing) the profile fails the root, not just the sidecar file.
+    import json as _json
+    from lerobot_coreai.rollout_verify import verify_official_rollout_evidence
+    case = "runner_negotiate-b1"
+    root = write_failure_evidence(
+        str(tmp_path / case), case=case, failed_stage="runner_negotiate",
+        exception_type="E", message="m", target="local")
+    write_matrix_manifest(str(tmp_path), "local",
+                          {case: {"passed": False, "bundle_root_sha256": root}})
+    assert verify_official_rollout_evidence(str(tmp_path), require_complete_matrix=False).ok
+    # tamper the profile: root no longer recomputes.
+    prof = tmp_path / "runtime_support_profile.json"
+    d = _json.loads(prof.read_text())
+    d["batch"]["split_state_scopes"].append("global")
+    prof.write_text(_json.dumps(d))
+    res = verify_official_rollout_evidence(str(tmp_path), require_complete_matrix=False)
+    assert not res.ok
+
+
 def test_failure_bundle_is_matrix_representable(tmp_path):
     from lerobot_coreai.rollout_verify import verify_official_rollout_evidence
     case = "runner_negotiate-b1"

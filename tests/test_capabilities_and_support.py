@@ -55,6 +55,50 @@ def test_normalization_rejects_unknown_enum():
         normalize_capabilities({"action_batching": {"slot_isolation": "telepathic"}})
 
 
+def test_conditional_batching_supported_requires_semantics_and_isolation():
+    with pytest.raises(CapabilitiesNormalizationError):   # supported, no semantics
+        normalize_capabilities({"action_batching": {"supported": True,
+                                                    "max_batch_size": 4,
+                                                    "slot_isolation": "independent"}})
+    with pytest.raises(CapabilitiesNormalizationError):   # supported, max < 2
+        normalize_capabilities({"action_batching": {"supported": True,
+                                                    "max_batch_size": 1,
+                                                    "semantics": "native",
+                                                    "slot_isolation": "independent"}})
+
+
+def test_conditional_session_scope_requires_session_ids():
+    with pytest.raises(CapabilitiesNormalizationError):
+        normalize_capabilities({"inference_state": {"scope": "session_scoped",
+                                                    "supports_session_ids": False}})
+
+
+def test_slot_isolation_alias_resolved_and_conflict_fails():
+    # only the alias present -> resolved.
+    n = normalize_capabilities({"action_batching": {"state_isolation": "independent"}})
+    assert n["action_batching"]["slot_isolation"] == "independent"
+    # both present with different values -> conflict fails.
+    with pytest.raises(CapabilitiesNormalizationError):
+        normalize_capabilities({"action_batching": {"slot_isolation": "independent",
+                                                    "state_isolation": "shared"}})
+
+
+def test_normalized_capabilities_is_batch_decision_authority():
+    # the typed object duck-types as the capabilities the batch decision reads.
+    from lerobot_coreai.capabilities_normalize import typed_normalized_capabilities
+    raw = {"supports": {"action": True}, "observation_encodings": ["nested_json_v1"],
+           "action_batching": {"supported": True, "max_batch_size": 4,
+                               "semantics": "native", "slot_isolation": "independent"},
+           "inference_state": {"scope": "stateless", "supports_session_ids": False,
+                               "reset_scope": "none"}}
+    typed = typed_normalized_capabilities(raw)
+    assert typed.supports_batch is True and typed.max_batch_size == 4
+    assert typed.action_batching_semantics == "native"
+    assert typed.action_batching_slot_isolation == "independent"
+    assert typed.action_batching_state_isolation == "independent"   # alias accessor
+    assert typed.inference_state_scope == "stateless"
+
+
 def test_typed_normalized_capabilities_roundtrip():
     from lerobot_coreai.capabilities_normalize import typed_normalized_capabilities
     raw = {"protocol_version": "coreai-runner.v2", "supports": {"action": True},

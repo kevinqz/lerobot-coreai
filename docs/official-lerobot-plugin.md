@@ -735,30 +735,52 @@ failures; v1.3.22 makes those representations the runtime's real authority.
 - **RuntimeSupportProfile mandatory in certificate grade** — a certificate-grade
   matrix must declare it; the canonical profile is verified byte-for-byte (P1.10).
 
+## v1.3.23 — Capabilities Authority + conditional contract + failure taxonomy
+
+Normalized capabilities now drive execution, not just evidence; the failure taxonomy
+is precise; and the RuntimeSupportProfile is cryptographically bound to the matrix.
+
+- **Normalized capabilities are the runtime authority** — the typed, fail-closed
+  `NormalizedRunnerCapabilities` (duck-typed for the batch decision) is what
+  `select_batch_execution_mode` reads; the runtime no longer decides batching from the
+  raw/parsed object (P1.1, P1.4). A binding also requires `supports_action` (P1.3).
+- **Conditional capabilities contract + alias resolution** — normalization now
+  enforces: `action_batching.supported` ⇒ a `semantics` + `slot_isolation` +
+  `max_batch_size ≥ 2`; `native` ⇒ `slot_isolation`; `session_scoped` /
+  `reset_scope=session` ⇒ `supports_session_ids`. The `state_isolation` ↔
+  `slot_isolation` alias is resolved and a **conflict fails** (P1.2, P1.3).
+- **Precise failure taxonomy** — the runner boundary is classified by exception TYPE:
+  a transport error is `request`, a response-contract violation (non-finite / wrong
+  shape / malformed) is `response` — no longer mislabeled as a generic `request`
+  (P1.6).
+- **RuntimeSupportProfile matrix-root bound** — the profile hash is folded into the
+  matrix root and covered by the matrix checksums, and the verifier recomputes it from
+  the on-disk profile; removing or tampering with the profile now fails the root, not
+  just the sidecar (P1.7).
+
 ## Not yet
 
+- **Full `raw_lerobot_observation` removal + canonical stage migration** — the
+  `ObservationStage`/`ActionStage` vocabulary, `ProcessorStageContract` and
+  `RuntimeSupportProfile` are in and enforced; migrating the manifest + processor
+  contract + artifact builder/verifier + every consumer off the legacy `expects`
+  ownership strings (a semantic mapping, not a pure rename, across ~10 files incl. the
+  E2E fixtures) + making `ProcessorStageContract` mandatory & hash-bound + removing the
+  duplicate companion BatchContract schema is its own isolated PR — v1.3.24.
 - **Failure injection through the official `lerobot_eval.rollout` CI matrix** — the
   failure paths run E2E through the real policy/transport/negotiation stack with
-  runtime-boundary classification + certificate-grade offline verification; driving
-  them *inside* the stable/dev rollout jobs (incl. preprocessor / env.step / batched
-  failures) is v1.3.23.
+  precise runtime-boundary classification + certificate-grade offline verification;
+  driving them *inside* the stable/dev rollout jobs (incl. preprocessor / env.step /
+  batched failures) is v1.3.24.
 - **Stable wheel-distribution digest** — `lerobot_distribution_sha256` for the stable
-  target — v1.3.23.
+  target — v1.3.24.
 - **Chunk happy-path sub-stage events** (`chunk.assembly_started`/`assembled`/
   `validation_started`/`commit_started`) + commit-fault rollback fixture (the
-  failed-refill/no-partial-commit case is in) — v1.3.23.
-- **Full `raw_lerobot_observation` removal** — the `ObservationStage`/`ActionStage`
-  vocabulary + `ProcessorStageContract` + `RuntimeSupportProfile` are in; migrating
-  the manifest + every consumer off the legacy ownership string (a wide rename across
-  ~10 files incl. the E2E fixtures) + making `ProcessorStageContract` mandatory &
-  hash-bound is its own isolated PR — v1.3.23.
+  failed-refill/no-partial-commit case is in) — v1.3.24.
 - **`observation_stage` closure in BatchContract** (required + enum, or moved to the
-  stage contract) — v1.3.23.
-- **RuntimeSupportProfile matrix-root binding** (currently verified against the
-  canonical profile + required in certificate grade; folding its hash into the matrix
-  root + per-case reports) — v1.3.23.
+  stage contract) — v1.3.24.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true) — v1.3.23+.
+  `universal_feature_contract_verified` true) — v1.3.24+.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

@@ -390,9 +390,19 @@ def verify_official_rollout_evidence(
         except Exception as exc:  # noqa: BLE001
             return VerifyEvidenceResult(False, {**checks, "matrix_schema": f"failed: {exc}"})
         # v1.3.16: root binds target + passed + bundle root (a target/pass flip
-        # changes the root).
+        # changes the root). v1.3.23 (P1.7): the RuntimeSupportProfile hash is folded
+        # in too — recompute it from the on-disk profile and require it to match.
+        profile_sha = mx.get("runtime_support_profile_sha256")
+        rsp = root / "runtime_support_profile.json"
+        if profile_sha is not None:
+            all_ok &= ok("runtime_support_profile_bound",
+                         rsp.exists()
+                         and canonical_json_sha256(json.loads(rsp.read_text())) == profile_sha,
+                         "runtime_support_profile.json != matrix profile hash")
         recomputed = canonical_json_sha256(
             {"schema_version": mx["schema_version"], "target": mx["target"],
+             **({"runtime_support_profile_sha256": profile_sha}
+                if profile_sha is not None else {}),
              "cases": sorted((c, bool(v["passed"]), v["bundle_root_sha256"])
                              for c, v in mx["cases"].items())})
         all_ok &= ok("matrix_root", recomputed == mx["matrix_root_sha256"],

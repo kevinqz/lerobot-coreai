@@ -145,6 +145,29 @@ class NormalizedRunnerCapabilities:
     def to_dict(self) -> dict:
         return normalize_from_typed(self)
 
+    # v1.3.23 (P1.1/P1.4): duck-typed accessors so the NORMALIZED object is a
+    # drop-in authority for select_batch_execution_mode — the runtime batch decision
+    # reads capability facts from here, not from the raw/parsed object.
+    @property
+    def supports_batch(self) -> bool:
+        return self.batching_supported
+
+    @property
+    def inference_state_scope(self) -> str | None:
+        return self.state_scope
+
+    @property
+    def action_batching_semantics(self) -> str | None:
+        return self.batching_semantics
+
+    @property
+    def action_batching_slot_isolation(self) -> str | None:
+        return self.slot_isolation
+
+    @property
+    def action_batching_state_isolation(self) -> str | None:
+        return self.slot_isolation      # alias already resolved during normalization
+
 
 def normalize_capabilities(raw: dict) -> dict:
     """Canonicalize an announced capabilities payload, fail-closed (no coercion)."""
@@ -162,7 +185,7 @@ def normalize_capabilities(raw: dict) -> dict:
             or not isinstance(ist, dict):
         raise CapabilitiesNormalizationError("supports/action_batching/inference_state "
                                              "must be objects.")
-    return {
+    normalized = {
         "normalization_algorithm_version": NORMALIZE_ALGORITHM_VERSION,
         "runtime": raw.get("runtime"),
         "protocol_version": raw.get("protocol_version"),
@@ -177,8 +200,7 @@ def normalize_capabilities(raw: dict) -> dict:
                                        "action_batching.max_batch_size", 1),
             "semantics": _req_enum(ab.get("semantics"),
                                    "action_batching.semantics", _SEMANTICS),
-            "slot_isolation": _req_enum(ab.get("slot_isolation"),
-                                        "action_batching.slot_isolation", _SLOT_ISO)},
+            "slot_isolation": _resolve_slot_isolation(ab)},
         "inference_state": {
             "scope": _req_enum(ist.get("scope"), "inference_state.scope", _STATE_SCOPE),
             "supports_session_ids": _req_bool(
@@ -186,6 +208,45 @@ def normalize_capabilities(raw: dict) -> dict:
             "reset_scope": _req_enum(ist.get("reset_scope"),
                                      "inference_state.reset_scope", _RESET_SCOPE)},
     }
+    _validate_conditional(normalized)              # v1.3.23 (P1.3): closed contract
+    return normalized
+
+
+def _resolve_slot_isolation(ab: dict) -> str | None:
+    """Resolve the ``slot_isolation`` / ``state_isolation`` alias, fail on conflict
+    (v1.3.23, P1.2). A payload that declares both with different values is rejected."""
+    canonical = ab.get("slot_isolation")
+    alias = ab.get("state_isolation")
+    if canonical is not None and alias is not None and canonical != alias:
+        raise CapabilitiesNormalizationError(
+            f"conflicting slot_isolation {canonical!r} vs state_isolation alias "
+            f"{alias!r}.")
+    value = canonical if canonical is not None else alias
+    return _req_enum(value, "action_batching.slot_isolation", _SLOT_ISO)
+
+
+def _validate_conditional(n: dict) -> None:
+    """Enforce the conditional capabilities contract (v1.3.23, P1.3)."""
+    ab, ist = n["action_batching"], n["inference_state"]
+    if ab["supported"]:
+        if ab["semantics"] is None:
+            raise CapabilitiesNormalizationError(
+                "action_batching.supported requires a semantics.")
+        if ab["slot_isolation"] is None:
+            raise CapabilitiesNormalizationError(
+                "action_batching.supported requires a slot_isolation.")
+        if ab["max_batch_size"] < 2:
+            raise CapabilitiesNormalizationError(
+                "action_batching.supported requires max_batch_size >= 2.")
+    if ab["semantics"] == "native" and ab["slot_isolation"] is None:
+        raise CapabilitiesNormalizationError(
+            "native batching requires a slot_isolation.")
+    if ist["scope"] == "session_scoped" and not ist["supports_session_ids"]:
+        raise CapabilitiesNormalizationError(
+            "session_scoped inference requires supports_session_ids.")
+    if ist["reset_scope"] == "session" and not ist["supports_session_ids"]:
+        raise CapabilitiesNormalizationError(
+            "reset_scope=session requires supports_session_ids.")
 
 
 def typed_normalized_capabilities(raw: dict) -> NormalizedRunnerCapabilities:

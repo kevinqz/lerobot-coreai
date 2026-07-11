@@ -195,21 +195,21 @@ def test_predict_http_failure_produces_verifiable_bundle(tmp_path, monkeypatch):
 
 
 def test_nonfinite_action_produces_verifiable_bundle(tmp_path, monkeypatch):
-    # the CoreAI transport rejects a non-finite response at the request/response
-    # boundary (before the plugin's own validation) — the runtime classifies it there.
+    # v1.3.23 (P1.6): a non-finite response violates the response contract — the
+    # runtime classifies it as `response`, NOT a generic `request`.
     bad = [[float("inf")] * A for _ in range(HORIZON)]
     res, stage = _drive_failure(tmp_path, monkeypatch, _State(action=bad),
-                                "request", "failure-nonfinite-b1")
+                                "response", "failure-nonfinite-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
-    assert stage in ("request", "response", "validation")
+    assert stage == "response"
 
 
 def test_malformed_response_shape_produces_verifiable_bundle(tmp_path, monkeypatch):
     wrong = [[float(i)] * A for i in range(HORIZON + 2)]     # wrong horizon
     res, stage = _drive_failure(tmp_path, monkeypatch, _State(action=wrong),
-                                "request", "failure-malformed-b1")
+                                "response", "failure-malformed-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
-    assert stage in ("request", "response", "validation")
+    assert stage == "response"
 
 
 def test_synthesized_terminal_is_labeled_writer_synthesized(tmp_path):
