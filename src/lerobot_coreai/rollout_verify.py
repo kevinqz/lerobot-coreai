@@ -19,17 +19,22 @@ import jsonschema
 from .rollout_evidence_schema import (
     BUNDLE_MANIFEST_SCHEMA,
     EXECUTION_ENVELOPE_SCHEMA,
+    FAILURE_BUNDLE_MANIFEST_SCHEMA,
     FAILURE_REPORT_SCHEMA,
     MATRIX_SCHEMA,
     READINESS_SCHEMA,
     REQUIRED_CASES,
+    TERMINAL_FAILURE_EVENTS,
     TRACE_EVENT_SCHEMA,
+    _ENVIRONMENT_SCHEMA,
     canonical_json_sha256,
+    capabilities_sha256_from_raw,
 )
 from .rollout_replay import replay_rollout_evidence
 
 FAILURE_REPORT_FILE = "failure_report.json"
 FAILURE_MANIFEST_FILE = "failure_bundle_manifest.json"
+CAPABILITIES_FILE = "runner_capabilities.json"
 _FAILURE_CONTENT = ("failure_report.json", "execution_envelope.json",
                     "environment_identity.json", "partial_trace.jsonl")
 
@@ -42,7 +47,7 @@ README_MD = "official_rollout_readiness_report.md"
 MATRIX_FILE = "official_rollout_matrix_manifest.json"
 
 # content files (checksums must cover exactly these + the bundle manifest).
-_CONTENT = (REPORT_FILE, README_MD, TRACE_FILE, MEASUREMENTS_FILE)
+_CONTENT = (REPORT_FILE, README_MD, TRACE_FILE, MEASUREMENTS_FILE, CAPABILITIES_FILE)
 _EXPECTED_CHECKSUMS = set(_CONTENT) | {BUNDLE_MANIFEST_FILE}
 _SECRET_KEYS = ("token", "secret", "password", "authorization", "bearer", "api_key")
 
@@ -109,6 +114,10 @@ def _verify_failure_case(case_dir: Path, checks: dict,
     except Exception as exc:  # noqa: BLE001
         ok("checksums_parse", False, str(exc)); return False, False, None
     ok("checksums_paths_safe", all(_safe_name(k) for k in recorded), "unsafe path")
+    # v1.3.20 (P1.7): exact checksum coverage, like the success bundle.
+    ok("checksums_exact_coverage",
+       set(recorded) == set(_FAILURE_CONTENT) | {FAILURE_MANIFEST_FILE},
+       f"{sorted(recorded)}")
     ok("checksums_match", all(
         (case_dir / n).exists() and _sha256_file(case_dir / n) == d
         for n, d in recorded.items()), "a listed file was modified")
@@ -117,6 +126,8 @@ def _verify_failure_case(case_dir: Path, checks: dict,
         jsonschema.validate(report, FAILURE_REPORT_SCHEMA)
         envelope = json.loads((case_dir / "execution_envelope.json").read_text())
         jsonschema.validate(envelope, EXECUTION_ENVELOPE_SCHEMA)
+        identity = json.loads((case_dir / "environment_identity.json").read_text())
+        jsonschema.validate(identity, _ENVIRONMENT_SCHEMA)   # P1.5
         ok("schemas", True)
     except Exception as exc:  # noqa: BLE001
         ok("schemas", False, str(exc)); return False, False, None
@@ -125,9 +136,10 @@ def _verify_failure_case(case_dir: Path, checks: dict,
        "a claim is true")
     ok("envelope_status", envelope["status"] in ("failed", "aborted"),
        "envelope status not terminal-failure")
-    ok("no_secrets", _scan_secret(report) is None and _scan_secret(envelope) is None,
-       "secret detected")
-    # partial trace events (if any) must each be schema-valid.
+    ok("no_secrets", _scan_secret(report) is None and _scan_secret(envelope) is None
+       and _scan_secret(identity) is None, "secret detected")
+    # partial trace: each event schema-valid, and it must END with a terminal
+    # failure event whose execution_id + failed_stage match the report/envelope (P1.8).
     try:
         from .rollout_evidence_schema import EXECUTION_EVENT_SCHEMA
         events = [json.loads(ln) for ln in
@@ -136,11 +148,22 @@ def _verify_failure_case(case_dir: Path, checks: dict,
             jsonschema.validate(e, EXECUTION_EVENT_SCHEMA)
         ok("partial_trace_schema", True)
     except Exception as exc:  # noqa: BLE001
-        ok("partial_trace_schema", False, str(exc))
+        ok("partial_trace_schema", False, str(exc)); events = []
+    term = events[-1] if events else {}
+    ok("failure_trace_terminal", bool(events)
+       and term.get("event") in TERMINAL_FAILURE_EVENTS,
+       "partial trace does not end with a terminal failure event")
+    ok("failure_cross_binding",
+       bool(events)
+       and term.get("execution_id") == envelope["execution_id"] == report.get("execution_id")
+       and term.get("failed_stage") == report["failed_stage"],
+       "execution id / failed_stage not cross-bound across trace/report/envelope")
     try:
         bm = json.loads((case_dir / FAILURE_MANIFEST_FILE).read_text())
+        jsonschema.validate(bm, FAILURE_BUNDLE_MANIFEST_SCHEMA)   # P1.6
+        ok("failure_manifest_schema", True)
     except Exception as exc:  # noqa: BLE001
-        ok("failure_manifest_parse", False, str(exc)); return False, False, None
+        ok("failure_manifest_schema", False, str(exc)); return False, False, None
     ok("failure_manifest_coverage", set(bm.get("files", {})) == set(_FAILURE_CONTENT),
        "manifest does not cover exactly the failure content")
     root = bm.get("bundle_root_sha256")
@@ -153,8 +176,47 @@ def _verify_failure_case(case_dir: Path, checks: dict,
     return case_ok, False, root       # a failure case never counts as rollout-passed
 
 
-def _verify_case(case_dir: Path, checks: dict,
-                 prefix: str) -> tuple[bool, bool, str | None]:
+def _verify_negotiation(case_dir: Path, checks: dict, prefix: str,
+                        require_negotiation: bool) -> None:
+    """Re-prove the NegotiationRecord OFFLINE (v1.3.20): capabilities hash recomputed
+    from the persisted file, and the negotiation algorithm RE-RUN from the record's
+    inputs must reproduce the persisted protocol/encoding (P1.2, P1.3)."""
+    from .negotiation_algorithm import NegotiationError, expected_negotiation
+
+    def ok(name, cond, reason=""):
+        checks[f"{prefix}:{name}"] = "passed" if cond else f"failed: {reason}"
+        return cond
+
+    try:
+        raw = json.loads((case_dir / MEASUREMENTS_FILE).read_text())
+    except Exception as exc:  # noqa: BLE001
+        ok("negotiation_load", False, str(exc)); return
+    neg = raw.get("negotiation")
+    if neg is None:
+        # certificate-grade evidence must carry a NegotiationRecord (P1.1).
+        ok("negotiation_present", not require_negotiation,
+           "no NegotiationRecord (legacy unnegotiated evidence)")
+        return
+    # capabilities hash recomputed from the persisted normalized capabilities.
+    try:
+        caps_raw = json.loads((case_dir / CAPABILITIES_FILE).read_text())
+        ok("capabilities_hash",
+           capabilities_sha256_from_raw(caps_raw) == neg.get("runner_capabilities_sha256"),
+           "runner_capabilities.json != NegotiationRecord.runner_capabilities_sha256")
+    except Exception as exc:  # noqa: BLE001
+        ok("capabilities_hash", False, str(exc))
+    # re-run the exact negotiation algorithm and require equality (P1.2).
+    try:
+        proto, enc = expected_negotiation(neg)
+        ok("negotiation_recomputed",
+           proto == neg["negotiated_protocol"] and enc == neg["negotiated_encoding"],
+           "recomputed negotiation != persisted result")
+    except (NegotiationError, KeyError) as exc:
+        ok("negotiation_recomputed", False, f"invalid negotiation inputs: {exc}")
+
+
+def _verify_case(case_dir: Path, checks: dict, prefix: str, *,
+                 require_negotiation: bool = True) -> tuple[bool, bool, str | None]:
     """Verify one case bundle. Returns (bundle_verified, rollout_passed, root)."""
     if (case_dir / FAILURE_REPORT_FILE).exists():
         return _verify_failure_case(case_dir, checks, prefix)
@@ -230,6 +292,9 @@ def _verify_case(case_dir: Path, checks: dict,
     rep = replay_rollout_evidence(str(case_dir))
     ok("semantic_replay", rep.ok, "; ".join(rep.errors)[:200])
 
+    # v1.3.20: re-prove negotiation (capabilities hash + recomputed algorithm).
+    _verify_negotiation(case_dir, checks, prefix, require_negotiation)
+
     # bundle manifest schema + recomputed root + per-file digests.
     try:
         bm = json.loads((case_dir / BUNDLE_MANIFEST_FILE).read_text())
@@ -253,6 +318,7 @@ def _verify_case(case_dir: Path, checks: dict,
 
 def verify_official_rollout_evidence(
     bundle_dir: str, *, require_complete_matrix: bool = True,
+    require_negotiation: bool = True,
 ) -> VerifyEvidenceResult:
     root = Path(bundle_dir)
     checks: dict[str, str] = {}
@@ -269,7 +335,8 @@ def verify_official_rollout_evidence(
     seen = {p.name: p for p in sorted(root.iterdir()) if p.is_dir()}
     all_ok = True
     for name, cdir in seen.items():
-        cok, passed, broot = _verify_case(cdir, checks, f"case[{name}]")
+        cok, passed, broot = _verify_case(
+            cdir, checks, f"case[{name}]", require_negotiation=require_negotiation)
         all_ok &= cok
         case_passed[name] = passed
         if broot:

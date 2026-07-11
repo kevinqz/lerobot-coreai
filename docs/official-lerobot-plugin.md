@@ -632,22 +632,60 @@ closes the execution envelope: its start, negotiation, termination and failure p
   (`source_head_sha` / `base_sha` / `merge_sha` / `workflow_sha`) plus run attempt +
   runner image.
 
+## v1.3.20 — Negotiation/Failure Closure + Canonical Stage Foundation
+
+Before describing every tensor, close the protocol, failure and stage boundaries
+that give those tensors meaning. v1.3.19 introduced negotiation binding + structural
+failure bundles; v1.3.20 makes them **certificate-grade** and lays the canonical
+stage vocabulary a `FeatureContract` will need.
+
+- **NegotiationRecord v2 + offline re-run** — the record now carries
+  `selection_policy` + the runner's `runner_backward_compatible_with`, and the
+  normalized announced capabilities are persisted as `runner_capabilities.json`.
+  The offline verifier **recomputes** the capabilities hash from that file and
+  **re-runs the exact negotiation algorithm** (a lerobot-free
+  `negotiation_algorithm.py` shared by intent), requiring the recomputed protocol +
+  encoding to equal the persisted result — so a self-consistent but semantically
+  invalid record (e.g. negotiated below the minimum, an undeclared downgrade, an
+  unannounced encoding) is rejected, not merely hashed (P1.2, P1.3, P1.4).
+  Negotiation is **required** for certificate-grade success evidence (legacy
+  unnegotiated bundles only pass with an explicit `require_negotiation=False`) (P1.1).
+- **Failure closure** — closed `FAILURE_BUNDLE_MANIFEST_SCHEMA`; exact
+  checksum/manifest/actual-file coverage; `environment_identity.json` validated
+  against the full environment schema (P1.5, P1.6, P1.7); a partial trace must end
+  with a **terminal** `execution.failed`/`execution.aborted` event whose
+  `execution_id` + `failed_stage` are **cross-bound** to the report and envelope
+  (P1.8). Discriminated failure event types (`negotiation.failed`,
+  `runner.request_failed`, `chunk.commit_failed`, …) are in the schema.
+- **Producer terminal validation** — `end_evidence_session` fail-fasts on an open
+  request (emits `execution.failed`, never an invalid `execution.completed`), and
+  completion **always** declares `termination_reason` + `unused_action_count` +
+  `unused_action_sha256s`, even when zero (P1.10, P1.11).
+- **Exact provenance** — the CI workflow resolves `source_head_sha` / `base_sha` /
+  `merge_sha` / `workflow_sha` via dedicated `COREAI_*` env vars, since `GITHUB_SHA`
+  is a synthetic merge commit on PRs and `GITHUB_BASE_REF` is a branch name (P1.12).
+- **Canonical stage vocabulary** — base `ObservationStage`/`ActionStage` enums +
+  `ProcessorStageContract v1` schema (with an identity-transform hash rule) + a
+  **single** canonical `schemas/batch-contract-v3.schema.json` the parser validates
+  against — the typed language a `FeatureContract` will bind features to.
+
 ## Not yet
 
-- **Exhaustive per-stage failure injection in CI** — the FailureEvidence v2 bundle,
-  writer, offline verifier and unit-level injection are in; driving a *real* injected
-  failure at every one of the 15 stages through the stable/dev rollout E2E is
-  v1.3.20.
+- **Exhaustive per-stage failure injection in CI** — the failure bundle, schemas,
+  offline verifier, terminal-event binding and unit-level injection (incl. a
+  failed-refill/no-partial-commit test) are in; driving a *real* injected failure at
+  each stage through the stable/dev rollout E2E is v1.3.21.
 - **Stable wheel-distribution digest** — `lerobot_distribution_sha256` for the stable
-  target (a stable content digest of the installed wheel) — v1.3.20.
-- **Chunk sub-stage granularity** — `chunk.assembly_started`/`assembled`/
-  `validation_started`/`commit_started`/`commit_failed`/`queue.rollback_completed`
-  and rollback-proven (not just single-extend) commit atomicity — v1.3.20.
-- **Processor-stage typed enum** (`ObservationStage`/`ActionStage`, removing
-  `raw_lerobot_observation`) + single canonical BatchContract v3 schema file — a
-  wide manifest/ownership-string rename, isolated from runtime changes — v1.3.20.
+  target (a content digest of the installed wheel) — v1.3.21.
+- **Chunk happy-path sub-stage events** (`chunk.assembly_started`/`assembled`/
+  `validation_started`/`commit_started`) + rollback-proven (not just single-extend)
+  commit atomicity fixture — v1.3.21.
+- **Full `raw_lerobot_observation` removal** — the `ObservationStage`/`ActionStage`
+  vocabulary + `ProcessorStageContract` land here; migrating the manifest +
+  every consumer off the legacy ownership string (a wide rename across ~10 files
+  incl. the E2E fixtures) is its own isolated PR — v1.3.21.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** (→
-  `universal_feature_contract_verified` true) — v1.3.20.
+  `universal_feature_contract_verified` true) — v1.3.21+.
 - **`FeatureContract` v1 + real `LeRobotDatasetMetadata`** — dtype/names/layout/
   value_range/units in the manifest schema and an on-disk official dataset fixture
   to close `feature_dtype` / `action_names_order` / `image_layout_range` so

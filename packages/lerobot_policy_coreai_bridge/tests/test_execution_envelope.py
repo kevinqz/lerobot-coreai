@@ -69,8 +69,7 @@ def test_failure_bundle_written_and_verifies(tmp_path):
     write_failure_evidence(
         str(tmp_path / case), case=case, failed_stage="runner_negotiate",
         exception_type="PluginBindingError", message="runner refused",
-        target="local", batch_size=1, mode="single_only",
-        execution_id="exec-1", environment={"target": "local"})
+        target="local", batch_size=1, mode="single_only", execution_id="exec-1")
     # no matrix required: a single failure bundle must verify on its own.
     res = verify_official_rollout_evidence(str(tmp_path), require_complete_matrix=False)
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
@@ -103,6 +102,22 @@ def test_failure_bundle_is_matrix_representable(tmp_path):
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
     # the matrix must bind the failure case as NOT passed.
     assert res.checks.get(f"matrix_binding:{case}") == "passed"
+
+
+def test_failed_refill_leaves_queue_empty_and_uncommitted():
+    # a prediction failure before the atomic commit must not mutate the queue and
+    # must not emit chunk.committed (a partial commit is never observable).
+    p = _policy()
+    p.begin_evidence_session("run-1")
+
+    def _boom(batch, **kw):
+        raise PluginBindingError("runner exploded mid-refill")
+
+    p.predict_action_chunk = _boom
+    with pytest.raises(PluginBindingError):
+        p.select_action({"observation.state": __import__("torch").zeros(1, 7)})
+    assert len(p._queue) == 0
+    assert not any(e["event"] == "chunk.committed" for e in p.queue_events)
 
 
 def test_failure_bundle_rejects_promoted_claim(tmp_path):

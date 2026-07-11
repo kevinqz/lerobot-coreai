@@ -46,6 +46,22 @@ class ActionContract:
 
 
 BATCH_CONTRACT_SCHEMA_VERSION = "coreai-batch-contract.v3"
+
+
+def load_batch_contract_v3_schema() -> dict:
+    """The SINGLE canonical BatchContract v3 JSON Schema (v1.3.20). One file
+    (``schemas/batch-contract-v3.schema.json``) is the source of truth for every
+    consumer; no consumer keeps a divergent copy."""
+    import json
+    from importlib.resources import files
+    return json.loads(files("lerobot_coreai.schemas").joinpath(
+        "batch-contract-v3.schema.json").read_text())
+
+
+def validate_batch_contract_v3(obj: dict) -> None:
+    """Validate a canonical v3 batch-contract dict against the shared schema."""
+    import jsonschema
+    jsonschema.validate(obj, load_batch_contract_v3_schema())
 _VALID_FALLBACKS = ("split_and_stack", "reject")
 _VALID_CLIENT_MODES = ("native_batch", "split_and_stack")
 _VALID_QUEUE_LAYOUTS = ("time_major_batched",)

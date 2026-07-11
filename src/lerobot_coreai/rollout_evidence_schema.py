@@ -231,6 +231,15 @@ QUEUE_EVENT_TYPES = (
     "queue.refill_requested", "runner.request_started", "runner.response_received",
     "chunk.validated", "chunk.committed", "action.popped", "queue.exhausted",
 )
+# v1.3.20: discriminated TERMINAL failure events for the failure path (P1.8). A
+# failure bundle's partial trace must end with one of the terminal events below.
+FAILURE_EVENT_TYPES = (
+    "execution.failed", "execution.aborted", "negotiation.failed",
+    "runner.request_failed", "runner.response_invalid", "chunk.assembly_failed",
+    "chunk.validation_failed", "chunk.commit_failed", "bundle.write_failed",
+    "offline.verify_failed",
+)
+TERMINAL_FAILURE_EVENTS = ("execution.failed", "execution.aborted")
 
 # reusable field schemas
 _NON_NEG = {"type": "integer", "minimum": 0}
@@ -246,10 +255,13 @@ _COMMON_PROPS = {
 # per-event: (required-beyond-common, {optional-prop: schema})
 _EVENT_SPEC: dict[str, tuple[dict, list]] = {
     "execution.started": ({}, []),
+    # v1.3.20 (P1.11): completion must ALWAYS declare its terminal accounting.
     "execution.completed": ({"termination_reason": _NE_STR,
                              "unused_action_count": _NON_NEG,
                              "unused_action_sha256s": {"type": "array",
-                                                       "items": _HASH_OR}}, []),
+                                                       "items": _HASH_OR}},
+                            ["termination_reason", "unused_action_count",
+                             "unused_action_sha256s"]),
     "policy.reset": ({"reset_kind": {"enum": ["normal", "abort"]},
                       "queue_size_after": _NON_NEG,
                       "discarded_action_count": _NON_NEG,
@@ -294,6 +306,14 @@ _EVENT_SPEC: dict[str, tuple[dict, list]] = {
                        "queue_size_before", "queue_size_after"]),
     "queue.exhausted": ({"queue_size_after": _NON_NEG}, ["queue_size_after"]),
 }
+# Terminal / stage failure events all carry an optional failed_stage + detail; the
+# two execution-level terminals require a failed_stage so the trace is self-describing.
+for _fe in FAILURE_EVENT_TYPES:
+    _req = ["failed_stage"] if _fe in TERMINAL_FAILURE_EVENTS else []
+    _EVENT_SPEC[_fe] = ({"failed_stage": _NE_STR, "detail": {"type": "string"},
+                         "prediction_id": _NON_NEG, "chunk_id": _NE_STR,
+                         "request_id": _NE_STR}, _req)
+ALL_EVENT_TYPES = QUEUE_EVENT_TYPES + FAILURE_EVENT_TYPES
 
 
 def _event_branch(name: str) -> dict:
@@ -305,7 +325,7 @@ def _event_branch(name: str) -> dict:
 
 EXECUTION_EVENT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "oneOf": [_event_branch(n) for n in QUEUE_EVENT_TYPES],
+    "oneOf": [_event_branch(n) for n in ALL_EVENT_TYPES],
 }
 # Back-compat alias (the offline verifier + replay import the current name).
 QUEUE_EVENT_SCHEMA = EXECUTION_EVENT_SCHEMA
@@ -328,18 +348,26 @@ EXECUTION_ENVELOPE_SCHEMA = {
     },
 }
 
-NEGOTIATION_SCHEMA_VERSION = "lerobot-coreai.negotiation_record.v1"
+# v1.3.20 NegotiationRecord v2: adds selection_policy + the runner's declared
+# backward-compatibility list, so the offline verifier can RE-RUN the negotiation
+# algorithm and reject a self-consistent-but-invalid record (P1.2, P1.4).
+NEGOTIATION_SCHEMA_VERSION = "lerobot-coreai.negotiation_record.v2"
+NEGOTIATION_SELECTION_POLICIES = ("exact", "minimum_compatible", "highest_compatible")
 NEGOTIATION_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "minimum_protocol", "runner_protocol",
+    "required": ["schema_version", "selection_policy", "minimum_protocol",
+                 "runner_protocol", "runner_backward_compatible_with",
                  "negotiated_protocol", "runner_encodings", "negotiated_encoding",
                  "runner_capabilities_sha256", "record_sha256"],
     "properties": {
         "schema_version": {"const": NEGOTIATION_SCHEMA_VERSION},
+        "selection_policy": {"enum": list(NEGOTIATION_SELECTION_POLICIES)},
         "requested_protocol": {"type": ["string", "null"]},
         "minimum_protocol": _NE_STR,
         "runner_protocol": _NE_STR,
+        "runner_backward_compatible_with": {"type": "array",
+                                            "items": {"type": "string"}},
         "negotiated_protocol": _NE_STR,
         "requested_encoding": {"type": ["string", "null"]},
         "runner_encodings": {"type": "array", "items": {"type": "string"}},
@@ -381,7 +409,25 @@ FAILURE_REPORT_SCHEMA = {
                 "proves_physical_safety": {"const": False}}},
     },
 }
-FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION = "lerobot-coreai.official_rollout_failure_bundle.v1"
+FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION = "lerobot-coreai.official_rollout_failure_bundle.v2"
+FAILURE_BUNDLE_MANIFEST_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object", "additionalProperties": False,
+    "required": ["schema_version", "case", "files", "bundle_root_sha256"],
+    "properties": {
+        "schema_version": {"const": FAILURE_BUNDLE_MANIFEST_SCHEMA_VERSION},
+        "case": _NE_STR,
+        "files": {"type": "object", "additionalProperties": _HASH_OR},
+        "bundle_root_sha256": _HASH_OR,
+    },
+}
+
+
+def capabilities_sha256_from_raw(raw: dict) -> str:
+    """The runner-capabilities fingerprint, recomputable OFFLINE from the persisted
+    normalized capabilities object (mirrors runner.capabilities_sha256)."""
+    canon = json.dumps(raw or {}, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canon.encode()).hexdigest()
 
 MATRIX_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
