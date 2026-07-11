@@ -120,6 +120,19 @@ def test_failed_refill_leaves_queue_empty_and_uncommitted():
     assert not any(e["event"] == "chunk.committed" for e in p.queue_events)
 
 
+def test_writer_synthesized_fails_certificate_grade(tmp_path):
+    # a writer-synthesized terminal verifies in diagnostic grade but NOT certificate.
+    from lerobot_coreai.rollout_verify import verify_official_rollout_evidence
+    write_failure_evidence(
+        str(tmp_path / "failure-setup-b1"), case="failure-setup-b1",
+        failed_stage="setup", exception_type="OSError", message="no artifact",
+        target="local")
+    assert verify_official_rollout_evidence(
+        str(tmp_path), require_complete_matrix=False, evidence_grade="diagnostic").ok
+    assert not verify_official_rollout_evidence(
+        str(tmp_path), require_complete_matrix=False, evidence_grade="certificate").ok
+
+
 def test_failure_bundle_rejects_promoted_claim(tmp_path):
     # the schema pins claims to false; a hand-forged true claim must not validate.
     from lerobot_coreai.rollout_evidence_schema import FAILURE_REPORT_SCHEMA

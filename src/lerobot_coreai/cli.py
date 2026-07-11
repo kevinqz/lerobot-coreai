@@ -935,6 +935,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_vre.add_argument("--bundle", dest="bundle", required=True)
     p_vre.add_argument("--require-complete-matrix", dest="require_complete_matrix",
                        action="store_true")
+    # v1.3.22: certificate grade requires negotiation, a runtime-boundary failure
+    # terminal, and the RuntimeSupportProfile; diagnostic accepts synthesized terminals.
+    p_vre.add_argument("--evidence-grade", dest="evidence_grade",
+                       choices=["diagnostic", "certificate"], default="diagnostic")
     p_vre.add_argument("--json", action="store_true")
     p_vre.set_defaults(func=cmd_verify_official_rollout_evidence)
 
@@ -951,7 +955,8 @@ def cmd_verify_official_rollout_evidence(args: argparse.Namespace) -> int:
 
     from .rollout_verify import verify_official_rollout_evidence
     result = verify_official_rollout_evidence(
-        args.bundle, require_complete_matrix=args.require_complete_matrix)
+        args.bundle, require_complete_matrix=args.require_complete_matrix,
+        evidence_grade=getattr(args, "evidence_grade", "diagnostic"))
     if args.json:
         print(_json.dumps(result.to_dict(), indent=2))
     else:

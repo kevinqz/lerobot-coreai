@@ -120,30 +120,31 @@ def negotiate_runner_protocol(
             "runner announced no protocol_version and legacy is not allowed; "
             "refusing to negotiate (use runtime_binding_mode='legacy' to opt in).")
 
-    announced = parse_protocol(announced_str)
-    if announced is None:
-        raise CoreAIPolicyError(
-            f"runner announced a malformed protocol {announced_str!r}; "
-            f"expected {minimum.family!r} family, e.g. {minimum_protocol!r}.")
-    if announced.family != minimum.family:
-        raise CoreAIPolicyError(
-            f"runner protocol family {announced.family!r} != required "
-            f"{minimum.family!r}; refusing to bind.")
-    if announced.major < minimum.major:
-        raise CoreAIPolicyError(
-            f"runner protocol {announced_str!r} is below the minimum "
-            f"{minimum_protocol!r}; refusing to bind.")
-    if announced.major > minimum.major and not _is_backward_compatible(
-            capabilities, minimum):
-        raise CoreAIPolicyError(
-            f"runner protocol {announced_str!r} is newer than {minimum_protocol!r} "
-            f"and does not declare backward_compatible_with {minimum_protocol!r}; "
-            "a newer major may be breaking — refusing to bind.")
-
-    enc = negotiate_observation_encoding(
-        requested_encoding, capabilities, allow_legacy=False)
+    # v1.3.22 (P1.1): the protocol + encoding DECISION lives in ONE base primitive
+    # (lerobot_coreai.negotiation_algorithm) that the offline verifier also runs. This
+    # function is now a thin adapter — it fetches inputs from the live capabilities and
+    # wraps the result in the runtime's NegotiatedRunnerProtocol type. No parallel
+    # selection logic remains here.
+    from lerobot_coreai.negotiation_algorithm import (
+        NegotiationError, negotiate_runner_contract,
+    )
+    try:
+        contract = negotiate_runner_contract(
+            selection_policy="minimum_compatible",
+            requested_protocol=None,
+            minimum_protocol=minimum_protocol,
+            runner_protocol=announced_str,
+            runner_backward_compatible_with=tuple(
+                getattr(capabilities, "backward_compatible_with", ()) or ()),
+            requested_encoding=requested_encoding,
+            runner_encodings=tuple(
+                getattr(capabilities, "observation_encodings", ()) or ()),
+            plugin_encodings=PLUGIN_SUPPORTED)
+    except NegotiationError as exc:
+        raise CoreAIPolicyError(str(exc)) from exc
     return NegotiatedRunnerProtocol(
-        protocol_version=announced_str, observation_encoding=enc,
+        protocol_version=contract.negotiated_protocol,
+        observation_encoding=contract.negotiated_encoding,
         supports_batch=bool(getattr(capabilities, "supports_batch", False)),
         max_batch_size=int(getattr(capabilities, "max_batch_size", None) or 1),
         legacy=False)

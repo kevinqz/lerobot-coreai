@@ -24,6 +24,26 @@ class _Caps:
     backward_compatible_with: tuple = ()
 
 
+def test_runtime_delegates_to_base_negotiation_primitive():
+    # v1.3.22 (P1.1): the runtime adapter and the base primitive must agree — the
+    # runtime carries no parallel selection logic.
+    from lerobot_coreai.negotiation_algorithm import negotiate_runner_contract
+    caps = _Caps(observation_encodings=(NESTED_JSON_V1, TYPED_ARRAY_ENVELOPE_V1),
+                 protocol_version="coreai-runner.v3",
+                 backward_compatible_with=("coreai-runner.v2",))
+    runtime = negotiate_runner_protocol(
+        requested_encoding="auto", capabilities=caps,
+        minimum_protocol="coreai-runner.v2")
+    base = negotiate_runner_contract(
+        selection_policy="minimum_compatible", requested_protocol=None,
+        minimum_protocol="coreai-runner.v2", runner_protocol="coreai-runner.v3",
+        runner_backward_compatible_with=("coreai-runner.v2",),
+        requested_encoding="auto",
+        runner_encodings=(NESTED_JSON_V1, TYPED_ARRAY_ENVELOPE_V1))
+    assert runtime.protocol_version == base.negotiated_protocol == "coreai-runner.v3"
+    assert runtime.observation_encoding == base.negotiated_encoding == NESTED_JSON_V1
+
+
 def test_auto_picks_first_common_encoding():
     caps = _Caps(observation_encodings=(NESTED_JSON_V1, TYPED_ARRAY_ENVELOPE_V1))
     assert negotiate_observation_encoding("auto", caps) == NESTED_JSON_V1

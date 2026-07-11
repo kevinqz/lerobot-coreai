@@ -125,33 +125,41 @@ def _policy(tmp_path, monkeypatch, state):
     return policy, server
 
 
-def _drive_failure(tmp_path, monkeypatch, state, failed_stage, case):
+def _drive_failure(tmp_path, monkeypatch, state, expected_stage, case):
     """Run the real stack until it fails, seal a runtime-origin failure bundle,
-    and re-prove it offline. Returns the verify result."""
+    and re-prove it offline. Returns (verify_result, runtime_failed_stage)."""
     policy, server = _policy(tmp_path, monkeypatch, state)
     ev_dir = tmp_path / "ev"
     try:
         policy.begin_evidence_session(f"failed-{case}")
         with pytest.raises(Exception):  # noqa: PT011 — any real stage failure
             policy.select_action({"observation.state": torch.zeros(1, A)})
-        events = policy.abort_evidence_session(failed_stage, detail="injected")
-        assert events[-1]["event"] == "execution.failed"      # RUNTIME terminal
+        # the runtime auto-sealed at the failing boundary — read its classification;
+        # the caller does NOT choose failed_stage (P1.6/P1.7).
+        events = list(policy.queue_events)
+        terminal = events[-1]
+        assert terminal["event"] == "execution.failed"
+        assert policy.terminal_event_origin == "runtime_exception_boundary"
+        runtime_stage = terminal["failed_stage"]
         write_failure_evidence(
-            str(ev_dir / case), case=case, failed_stage=failed_stage,
+            str(ev_dir / case), case=case, failed_stage=runtime_stage,
             exception_type="RuntimeError", message="injected failure",
             target="local", execution_id=f"failed-{case}",
             environment=capture_environment_identity("local"),
-            partial_events=tuple(events), terminal_event_origin="runtime")
+            partial_events=tuple(events),
+            terminal_event_origin=policy.terminal_event_origin)
     finally:
         server.__exit__()
-    return verify_official_rollout_evidence(str(ev_dir), require_complete_matrix=False)
+    return (verify_official_rollout_evidence(str(ev_dir), require_complete_matrix=False),
+            runtime_stage)
 
 
 def test_negotiation_failure_produces_verifiable_bundle(tmp_path, monkeypatch):
     # runner announces a protocol below the minimum -> negotiation fails.
-    res = _drive_failure(tmp_path, monkeypatch, _State(protocol="coreai-runner.v1"),
-                         "runner_negotiate", "failure-negotiation-b1")
+    res, stage = _drive_failure(tmp_path, monkeypatch, _State(protocol="coreai-runner.v1"),
+                                "runner_negotiate", "failure-negotiation-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
+    assert stage == "runner_negotiate"          # runtime classified it, not the caller
 
 
 def test_bind_time_capabilities_failure_produces_writer_synthesized_bundle(
@@ -180,23 +188,28 @@ def test_bind_time_capabilities_failure_produces_writer_synthesized_bundle(
 
 
 def test_predict_http_failure_produces_verifiable_bundle(tmp_path, monkeypatch):
-    res = _drive_failure(tmp_path, monkeypatch, _State(predict_status=500),
-                         "request", "failure-predict-http-b1")
+    res, stage = _drive_failure(tmp_path, monkeypatch, _State(predict_status=500),
+                                "request", "failure-predict-http-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
+    assert stage == "request"
 
 
 def test_nonfinite_action_produces_verifiable_bundle(tmp_path, monkeypatch):
+    # the CoreAI transport rejects a non-finite response at the request/response
+    # boundary (before the plugin's own validation) — the runtime classifies it there.
     bad = [[float("inf")] * A for _ in range(HORIZON)]
-    res = _drive_failure(tmp_path, monkeypatch, _State(action=bad),
-                         "validation", "failure-nonfinite-b1")
+    res, stage = _drive_failure(tmp_path, monkeypatch, _State(action=bad),
+                                "request", "failure-nonfinite-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
+    assert stage in ("request", "response", "validation")
 
 
 def test_malformed_response_shape_produces_verifiable_bundle(tmp_path, monkeypatch):
     wrong = [[float(i)] * A for i in range(HORIZON + 2)]     # wrong horizon
-    res = _drive_failure(tmp_path, monkeypatch, _State(action=wrong),
-                         "validation", "failure-malformed-b1")
+    res, stage = _drive_failure(tmp_path, monkeypatch, _State(action=wrong),
+                                "request", "failure-malformed-b1")
     assert res.ok, {k: v for k, v in res.checks.items() if v != "passed"}
+    assert stage in ("request", "response", "validation")
 
 
 def test_synthesized_terminal_is_labeled_writer_synthesized(tmp_path):

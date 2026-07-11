@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot_policy_coreai_bridge"
-version = "1.3.21"
+version = "1.3.22"
 description = "Official out-of-tree LeRobot policy plugin backed by Apple CoreAI (runtime-only)."
 readme = "README.md"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ keywords = ["lerobot", "coreai", "plugin", "policy", "robotics"]
 # them so they self-register. This package is runtime-only: it does not train.
 dependencies = [
     "lerobot>=0.6.0,<0.7.0",
-    "lerobot-coreai>=1.3.21,<1.3.22",
+    "lerobot-coreai>=1.3.22,<1.3.23",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -401,10 +401,14 @@ FAILURE_REPORT_SCHEMA = {
         "exception_type": _NE_STR,
         "message": {"type": "string"},
         "execution_id": {"type": ["string", "null"]},
-        # v1.3.21 (P1.6/L): whether the terminal event was emitted by the RUNTIME (the
-        # execution genuinely observed the failure) or synthesized by the writer
-        # (diagnostic only — never certificate-grade).
-        "terminal_event_origin": {"enum": ["runtime", "writer_synthesized"]},
+        # v1.3.22 (P1.6/P1.7/L): the PRECISE origin of the terminal event.
+        #  - runtime_exception_boundary: emitted automatically at the failing boundary
+        #    (certificate-grade — the runtime classified the stage itself);
+        #  - runtime_api_posthoc: emitted by an explicit abort call after a caught
+        #    exception (the caller chose the stage — diagnostic);
+        #  - writer_synthesized: no runtime session at all (diagnostic).
+        "terminal_event_origin": {"enum": ["runtime_exception_boundary",
+                                           "runtime_api_posthoc", "writer_synthesized"]},
         "claims": {
             "type": "object", "additionalProperties": False,
             "required": ["official_rollout_pipeline_smoke_passed",

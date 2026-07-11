@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import time
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -363,6 +364,8 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._pops_since_commit = 0
         self._pending_responses = []
         self._open_requests = 0
+        self._failed_sealed = False
+        self.terminal_event_origin = None
         self._active_prediction_id = None
         self._active_chunk_id = None
         self._execution_id = run_id
@@ -405,25 +408,42 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         "queue_commit": "chunk.commit_failed",
     }
 
-    def abort_evidence_session(self, failed_stage: str, detail: str = "") -> list:
-        """Seal a FAILED execution with RUNTIME-origin terminal events (v1.3.21).
-
-        Emits the stage-specific failure event (e.g. ``chunk.validation_failed``)
-        followed by a terminal ``execution.failed`` — so the failure evidence proves
-        the runtime actually observed the failure, not a writer-synthesized terminal
-        (P1.6/P1.8/L). Returns the sealed event stream for the failure bundle."""
-        if self._session_state != "ACTIVE":
-            raise PluginBindingError("abort_evidence_session without an active session.")
+    def _seal_failed(self, failed_stage: str, detail: str, origin: str) -> None:
+        """Emit the stage-specific failure event + a terminal execution.failed once,
+        record the terminal origin, and seal the session."""
+        if getattr(self, "_failed_sealed", False):
+            return
         stage_event = self._STAGE_FAILURE_EVENT.get(failed_stage)
         if stage_event:
-            self._emit(stage_event, failed_stage=failed_stage,
-                       detail=detail[:500] if detail else "")
-        self._emit("execution.failed", failed_stage=failed_stage,
-                   detail=detail[:500] if detail else "")
-        events = list(self.queue_events)
+            self._emit(stage_event, failed_stage=failed_stage, detail=detail[:500])
+        self._emit("execution.failed", failed_stage=failed_stage, detail=detail[:500])
+        self._failed_sealed = True
+        self.terminal_event_origin = origin
         self.record_queue_events = False
         self._session_state = "IDLE"
-        return events
+
+    @contextmanager
+    def _evidence_stage(self, failed_stage: str):
+        """Classify a failing boundary AUTOMATICALLY (v1.3.22, P1.6/P1.7).
+
+        If the wrapped boundary raises during an active evidence session, the RUNTIME
+        emits the stage-specific failure event + terminal ``execution.failed`` tagged
+        ``runtime_exception_boundary`` — the caller does NOT choose the stage. Inner
+        boundaries win (``_failed_sealed`` guards against a re-tag while unwinding)."""
+        try:
+            yield
+        except Exception as exc:  # noqa: BLE001
+            if self.record_queue_events and self._session_state == "ACTIVE":
+                self._seal_failed(failed_stage, str(exc), "runtime_exception_boundary")
+            raise
+
+    def abort_evidence_session(self, failed_stage: str, detail: str = "") -> list:
+        """Explicit, POST-HOC failure seal (diagnostic). Prefer ``_evidence_stage``,
+        which classifies the stage at the boundary. Returns the sealed event stream."""
+        if self._session_state != "ACTIVE":
+            raise PluginBindingError("abort_evidence_session without an active session.")
+        self._seal_failed(failed_stage, detail or "", "runtime_api_posthoc")
+        return list(self.queue_events)
 
     def reset(self) -> None:
         n = len(self._queue)
@@ -481,7 +501,8 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
         self._emit("runner.request_started", prediction_id=self._active_prediction_id,
                    chunk_id=cid, request_id=rid, sample_index=sample_index)
         self._open_requests += 1
-        raw = fn(*args, **kwargs)
+        with self._evidence_stage("request"):
+            raw = fn(*args, **kwargs)
         if self.record_queue_events:
             from lerobot_coreai.rollout_evidence_schema import canonical_json_sha256
             sha = canonical_json_sha256({"action": raw})
@@ -505,9 +526,11 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             self.coreai_policy.predict_action_chunk, obs,
             runner_options=self._runner_options(proto, sha))
         rep, horizon, dim = self._contract_shapes()
-        return normalize_and_validate_action_chunk(
-            raw, representation=rep, expected_batch_size=1, expected_horizon=horizon,
-            expected_action_dim=dim, device=self._sentinel.device)
+        with self._evidence_stage("validation"):
+            return normalize_and_validate_action_chunk(
+                raw, representation=rep, expected_batch_size=1,
+                expected_horizon=horizon, expected_action_dim=dim,
+                device=self._sentinel.device)
 
     def _predict_native_chunk(self, batch, proto, b: int) -> torch.Tensor:
         from .action_validation import normalize_and_validate_batched_action_chunk
@@ -524,9 +547,11 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             self.coreai_policy.predict_action_batch, payload, batch_size=b,
             runner_options=self._runner_options(proto, batch_sha, batch_size=b))
         rep, horizon, dim = self._contract_shapes()
-        return normalize_and_validate_batched_action_chunk(
-            raw, representation=rep, expected_batch_size=b, expected_horizon=horizon,
-            expected_action_dim=dim, device=self._sentinel.device)
+        with self._evidence_stage("validation"):
+            return normalize_and_validate_batched_action_chunk(
+                raw, representation=rep, expected_batch_size=b,
+                expected_horizon=horizon, expected_action_dim=dim,
+                device=self._sentinel.device)
 
     def _predict_split_chunk(self, batch, proto, b: int) -> torch.Tensor:
         # Split-and-stack (stateless/request-scoped only): B independent requests,
@@ -544,10 +569,11 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
                 raw = self._runner_call(
                     self.coreai_policy.predict_action_chunk, obs,
                     sample_index=i, runner_options=self._runner_options(proto, sha))
-                chunk = normalize_and_validate_action_chunk(
-                    raw, representation=rep, expected_batch_size=1,
-                    expected_horizon=horizon, expected_action_dim=dim,
-                    device=self._sentinel.device)      # [1, H, A]
+                with self._evidence_stage("validation"):
+                    chunk = normalize_and_validate_action_chunk(
+                        raw, representation=rep, expected_batch_size=1,
+                        expected_horizon=horizon, expected_action_dim=dim,
+                        device=self._sentinel.device)      # [1, H, A]
             except Exception as exc:  # noqa: BLE001
                 raise PluginBindingError(
                     f"split-and-stack failed at sample index {i}: {exc}") from exc
@@ -569,7 +595,8 @@ class CoreAIBridgePolicy(PreTrainedPolicy):
             MODE_NATIVE, MODE_SINGLE, select_batch_execution_mode,
         )
         b = self._batch_size(batch)
-        proto = self._resolve_protocol()  # also caches self._capabilities
+        with self._evidence_stage("runner_negotiate"):
+            proto = self._resolve_protocol()  # also caches self._capabilities
         decision = select_batch_execution_mode(
             self.config, self._batch_contract, self._capabilities, b)
         self.last_batch_mode = decision.mode
