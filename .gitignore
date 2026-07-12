@@ -16,3 +16,6 @@ venv/
 .env
 .DS_Store
 .zcode/
+
+# lerobot-eval default output dir (eval videos/info) — never committed
+outputs/
