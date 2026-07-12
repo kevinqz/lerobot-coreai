@@ -1,0 +1,4 @@
+{ "profile": "org.huggingface.lerobot.policy.v1", "lerobot_version_range": ">=0.6,<0.7",
+  "policy_family": "act", "feature_contract_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "processor_ownership": "coreai_runner", "action_chunk": {"horizon": 4},
+  "task_feature": "task", "official_plugin_compatible": true }

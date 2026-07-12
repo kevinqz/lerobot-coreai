@@ -1,0 +1,6 @@
+{ "description": "Reference action-queue transitions the Swift LeRobotCoreAIKit must reproduce (RFC-0900 §11.3).",
+  "chunk": [[0.0],[0.1],[0.2]], "deadline_ns": 1000,
+  "cases": [
+    {"name": "in_order", "steps": ["next","next","next"], "expect_last": [0.2]},
+    {"name": "empty_after_drain", "steps": ["next","next","next","next"], "expect_error": "ActionQueueEmpty"},
+    {"name": "deadline_expired", "now_ns": 2000, "steps": ["next"], "expect_error": "ChunkInvalidated"} ] }
