@@ -73,12 +73,13 @@ def resolve_official_eval_entrypoint() -> dict:
     raise OfficialEvalExecutorError("lerobot-eval console-script entry point not found")
 
 
-def _sanitized_env(challenge_nonce: str) -> dict:
-    """A minimal environment for the subprocess: PATH/HOME/venv essentials + the
-    executor's challenge nonce. Not the full ambient environment (no inherited secrets)."""
-    keep = ("PATH", "HOME", "VIRTUAL_ENV", "LANG", "LC_ALL", "TMPDIR",
-            "HF_HOME", "HF_HUB_OFFLINE", "PYTHONHASHSEED")
-    env = {k: os.environ[k] for k in keep if k in os.environ}
+def _subprocess_env(challenge_nonce: str) -> dict:
+    """The subprocess environment with the executor's challenge nonce injected. It
+    inherits the ambient environment so the interpreter can import lerobot + its
+    auto-discovered plugins exactly as a normal `lerobot-eval` invocation would; a
+    STRICT allowlisted/secret-scrubbed environment is a v1.3.28 (protected-signing)
+    concern, tracked separately."""
+    env = dict(os.environ)
     env[_CHALLENGE_ENV] = challenge_nonce
     return env
 
@@ -91,7 +92,7 @@ def run_official_eval(args: list, *, challenge_nonce: str, timeout: int = 900,
     import subprocess
     argv = [sys.executable, "-m", _EVAL_MODULE, *args]
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                          cwd=cwd, env=_sanitized_env(challenge_nonce))
+                          cwd=cwd, env=_subprocess_env(challenge_nonce))
     stdout, stderr = proc.stdout or "", proc.stderr or ""
     return {
         "argv": argv, "exit_code": proc.returncode,
