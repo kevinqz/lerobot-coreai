@@ -1015,6 +1015,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_vse.add_argument("--json", action="store_true")
     p_vse.set_defaults(func=cmd_verify_signed_evidence)
 
+    # --- conformance-level (RFC-0700 §8) — honest L0–L6 ladder ---
+    p_cl = sub.add_parser("conformance-level",
+                          help="Report the honest L0–L6 ecosystem conformance level")
+    p_cl.add_argument("--json", action="store_true")
+    p_cl.set_defaults(func=cmd_conformance_level)
+
     # --- apple-runtime (v1.4.0 machinery) — diagnostic identity + certificate ---
     p_ar = sub.add_parser("apple-runtime",
                           help="Apple/CoreAI runtime identity + certificate (v1.4.0)")
@@ -1037,6 +1043,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=cmd_not_implemented)
 
     return parser
+
+
+def cmd_conformance_level(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .conformance_levels import CONFORMANCE_LADDER, current_conformance
+    a = current_conformance()
+    if args.json:
+        print(_json.dumps(a.to_dict(), indent=2))
+        return 0
+    titles = {i: t for i, t, _m in CONFORMANCE_LADDER}
+    print(f"Current conformance: {a.level} ({titles.get(a.level, '?')}) "
+          f"— namespace={a.namespace}")
+    for lid, title, meaning in CONFORMANCE_LADDER:
+        mark = "✓" if lid in a.achieved else "✗"
+        print(f"  {mark} {lid} {title}: {meaning}")
+    if a.namespace == "test_only":
+        print("NOTE: test_only — L3 runs against a stub Runner and the receipt is "
+              "unsigned; not a production/device certification.")
+    return 0
 
 
 def cmd_apple_runtime_probe(args: argparse.Namespace) -> int:
