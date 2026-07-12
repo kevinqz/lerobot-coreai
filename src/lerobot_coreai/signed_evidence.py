@@ -102,11 +102,14 @@ INTOTO_STATEMENT_SCHEMA = {
         "predicateType": {"const": SIGNED_EVIDENCE_PREDICATE_TYPE},
         "predicate": {
             "type": "object", "additionalProperties": False,
-            "required": ["certificate_type", "certificate_root_sha256", "roots",
-                         "issuer", "issued_at", "expires_at", "asserts_task_success",
-                         "asserts_physical_safety"],
+            "required": ["certificate_type", "evidence_grade", "certificate_root_sha256",
+                         "roots", "issuer", "issued_at", "expires_at",
+                         "asserts_task_success", "asserts_physical_safety"],
             "properties": {
                 "certificate_type": {"enum": list(CERTIFICATE_TYPES)},
+                # the grade is now SIGNED (v1.3.26.14): a verifier reads it from the
+                # signed payload, not from an out-of-band argument it must be told.
+                "evidence_grade": {"enum": ["diagnostic", "certificate"]},
                 "certificate_root_sha256": _HASH,
                 "roots": {"type": "object", "additionalProperties": _HASH},
                 "issuer": {"type": "string", "minLength": 1},
@@ -151,11 +154,15 @@ def _parse_rfc3339(value):
 
 def build_evidence_statement(*, certificate_type: str, certificate_root_sha256: str,
                              roots: dict, issuer: str, issued_at: str,
-                             expires_at: str | None = None) -> dict:
+                             expires_at: str | None = None,
+                             evidence_grade: str = "certificate") -> dict:
     """An in-toto Statement whose subject is the certificate root and whose predicate
-    carries the bound evidence roots (feature/metadata/parity/conversion/matrix/…)."""
+    carries the bound evidence roots (feature/metadata/parity/conversion/matrix/…) and
+    the SIGNED evidence grade."""
     if certificate_type not in CERTIFICATE_TYPES:
         raise ValueError(f"unknown certificate_type {certificate_type!r}")
+    if evidence_grade not in ("diagnostic", "certificate"):
+        raise ValueError(f"unknown evidence_grade {evidence_grade!r}")
     return {
         "_type": SIGNED_EVIDENCE_STATEMENT_TYPE,
         "subject": [{"name": f"{certificate_type}-certificate",
@@ -163,6 +170,7 @@ def build_evidence_statement(*, certificate_type: str, certificate_root_sha256: 
         "predicateType": SIGNED_EVIDENCE_PREDICATE_TYPE,
         "predicate": {
             "certificate_type": certificate_type,
+            "evidence_grade": evidence_grade,
             "certificate_root_sha256": certificate_root_sha256,
             "roots": dict(roots), "issuer": issuer,
             "issued_at": issued_at, "expires_at": expires_at,
@@ -248,7 +256,7 @@ TRUST_POLICY_SCHEMA = {
 
 
 def verify_signed_evidence(dsse_envelope: dict, *, trust_policy: dict, now: str,
-                           evidence_grade: str = "certificate") -> tuple[bool, list]:
+                           evidence_grade: str | None = None) -> tuple[bool, list]:
     """Offline verification. Returns (authenticity_verified, reasons). authenticity is
     the RESULT here — never read from the signed payload. v1.3.26.7 closes the verifier:
     the DSSE envelope + the in-toto statement are schema-validated (closed, no extra
@@ -347,7 +355,12 @@ def verify_signed_evidence(dsse_envelope: dict, *, trust_policy: dict, now: str,
         if exp is not None and issued_dt is not None and \
                 (exp - issued_dt) > _dt.timedelta(seconds=MAX_CERTIFICATE_TTL_SECONDS):
             reasons.append("certificate TTL exceeds policy maximum")
-    if evidence_grade != "certificate" and \
+    # the grade is the SIGNED one (v1.3.26.14); an out-of-band `evidence_grade` arg, if
+    # supplied, must MATCH it (no telling the verifier a grade the payload didn't sign).
+    signed_grade = pred["evidence_grade"]
+    if evidence_grade is not None and evidence_grade != signed_grade:
+        reasons.append(f"evidence_grade arg {evidence_grade!r} != signed grade {signed_grade!r}")
+    if signed_grade != "certificate" and \
             trust_policy["minimum_evidence_grade"] == "certificate":
         reasons.append("evidence grade below policy minimum")
     # dynamically apply required_claims_false against the predicate + its roots.

@@ -107,10 +107,23 @@ def test_certificate_type_not_allowed_fails():
 
 
 def test_diagnostic_grade_rejected_by_certificate_policy():
-    env, key = _sign()
+    # the grade is SIGNED: a genuinely diagnostic-grade statement is rejected by a
+    # certificate-minimum policy (v1.3.26.14).
+    key = generate_keypair(dev=False)
+    st = build_evidence_statement(
+        certificate_type="official_eval", certificate_root_sha256=_H, roots=_roots(),
+        issuer="lerobot-coreai-release-ci", issued_at=_NOW, evidence_grade="diagnostic")
+    env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
+    ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW)
+    assert not ok and any("grade" in r for r in reasons)
+
+
+def test_evidence_grade_arg_mismatch_fails():
+    # supplying an out-of-band grade that contradicts the signed one fails.
+    env, key = _sign()   # signed grade defaults to certificate
     ok, reasons = verify_signed_evidence(env, trust_policy=_trust_policy(key), now=_NOW,
                                          evidence_grade="diagnostic")
-    assert not ok and any("grade" in r for r in reasons)
+    assert not ok and any("!= signed grade" in r for r in reasons)
 
 
 def test_algorithm_type_confusion_fails():
