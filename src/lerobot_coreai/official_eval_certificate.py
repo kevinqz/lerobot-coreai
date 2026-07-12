@@ -108,16 +108,23 @@ def build_diagnostic_official_eval_report(*, scope: dict, inputs: dict, executio
                      authority=None)
 
 
-def promote_official_eval_certificate(*, receipt, inputs: dict) -> dict:
-    """Promote a TRUE official-eval certificate (v1.3.26.8 / v1.3.26.11). Accepts ONLY a
-    ``VerifiedOfficialEvalExecutionReceipt`` (a dict raises TypeError) whose substance
-    was re-derived from a real lerobot-eval subprocess. Execution AND checks are DERIVED
-    from the receipt's own verifier reports — never hardcoded (P0.3). The full
-    evidence-graph root set (``inputs``) must be present + non-null (P0.4/WS5)."""
-    from .authority import VerifiedOfficialEvalExecutionReceipt
+def promote_official_eval_certificate(*, receipt, bundle) -> dict:
+    """Promote a TRUE official-eval certificate (v1.3.26.8 → v1.3.26.13). Accepts ONLY a
+    ``VerifiedOfficialEvalExecutionReceipt`` (execution + checks derived from its own
+    verifier reports, P0.3) AND a ``VerifiedCertificationBundle`` whose eleven roots were
+    RE-DERIVED by content-addressing real leaf evidence and re-verified where possible
+    (v1.3.26.13). The certificate's ``inputs`` come from the verified bundle — a bare
+    ``{root: "sha256:aaa"}`` dict can no longer certify."""
+    from .authority import (
+        VerifiedCertificationBundle, VerifiedOfficialEvalExecutionReceipt,
+    )
     if not isinstance(receipt, VerifiedOfficialEvalExecutionReceipt):
         raise TypeError("receipt must be a VerifiedOfficialEvalExecutionReceipt "
                         "(mint via authority.verify_official_eval_execution_receipt)")
+    if not isinstance(bundle, VerifiedCertificationBundle):
+        raise TypeError("bundle must be a VerifiedCertificationBundle "
+                        "(mint via authority.verify_certification_bundle)")
+    inputs = dict(bundle.payload["roots"])      # re-derived, content-addressed roots
     r = receipt.payload
     scope = {"lerobot_version": None,
              "lerobot_distribution_sha256": r["lerobot_distribution_sha256"],

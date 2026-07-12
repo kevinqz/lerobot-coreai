@@ -76,12 +76,43 @@ def _verified_trust_policy(key):
     return authorize_test_only_official_policy(policy)
 
 
-def _official_eval_certificate():
-    """A REAL certificate-grade OfficialEvalCertificate whose artifact_root == the
-    certified .aimodel (_H) so the Apple cross-binding holds."""
+_CONV_REF = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+
+def _conversion_evidence():
+    """One shared certificate-grade ModelConversionEvidence dict — used BOTH as the
+    official-eval bundle's model_conversion leaf AND as the Apple `conversion` arg, so
+    the v1.3.26.13 cross-binding (same evidence graph) holds."""
+    from lerobot_coreai.model_conversion_evidence import build_model_conversion_evidence
+    return build_model_conversion_evidence(
+        source={"repository": "org/policy", "revision": "abc123", "weights_sha256": _H},
+        exporter={"name": "coreai-exporter", "build": "2.0.0"},
+        export_configuration={"opset": 18}, artifact={
+            "aimodel_sha256": _H, "aimodel_schema_version": "aimodel.v1",
+            "manifest_sha256": _H},
+        reference_outputs=_CONV_REF, candidate_outputs=copy.deepcopy(_CONV_REF),
+        tolerance={"max_abs_error": 0.0})
+
+
+def _bundle_for(conv_ev):
+    from lerobot_coreai.authority import verify_certification_bundle
+    from lerobot_coreai.official_eval_certificate import _ROOT_KEYS
+    from lerobot_coreai.processor_parity import ParityCase, build_processor_parity_report
+    leaves = {k: {"root_kind": k} for k in _ROOT_KEYS}
+    leaves["processor_parity_sha256"] = build_processor_parity_report(
+        [ParityCase("f", "a", "b", "exact", [[1, 2]], [[1, 2]])])
+    leaves["model_conversion_sha256"] = conv_ev
+    leaves["artifact_root_sha256"] = {"aimodel_sha256": _H}
+    return verify_certification_bundle(
+        {"schema_version": "lerobot-coreai.certification-bundle.v1", "leaves": leaves})
+
+
+def _official_eval_certificate(conv_ev=None):
+    """A REAL certificate-grade OfficialEvalCertificate built from a verified bundle."""
     from lerobot_coreai.official_eval_certificate import (
-        _ROOT_KEYS, REQUIRED_CASES, promote_official_eval_certificate,
+        REQUIRED_CASES, promote_official_eval_certificate,
     )
+    conv_ev = conv_ev if conv_ev is not None else _conversion_evidence()
     receipt = verify_official_eval_execution_receipt({
         "real_subprocess": True, "fake_executor": False,
         "resolution_method": "console_script",
@@ -93,15 +124,14 @@ def _official_eval_certificate():
         "schema_report": {"outputs_schema_valid": True, "output_manifest_sha256": _H},
         "replay_report": {"evidence_replay_passed": True, "replay_root_sha256": _H},
         "verified_cases_root_sha256": _H})
-    return promote_official_eval_certificate(receipt=receipt,
-                                             inputs={k: _H for k in _ROOT_KEYS})
+    return promote_official_eval_certificate(receipt=receipt, bundle=_bundle_for(conv_ev))
 
 
-def _verified_official_eval(key, vtp):
+def _verified_official_eval(key, vtp, conv_ev=None):
     from lerobot_coreai.signed_evidence import (
         build_evidence_statement, certificate_root_sha256, sign_statement,
     )
-    cert = _official_eval_certificate()
+    cert = _official_eval_certificate(conv_ev)
     root = certificate_root_sha256(cert)
     # v1.3.26.12: predicate.roots must equal the certificate's bound inputs exactly.
     st = build_evidence_statement(certificate_type="official_eval",
@@ -112,19 +142,9 @@ def _verified_official_eval(key, vtp):
                                             now=_NOW)
 
 
-def _verified_conversion():
-    from lerobot_coreai.model_conversion_evidence import build_model_conversion_evidence
-    ref = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-    cand = copy.deepcopy(ref)                    # exact parity
-    ev = build_model_conversion_evidence(
-        source={"repository": "org/policy", "revision": "abc123", "weights_sha256": _H},
-        exporter={"name": "coreai-exporter", "build": "2.0.0"},
-        export_configuration={"opset": 18}, artifact={
-            "aimodel_sha256": _H, "aimodel_schema_version": "aimodel.v1",
-            "manifest_sha256": _H},
-        reference_outputs=ref, candidate_outputs=cand,
-        tolerance={"max_abs_error": 0.0})
-    return as_verified_model_conversion(ev, reference_outputs=ref, candidate_outputs=cand)
+def _verified_conversion(conv_ev):
+    return as_verified_model_conversion(conv_ev, reference_outputs=_CONV_REF,
+                                        candidate_outputs=_CONV_REF)
 
 
 def _runtime_receipt(**overrides):
@@ -141,10 +161,11 @@ def _verified_receipts():
     from lerobot_coreai.signed_evidence import generate_keypair
     key = generate_keypair(dev=False)
     vtp = _verified_trust_policy(key)
+    conv_ev = _conversion_evidence()        # one shared conversion across the graph
     return {
         "runtime_receipt": verify_coreai_runtime_receipt(_runtime_receipt()),
-        "official_eval": _verified_official_eval(key, vtp),
-        "conversion": _verified_conversion(),
+        "official_eval": _verified_official_eval(key, vtp, conv_ev),
+        "conversion": _verified_conversion(conv_ev),
         "trust_policy": vtp,
     }
 

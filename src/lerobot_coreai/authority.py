@@ -74,6 +74,13 @@ class VerifiedOfficialEvalExecutionReceipt(_Sealed):
     case matrix, and a clean exit — the ONLY thing that may promote official_eval."""
 
 
+class VerifiedCertificationBundle(_Sealed):
+    """A CertificationBundle whose every root was DERIVED by content-addressing its leaf
+    (no bare-hash inputs) and whose self-contained leaves were re-verified. Its
+    ``payload`` carries {"roots": {...}, "levels": {...}} — the authoritative,
+    re-derived root set an official-eval certificate binds."""
+
+
 # --- runtime receipt schema (what a REAL run must emit) ---
 
 _HASH = {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
@@ -317,6 +324,17 @@ def as_verified_model_conversion(evidence: dict, *, reference_outputs,
     if not ok or not evidence["claims"]["model_conversion_verified"]:
         raise AuthorityError(f"model conversion not verified (with replay): {reasons}")
     return VerifiedModelConversionEvidence(dict(evidence), _AUTHORITY)
+
+
+def verify_certification_bundle(bundle: dict) -> VerifiedCertificationBundle:
+    """Mint a bundle ONLY if every root content-addresses its leaf and every
+    self-contained leaf verifier passes (v1.3.26.13). The returned payload carries the
+    re-derived roots + per-root verification levels."""
+    from .certification_bundle import verify_certification_bundle as _verify
+    ok, reasons, result = _verify(bundle)
+    if not ok:
+        raise AuthorityError(f"certification bundle did not verify: {reasons}")
+    return VerifiedCertificationBundle(result, _AUTHORITY)
 
 
 def verify_coreai_runtime_receipt(receipt: dict) -> VerifiedCoreAIRuntimeReceipt:
