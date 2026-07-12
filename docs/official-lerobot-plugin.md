@@ -844,3 +844,30 @@ real LeRobot `NormalizerProcessor` loaded from serialized config (P1.2, needs a 
 rollout CI job), and the OfficialEvalCertificate root-set expansion (policy-execution /
 model-conversion / processor-stage / runtime-support / negotiation / runner-capabilities
 / rollout-matrix roots) — both land with the v1.3.27 live-run work.
+
+## v1.3.27 — live official-eval executor (WS1 foundation)
+
+The receipt is no longer a hand-built dict: `official_eval_executor.py` is the code that
+actually runs the official CLI and OWNS receipt creation.
+
+- **`resolve_official_eval_entrypoint`** binds `lerobot-eval` to the INSTALLED `lerobot`
+  distribution via `importlib.metadata` (module realpath + a digest over the dist's
+  RECORD manifest). A `/tmp` shim, a wrapper, or an entrypoint owned by another
+  distribution is refused. It fails closed when `lerobot` is absent.
+- **`run_official_eval`** executes `python -m lerobot.scripts.lerobot_eval …` as a real
+  **subprocess** with a sanitized environment carrying an executor-generated challenge
+  nonce, and captures the exact argv, exit code, and output digests — the executor
+  *observed* the process.
+- **`build_execution_receipt`** derives every receipt field from the real run; the
+  `coreai_env_instantiated` flag is true only if the challenge nonce round-tripped in
+  the run's output. Feeding a `--help` or otherwise partial run to the verifier cannot
+  mint a certificate-grade receipt.
+
+The rollout CI jobs (which install `lerobot`) resolve the real entrypoint and execute
+the real `lerobot-eval` subprocess; the base jobs assert it fails closed.
+
+**Remaining for a full production official-eval (next sub-step):** register a real
+`coreai_cert_env` (gymnasium `EnvConfig` subclass) and run the five-case matrix against a
+loadable policy end-to-end, so the executor produces a receipt with the complete matrix +
+instantiated env; and then sign it under a pinned release key (v1.3.28). Until then the
+executor's receipts are `test_only` by construction and certify nothing.
