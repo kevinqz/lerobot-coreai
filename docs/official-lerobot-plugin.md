@@ -866,8 +866,25 @@ actually runs the official CLI and OWNS receipt creation.
 The rollout CI jobs (which install `lerobot`) resolve the real entrypoint and execute
 the real `lerobot-eval` subprocess; the base jobs assert it fails closed.
 
-**Remaining for a full production official-eval (next sub-step):** register a real
-`coreai_cert_env` (gymnasium `EnvConfig` subclass) and run the five-case matrix against a
-loadable policy end-to-end, so the executor produces a receipt with the complete matrix +
-instantiated env; and then sign it under a pinned release key (v1.3.28). Until then the
-executor's receipts are `test_only` by construction and certify nothing.
+## v1.3.27.1 — registered `coreai_cert_env` (WS1 env half)
+
+The official-eval path now has a real, registered environment. `coreai_cert_env.py` (in
+the plugin) provides:
+
+- a **self-contained gymnasium env** (`coreai_cert/CoreAICert-v0`, no mujoco / no
+  simulator download) with a deterministic episode and a terminal success signal, that
+  echoes the executor's challenge nonce into `info` (the round-trip that proves the env
+  was actually instantiated);
+- a `CoreAICertEnvConfig(EnvConfig)` registered as the draccus choice `coreai_cert_env`,
+  built by lerobot's own `EnvConfig.create_envs()` → `gym.make()`.
+
+Because lerobot auto-imports installed `lerobot_policy_*` plugins at startup, a **real
+`lerobot-eval` subprocess** imports the plugin and **accepts `--env.type=coreai_cert_env`**
+— a test asserts exactly this (the subprocess recognizes the env choice and fails only on
+the absent policy, no "invalid choice").
+
+**Remaining for a full production official-eval:** the **policy half** — drive the
+five-case matrix (`--policy.type=coreai_bridge` or a loadable policy) end-to-end so the
+executor produces a receipt with the complete matrix + instantiated env; then sign it
+under a pinned release key (v1.3.28). Until then the executor's receipts are `test_only`
+by construction and certify nothing.
