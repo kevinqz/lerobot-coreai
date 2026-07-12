@@ -19,62 +19,71 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+import gymnasium as gym
 import numpy as np
+from gymnasium import spaces
 
 _STATE_DIM = 6
 _ACTION_DIM = 6
 _GYM_ID = "coreai_cert/CoreAICert-v0"
 _CHALLENGE_ENV = "COREAI_OFFICIAL_EVAL_CHALLENGE"
+_CHALLENGE_OUT_ENV = "COREAI_OFFICIAL_EVAL_CHALLENGE_OUT"
+
+
+# module-level (picklable) so lerobot-eval's AsyncVectorEnv (forkserver) can build it
+# for batch_size > 1 — a nested class would raise EOFError on pickling.
+class CoreAICertEnv(gym.Env):
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 10}
+
+    def __init__(self, max_episode_steps: int = 10, render_mode: str | None = None, **_):
+        self._max = int(max_episode_steps)
+        self._t = 0
+        self.render_mode = render_mode
+        self.action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
+        self.observation_space = spaces.Dict({
+            "agent_pos": spaces.Box(-1.0, 1.0, (_STATE_DIM,), dtype=np.float32)})
+
+    def render(self):
+        # a deterministic tiny RGB frame so the official eval's video/render path works
+        # (this env is a machinery exerciser, not a visual benchmark).
+        shade = int(255 * self._t / max(self._max, 1))
+        return np.full((16, 16, 3), shade, dtype=np.uint8)
+
+    def _obs(self):
+        v = np.full((_STATE_DIM,), self._t / max(self._max, 1), dtype=np.float32)
+        return {"agent_pos": v}
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self._t = 0
+        nonce = os.environ.get(_CHALLENGE_ENV, "")
+        # round-trip proof: an executor that set the challenge can read it back from this
+        # file, proving THIS run actually instantiated coreai_cert_env.
+        out = os.environ.get(_CHALLENGE_OUT_ENV)
+        if out and nonce:
+            try:
+                with open(out, "a") as fh:
+                    fh.write(nonce + "\n")
+            except OSError:
+                pass
+        return self._obs(), {"coreai_challenge": nonce}
+
+    def step(self, action):
+        self._t += 1
+        terminated = self._t >= self._max
+        reward = 1.0 if terminated else 0.0
+        info = {"is_success": bool(terminated),
+                "coreai_challenge": os.environ.get(_CHALLENGE_ENV, "")}
+        return self._obs(), reward, terminated, False, info
 
 
 def _make_env(**kwargs):
-    import gymnasium as gym
-    from gymnasium import spaces
-
-    class CoreAICertEnv(gym.Env):
-        metadata = {"render_modes": ["rgb_array"], "render_fps": 10}
-
-        def __init__(self, max_episode_steps: int = 10, render_mode: str | None = None,
-                     **_):
-            self._max = int(max_episode_steps)
-            self._t = 0
-            self.render_mode = render_mode
-            self.action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
-            self.observation_space = spaces.Dict({
-                "agent_pos": spaces.Box(-1.0, 1.0, (_STATE_DIM,), dtype=np.float32)})
-
-        def render(self):
-            # a deterministic tiny RGB frame so the official eval's video/render path
-            # works (this env is a machinery exerciser, not a visual benchmark).
-            shade = int(255 * self._t / max(self._max, 1))
-            return np.full((16, 16, 3), shade, dtype=np.uint8)
-
-        def _obs(self):
-            # deterministic ramp so a run is reproducible (no RNG dependence).
-            v = np.full((_STATE_DIM,), self._t / max(self._max, 1), dtype=np.float32)
-            return {"agent_pos": v}
-
-        def reset(self, *, seed=None, options=None):
-            super().reset(seed=seed)
-            self._t = 0
-            info = {"coreai_challenge": os.environ.get(_CHALLENGE_ENV, "")}
-            return self._obs(), info
-
-        def step(self, action):
-            self._t += 1
-            terminated = self._t >= self._max
-            reward = 1.0 if terminated else 0.0
-            info = {"is_success": bool(terminated),
-                    "coreai_challenge": os.environ.get(_CHALLENGE_ENV, "")}
-            return self._obs(), reward, terminated, False, info
-
     return CoreAICertEnv(**kwargs)
 
 
 def _register_gym_env() -> None:
-    import gymnasium as gym
     if _GYM_ID not in gym.registry:
-        gym.register(id=_GYM_ID, entry_point=_make_env, disable_env_checker=True)
+        gym.register(id=_GYM_ID, entry_point=CoreAICertEnv, disable_env_checker=True)
 
 
 _register_gym_env()

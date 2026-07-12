@@ -901,8 +901,26 @@ A rollout-CI test (`test_official_cli_rollout.py`) builds an artifact matching t
 starts a stub runner, and asserts the real `lerobot-eval` subprocess completes the
 rollout.
 
-**Remaining for a full production official-eval:** generalize to the **five-case matrix**
-(`single-b1`/`native-b2`/`b4`/`split-b2`/`b4` via `batch_mode`/`max_batch_size`/
-`eval.batch_size`) and have the **executor derive a receipt from the real run's outputs**
-(output tree + nonce round-trip) — then sign it under a pinned release key (v1.3.28).
-Until then the executor's receipts are `test_only` by construction and certify nothing.
+## v1.3.27.3 — five-case matrix + executor-derived receipt (WS1 complete)
+
+The executor now runs the **full five-case matrix** through the real official CLI and
+derives ONE receipt from the real runs:
+
+- **matrix** — `single-b1` (`single_only`), `native-b2`/`b4` (`native_batch`, native
+  runner), `split-b2`/`b4` (`split_and_stack`, non-native runner) — each a real
+  `lerobot-eval` subprocess driving the bridge policy against `coreai_cert_env`
+  (`--eval.use_async_envs=false` forces `SyncVectorEnv`; the env class is module-level so
+  it is picklable). All five complete (`pc_success`, exit 0).
+- **nonce round-trip** — the executor sets a challenge nonce + an output file; the env
+  writes the nonce to it on reset; the executor reads it back to PROVE the env was
+  actually instantiated by the run (`coreai_env_instantiated`).
+- **receipt** — `build_matrix_execution_receipt` derives the receipt from the five real
+  runs: `cases` (the runs performed), a clean exit only if EVERY case exited 0,
+  env-instantiated only if the nonce round-tripped in EVERY case. It mints
+  certificate-grade — as **`test_only`**.
+
+**Why still `test_only`, and what's left:** a `production` receipt requires an
+**executor-signed** receipt under a **pinned release key** — provisioned in **v1.3.28**
+(protected signing). Until then even this real, full-matrix run is `test_only` by
+construction and certifies nothing. After v1.3.28, the same executor path emits a
+`production` receipt → the first real official-eval high claim.

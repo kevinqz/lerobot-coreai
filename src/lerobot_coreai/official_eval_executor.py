@@ -85,24 +85,35 @@ def _subprocess_env(challenge_nonce: str) -> dict:
 
 
 def run_official_eval(args: list, *, challenge_nonce: str, timeout: int = 900,
-                      cwd: str | None = None) -> dict:
+                      cwd: str | None = None, challenge_out: str | None = None) -> dict:
     """Run the REAL `python -m lerobot.scripts.lerobot_eval <args>` as a subprocess.
     Returns a run record with the exact argv, exit code, and captured output digests —
-    the executor OBSERVED the process; it does not take the caller's word for it."""
+    the executor OBSERVED the process; it does not take the caller's word for it.
+
+    ``challenge_out`` is a path the coreai_cert_env writes the challenge nonce to on
+    reset; the executor reads it back to PROVE the env was actually instantiated by this
+    run (a real round-trip, not a string match on noisy stdout)."""
     import subprocess
     argv = [sys.executable, "-m", _EVAL_MODULE, *args]
+    env = _subprocess_env(challenge_nonce)
+    if challenge_out:
+        env["COREAI_OFFICIAL_EVAL_CHALLENGE_OUT"] = challenge_out
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                          cwd=cwd, env=_subprocess_env(challenge_nonce))
+                          cwd=cwd, env=env)
     stdout, stderr = proc.stdout or "", proc.stderr or ""
+    echoed = challenge_nonce in stdout or challenge_nonce in stderr
+    if challenge_out:
+        try:
+            with open(challenge_out) as fh:
+                echoed = challenge_nonce in fh.read().split()
+        except OSError:
+            echoed = False
     return {
         "argv": argv, "exit_code": proc.returncode,
         "challenge_nonce": challenge_nonce,
         "stdout_sha256": "sha256:" + hashlib.sha256(stdout.encode()).hexdigest(),
         "stderr_sha256": "sha256:" + hashlib.sha256(stderr.encode()).hexdigest(),
-        # the nonce round-trips iff the invoked program echoed it back (a real
-        # coreai_cert_env writes it into its evidence) — proof the env was instantiated.
-        "challenge_echoed": challenge_nonce in stdout or challenge_nonce in stderr,
-        "stdout": stdout, "stderr": stderr,
+        "challenge_echoed": echoed, "stdout": stdout, "stderr": stderr,
     }
 
 
@@ -121,6 +132,38 @@ def output_tree_sha256(path: str) -> str:
             entries.append([rel, "sha256:" + h.hexdigest()])
     entries.sort()
     return canonical_json_sha256(entries)
+
+
+_REQUIRED_MATRIX_CASES = ("single-b1", "native-b2", "native-b4", "split-b2", "split-b4")
+
+
+def build_matrix_execution_receipt(*, resolved: dict, case_runs: dict,
+                                   output_tree: str, resolved_config_sha256: str,
+                                   outputs_schema_valid: bool, output_manifest_sha256: str,
+                                   evidence_replay_passed: bool, replay_root_sha256: str,
+                                   verified_cases_root_sha256: str) -> dict:
+    """Assemble ONE receipt from the FULL five-case matrix of real runs. ``case_runs``
+    maps each canonical case name → the run record from ``run_official_eval``. The
+    executor derives: cases (the runs actually performed), exit (clean only if EVERY
+    case exited 0), env-instantiated (the challenge nonce round-tripped in EVERY case).
+    A missing case or any non-clean/un-instantiated case yields a receipt that cannot be
+    minted certificate-grade."""
+    runs = list(case_runs.values())
+    all_clean = bool(runs) and all(r["exit_code"] == 0 for r in runs)
+    all_echoed = bool(runs) and all(r.get("challenge_echoed") for r in runs)
+    representative = runs[0] if runs else {"argv": [], "exit_code": 1}
+    return build_execution_receipt(
+        resolved=resolved,
+        run={"argv": representative["argv"],
+             "exit_code": 0 if all_clean else 1,
+             "challenge_echoed": all_echoed},
+        cases=sorted(case_runs.keys()), env_instantiated=all_echoed,
+        output_tree=output_tree, resolved_config_sha256=resolved_config_sha256,
+        outputs_schema_valid=outputs_schema_valid,
+        output_manifest_sha256=output_manifest_sha256,
+        evidence_replay_passed=evidence_replay_passed,
+        replay_root_sha256=replay_root_sha256,
+        verified_cases_root_sha256=verified_cases_root_sha256)
 
 
 def build_execution_receipt(*, resolved: dict, run: dict, cases: list,
