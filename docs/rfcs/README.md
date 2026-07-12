@@ -19,7 +19,7 @@ already exist.
 `LR1` contract convergence · `LR2` real Fabric bundle · `LR3` real Swift Runner ·
 `LR4` L4 matrix · `LR5` protected signing · `LR6` Diffusion · `LR7` VLA · `LR8` async/RTC ·
 `LR9` remote Server · **`LR10` Robot Gateway reference (done — `robot_gateway.py`,
-[docs/robot-gateway.md](../robot-gateway.md))** · `LR11` mobile-recording bridge ·
+[docs/robot-gateway.md](../robot-gateway.md))** · **`LR11` mobile-recording bridge (done — `episode_staging.py`)** ·
 `LR12` Apple-app conformance.
 
 **Current: L3 (Official Eval), `test_only`** — see
