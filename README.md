@@ -5,13 +5,21 @@
 This repo ships **two distributions**:
 
 - **`lerobot-coreai`** (base package) — a CoreAI runtime toolkit for LeRobot-shaped policy artifacts: it runs LeRobot-compatible policies as Apple CoreAI `.aimodel` artifacts, with custom dataset replay, simulation, safety, governance, and guarded-real workflows. The base package's local bridge (`CoreAIPolicy`) is duck-typed and runtime-only (not a `PreTrainedPolicy`); its `select_action()` follows the project-local contract (see below).
-- **`lerobot_policy_coreai_bridge`** (companion plugin, `packages/`) — a real **official out-of-tree LeRobot plugin**: `CoreAIBridgePolicy` **is** a `PreTrainedConfig`-registered `PreTrainedPolicy`/`nn.Module` whose `select_action(batch) -> torch.Tensor(B, A)` follows LeRobot per-timestep semantics. It is discovered by `register_third_party_plugins()`, loads through `make_policy`/`make_pre_post_processors`, and has a hermetic B=1 factory E2E on LeRobot 0.6.0 + 0.6.1-dev. Official `lerobot-eval` certification is still pending. See [docs/official-lerobot-plugin.md](docs/official-lerobot-plugin.md) and [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md).
+- **`lerobot_policy_coreai_bridge`** (companion plugin, `packages/`) — a real **official out-of-tree LeRobot plugin**: `CoreAIBridgePolicy` **is** a `PreTrainedConfig`-registered `PreTrainedPolicy`/`nn.Module` whose `select_action(batch) -> torch.Tensor(B, A)` follows LeRobot per-timestep semantics. It is discovered by `register_third_party_plugins()`, loads through `make_policy`/`make_pre_post_processors`, and has a hermetic B=1 factory E2E on LeRobot 0.6.0 + 0.6.1-dev. See [docs/official-lerobot-plugin.md](docs/official-lerobot-plugin.md), [docs/conformance-levels-l0-l6.md](docs/conformance-levels-l0-l6.md), and [docs/lerobot-compatibility-levels.md](docs/lerobot-compatibility-levels.md).
+
+> **Conformance (RFC-0700 §8; run `lerobot-coreai conformance-level`): `L3` (Official Eval), `test-only`.** Honestly distinguished:
+> - official CLI conformance through a real `lerobot-eval` subprocess + registered `coreai_cert_env`: **achieved**;
+> - the controlled five-case matrix against a protocol-compatible **stub** Runner: **achieved** (`test_only`);
+> - a real Swift Runner executing a real `.aimodel` (**L4**): **not achieved**;
+> - a production-signed device certificate (**L5**): **not achieved**.
+>
+> No high claim is derived from `test_only` evidence.
 
 Use **LeRobot** for recording, training, datasets, robots, processors, and PyTorch policy deployment.
 
 Use **`lerobot-coreai`** when you want to export, inspect, evaluate, dry-run, shadow-run, simulate, or roll out a LeRobot policy through Apple CoreAI; install the **companion plugin** to run a CoreAI policy through the official LeRobot factory.
 
-> **LeRobot-shaped custom workflows + an official out-of-tree plugin. CoreAI runtime.** (Official `lerobot-eval` certification is still pending — see the compatibility levels doc.)
+> **LeRobot-shaped custom workflows + an official out-of-tree plugin. CoreAI runtime.** (Conformance **L3 (Official Eval), test-only** — real Swift Runner + `.aimodel` (L4) and production signing (L5) are not achieved; see [docs/conformance-levels-l0-l6.md](docs/conformance-levels-l0-l6.md).)
 
 > **Current:** `inspect`, `doctor`, `predict`, `rollout --mode dry_run`, `shadow` (motor-blocked), `eval` (LeRobotDataset replay), `compare` (PyTorch vs CoreAI parity), `export`, `sim` (simulator-only egress), the safety/governance chain (`supervisor-check`, `profile-*`, `safety-gate`, `safety-regression`, `approval-request`/`approve-bundle`/`verify-approval`, `release-readiness`), and — since v1.0.0 — `real --mode guarded` (guarded real egress) with `verify-real-session`.
 > Up to v0.9.3 **no robot commands are ever sent**; v1.0.0 introduces real egress **only** through `real --mode guarded`, behind every gate. This is guarded real egress, not native LeRobot robot integration, and proves nothing about physical safety.
