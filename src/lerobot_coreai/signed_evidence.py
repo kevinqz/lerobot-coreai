@@ -196,6 +196,14 @@ def sign_statement(statement: dict, *, private_key_hex: str, key_id: str) -> dic
 # from a caller-supplied, self-signed policy.
 OFFICIAL_TRUST_POLICY_ID = "coreai-official-release.v1"
 OFFICIAL_ALLOWED_ISSUERS = ("lerobot-coreai-release-ci",)
+# The pinned OFFICIAL release key ids (v1.3.26.12). A PRODUCTION high claim may be
+# promoted only under a policy whose every trusted key id is in this set. It is
+# deliberately EMPTY: no protected release key exists yet (it is provisioned in the
+# v1.3.28 protected-signing work), so production promotion is structurally impossible
+# until then — and CI, which has no such key, can only ever produce `test_only`
+# evidence. This is what makes "no production high claim in CI" an enforced fact, not a
+# claim about intent.
+OFFICIAL_RELEASE_KEY_IDS: frozenset = frozenset()
 
 
 def certificate_root_sha256(certificate: dict) -> str:
@@ -203,6 +211,12 @@ def certificate_root_sha256(certificate: dict) -> str:
     subject must equal (v1.3.26.11 cross-binding). Prefixed `sha256:` to match the
     predicate root format."""
     return "sha256:" + _sha256_hex(_canonical_bytes(certificate))
+
+
+def trust_policy_sha256(policy: dict) -> str:
+    """Canonical content hash of a trust policy — recorded in the verified result so the
+    exact policy that granted authority is bound into the evidence (v1.3.26.12)."""
+    return "sha256:" + _sha256_hex(_canonical_bytes(policy))
 
 
 TRUST_POLICY_SCHEMA = {
