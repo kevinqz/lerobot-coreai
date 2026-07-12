@@ -1049,9 +1049,12 @@ def cmd_conformance_level(args: argparse.Namespace) -> int:
     import json as _json
 
     from .conformance_levels import CONFORMANCE_LADDER, current_conformance
+    from .runtime_provider import RUNTIME_PROVIDERS
     a = current_conformance()
     if args.json:
-        print(_json.dumps(a.to_dict(), indent=2))
+        out = a.to_dict()
+        out["providers"] = {b: p.to_dict() for b, p in RUNTIME_PROVIDERS.items()}
+        print(_json.dumps(out, indent=2))
         return 0
     titles = {i: t for i, t, _m in CONFORMANCE_LADDER}
     print(f"Current conformance: {a.level} ({titles.get(a.level, '?')}) "
@@ -1062,6 +1065,9 @@ def cmd_conformance_level(args: argparse.Namespace) -> int:
     if a.namespace == "test_only":
         print("NOTE: test_only — L3 runs against a stub Runner and the receipt is "
               "unsigned; not a production/device certification.")
+    print("Runtime providers (RFC-0700 §13):")
+    for _b, p in RUNTIME_PROVIDERS.items():
+        print(f"  [{p.status:>11}] {p.backend}: {p.title}")
     return 0
 
 
