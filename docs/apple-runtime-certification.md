@@ -119,11 +119,30 @@ Both are corrected here so the honest statement is *enforced*, not asserted:
   producible here.** The tests assert `evidence_namespace == "test_only"` alongside the
   `certified is True` gate check.
 
-**Still deferred (unchanged, honest):** the executor-owned signed receipts (WS1/WS2),
-the composite `CertificationBundle` verifier that re-opens and re-verifies each of the
-eleven roots (today they are non-null + format-checked, not yet re-verified),
-`evidence_grade` inside the signed predicate, action-SHA pinning + hash-locked deps +
-protected signing, and the real `NormalizerProcessor` reference.
+## Certification bundle & root re-verification (v1.3.26.13)
+
+The `OfficialEvalCertificate` no longer accepts a caller-supplied `inputs` dict of bare
+hashes. Promotion now requires a **`VerifiedCertificationBundle`** of the actual leaf
+evidence *objects*, and `verify_certification_bundle`:
+
+- **derives every root by content-addressing its leaf** (`canonical_json_sha256(leaf)`),
+  so a formatted-but-bare `sha256:aaa…` can no longer stand in for evidence — you must
+  present a real object whose bytes hash to that root;
+- **re-runs the self-contained leaf verifier** where one exists — today
+  `processor_parity` (replays its persisted arrays) and `model_conversion` (replays its
+  bundle) are **`reverified`**; the remaining leaves are **`addressed`** (content-hash +
+  schema, not yet a dedicated semantic re-verifier). The result reports the per-root
+  **level** so depth is never overclaimed;
+- **cross-binds** the conversion leaf's `.aimodel` to the artifact leaf, and (in the
+  Apple promoter) requires the promoted conversion evidence to be the *same* leaf the
+  official-eval bundle bound — one evidence graph, not two.
+
+**Still deferred (honest):** the executor-owned signed receipts (WS1/WS2) that flip a
+receipt from `test_only` to `production`; dedicated offline re-verifiers for the nine
+`addressed` leaves (dataset-metadata tree, feature-contract semantics, …);
+`evidence_grade` inside the signed predicate; a pinned `NumericalAcceptancePolicy`;
+content-addressed replay blobs (safetensors/npy) instead of raw JSON; action-SHA pinning
++ hash-locked deps + protected signing; and the real `NormalizerProcessor` reference.
 
 ## Reproducible procedure (maintainer, on Apple Silicon)
 

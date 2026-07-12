@@ -6,7 +6,7 @@
 import pytest
 
 from lerobot_coreai.authority import (
-    AuthorityError, verify_official_eval_execution_receipt,
+    AuthorityError, verify_certification_bundle, verify_official_eval_execution_receipt,
 )
 from lerobot_coreai.official_eval_certificate import (
     _ROOT_KEYS, REQUIRED_CASES, build_diagnostic_official_eval_report,
@@ -14,6 +14,37 @@ from lerobot_coreai.official_eval_certificate import (
 )
 
 _H = "sha256:" + "a" * 64
+
+
+def _parity_leaf():
+    from lerobot_coreai.processor_parity import ParityCase, build_processor_parity_report
+    return build_processor_parity_report(
+        [ParityCase("f", "a", "b", "exact", [[1, 2]], [[1, 2]])])   # certificate grade
+
+
+def _conversion_leaf():
+    from lerobot_coreai.model_conversion_evidence import build_model_conversion_evidence
+    ref = [[1.0, 2.0]]
+    return build_model_conversion_evidence(
+        source={"repository": "org/p", "revision": "r1", "weights_sha256": _H},
+        exporter={"name": "coreai", "build": "2.0.0"},
+        export_configuration={"opset": 18},
+        artifact={"aimodel_sha256": _H, "aimodel_schema_version": "aimodel.v1",
+                  "manifest_sha256": _H},
+        reference_outputs=ref, candidate_outputs=[[1.0, 2.0]],
+        tolerance={"max_abs_error": 0.0})
+
+
+def _bundle_leaves():
+    leaves = {k: {"root_kind": k} for k in _ROOT_KEYS}
+    leaves["processor_parity_sha256"] = _parity_leaf()
+    leaves["model_conversion_sha256"] = _conversion_leaf()
+    leaves["artifact_root_sha256"] = {"aimodel_sha256": _H}     # matches conversion
+    return {"schema_version": "lerobot-coreai.certification-bundle.v1", "leaves": leaves}
+
+
+def _bundle():
+    return verify_certification_bundle(_bundle_leaves())
 _ALL_TRUE = {"official_cli_entrypoint_used": True,
              "third_party_plugin_registration_used": True,
              "all_required_cases_passed": True, "outputs_schema_valid": True,
@@ -66,7 +97,7 @@ def test_diagnostic_report_never_certifies_even_with_all_true():
 
 def test_promote_from_real_receipt_certifies():
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     assert cert["evidence_grade"] == "certificate"
     assert cert["claims"]["official_eval_certified"] is True
     ok, errs = verify_official_eval_certificate(cert)
@@ -78,7 +109,7 @@ def test_python_m_entrypoint_receipt_certifies():
     receipt = verify_official_eval_execution_receipt(
         _receipt(argv=argv, resolution_method="python_-m",
                  executable_realpath="/usr/local/lib/python3.12/site-packages/lerobot"))
-    cert = promote_official_eval_certificate(receipt=receipt, inputs=_inputs())
+    cert = promote_official_eval_certificate(receipt=receipt, bundle=_bundle())
     assert cert["claims"]["official_eval_certified"] is True
 
 
@@ -86,9 +117,9 @@ def test_promote_rejects_plain_dict_or_bool():
     # a hand-built execution dict / bool is refused at the type boundary.
     with pytest.raises(TypeError):
         promote_official_eval_certificate(receipt={"official_eval_certified": True},
-                                          inputs=_inputs())
+                                          bundle=_bundle())
     with pytest.raises(TypeError):
-        promote_official_eval_certificate(receipt=True, inputs=_inputs())
+        promote_official_eval_certificate(receipt=True, bundle=_bundle())
 
 
 # --- receipt verifier refuses non-real / forged runs ---
@@ -139,7 +170,7 @@ def test_incomplete_case_matrix_refused():
 
 def test_output_tamper_detected():
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     ok, errs = verify_official_eval_certificate(cert, output_tree_sha256="sha256:" + "b" * 64)
     assert not ok and any("output tamper" in e for e in errs)
 
@@ -156,7 +187,7 @@ def test_forged_diagnostic_claim_detected():
 def test_forged_certificate_claim_detected():
     # a certificate-grade cert whose gate is broken (argv stripped) must fail.
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     cert["execution"]["argv"] = ["pytest"]      # break the entrypoint gate
     ok, errs = verify_official_eval_certificate(cert)
     assert not ok
@@ -164,7 +195,7 @@ def test_forged_certificate_claim_detected():
 
 def test_task_success_and_safety_always_false():
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     assert cert["claims"]["proves_general_task_success"] is False
     assert cert["claims"]["proves_physical_safety"] is False
 
@@ -185,18 +216,28 @@ def test_failed_replay_report_receipt_refused():
                                     "replay_root_sha256": _H}))
 
 
-# --- P0.4/WS5: full evidence-graph root set, non-null ---
+# --- P0.4/WS5 + v1.3.26.13: full evidence-graph root set, content-addressed ---
 
-def test_incomplete_root_graph_cannot_certify():
-    receipt = verify_official_eval_execution_receipt(_receipt())
-    inputs = _inputs(); inputs["model_conversion_sha256"] = None    # a null root
-    cert = promote_official_eval_certificate(receipt=receipt, inputs=inputs)
-    assert cert["claims"]["official_eval_certified"] is False        # root graph incomplete
+def test_incomplete_bundle_is_rejected():
+    # a bundle missing a leaf can't even be minted (all 11 leaves required) — so an
+    # incomplete root graph never reaches promotion.
+    leaves = _bundle_leaves()
+    del leaves["leaves"]["model_conversion_sha256"]
+    with pytest.raises(AuthorityError):
+        verify_certification_bundle(leaves)
+
+
+def test_bare_hash_inputs_cannot_certify():
+    # the old hole: a dict of formatted-but-bare hashes. There is no longer an inputs=
+    # path — promotion requires a VerifiedCertificationBundle of real leaf objects.
+    import inspect
+    sig = inspect.signature(promote_official_eval_certificate)
+    assert "inputs" not in sig.parameters and "bundle" in sig.parameters
 
 
 def test_full_root_graph_certifies_and_verifies():
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     assert cert["claims"]["official_eval_certified"] is True
     assert all(cert["inputs"][k] for k in _ROOT_KEYS)
     ok, errs = verify_official_eval_certificate(cert)
@@ -205,7 +246,7 @@ def test_full_root_graph_certifies_and_verifies():
 
 def test_certified_with_forged_null_root_detected_by_verifier():
     cert = promote_official_eval_certificate(
-        receipt=verify_official_eval_execution_receipt(_receipt()), inputs=_inputs())
+        receipt=verify_official_eval_execution_receipt(_receipt()), bundle=_bundle())
     cert["inputs"]["rollout_matrix_sha256"] = None      # strip a bound root post-hoc
     ok, errs = verify_official_eval_certificate(cert)
     assert not ok and any("root graph" in e for e in errs)

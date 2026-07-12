@@ -253,17 +253,17 @@ def promote_apple_runtime_certificate(
     # (v1.3.26.12 — the Apple promoter's policy is no longer ornamental).
     if trust_policy.payload["policy_sha256"] != official_eval.payload["trust_policy_sha256"]:
         raise AuthorityError("Apple trust policy != the policy that authorized official-eval")
+    from .rollout_evidence_schema import canonical_json_sha256
     receipt = runtime_receipt.payload
     conv_aimodel = conversion.payload["artifact"]["aimodel_sha256"]
     identity_aimodel = identity["model"]["aimodel_sha256"]
     signed_eval_root = official_eval.payload["statement"]["predicate"]["certificate_root_sha256"]
     official_cert = official_eval.payload["certificate"]
-    official_artifact_root = official_cert["inputs"]["artifact_root_sha256"]
 
     # P0.5 — the .aimodel actually executed by the runner MUST be the SAME artifact the
-    # conversion evidence, the runtime identity, and the certified official-eval bound.
-    # A mismatch means "certified the wrong artifact"; refuse to promote (no diagnostic
-    # fallback — this is a provenance contradiction, not a graded observation).
+    # conversion evidence and the runtime identity bound. A mismatch means "certified the
+    # wrong artifact"; refuse to promote (a provenance contradiction, not a graded
+    # observation).
     aimodel = receipt["aimodel_root_sha256"]
     binds = {"runtime.aimodel_root": aimodel,
              "runtime.artifact_aimodel": receipt["artifact_aimodel_sha256"],
@@ -271,9 +271,12 @@ def promote_apple_runtime_certificate(
              "identity.model.aimodel": identity_aimodel}
     if len(set(binds.values())) != 1:
         raise AuthorityError(f"apple promotion artifact cross-binding mismatch: {binds}")
-    if official_artifact_root != aimodel:
+    # the conversion evidence promoted here must be the SAME leaf the certified
+    # official-eval bundle bound (its model_conversion root) — one evidence graph, not
+    # two (v1.3.26.13).
+    if canonical_json_sha256(conversion.payload) != official_cert["inputs"]["model_conversion_sha256"]:
         raise AuthorityError(
-            f"official-eval artifact_root {official_artifact_root} != runtime aimodel {aimodel}")
+            "apple conversion evidence != the official-eval bundle's model_conversion root")
 
     # checks derived from receipt substance (not the caller)
     checks = {
