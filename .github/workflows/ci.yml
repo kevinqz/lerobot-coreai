@@ -49,7 +49,7 @@ jobs:
       - name: LeRobot contract report (strict, v1 levels)
         run: lerobot-coreai lerobot-compat-check --contract --strict --output-dir reports/lerobot-stable
       - name: Bridge + compat + registry + contract + loader tests
-        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py tests/test_source_loader_v2.py tests/test_compare_v2.py tests/test_processor_contract.py
+        run: pytest tests/test_lerobot_compat.py tests/test_cli_lerobot_compat.py tests/test_lerobot_bridge.py tests/test_lerobot_registry.py tests/test_lerobot_registry_no_monkeypatch.py tests/test_lerobot_contracts.py tests/test_lerobot_stable_contract.py tests/test_source_loader_v2.py tests/test_compare_v2.py tests/test_processor_contract.py tests/test_official_eval_executor.py
       - name: Official out-of-tree plugin tests (lerobot installed)
         run: pytest packages/lerobot_policy_coreai_bridge/tests
       - name: Plugin compatibility profile (installed)
@@ -161,7 +161,7 @@ jobs:
       - name: LeRobot contract report (dev, v1 levels)
         run: lerobot-coreai lerobot-compat-check --contract --output-dir reports/lerobot-dev
       - name: Dev contract + plugin tests (0.6.1-dev)
-        run: pytest tests/test_lerobot_dev_contract.py tests/test_lerobot_contracts.py packages/lerobot_policy_coreai_bridge/tests
+        run: pytest tests/test_lerobot_dev_contract.py tests/test_lerobot_contracts.py tests/test_official_eval_executor.py packages/lerobot_policy_coreai_bridge/tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:
