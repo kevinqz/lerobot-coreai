@@ -6,7 +6,7 @@
 # factory. Runtime-only: it does not train. `policy_type="coreai"` is NOT
 # registered — only "coreai_bridge".
 
-__version__ = "1.3.27"
+__version__ = "1.3.27.1"
 
 from .configuration_coreai_bridge import POLICY_TYPE, CoreAIBridgeConfig
 from .modeling_coreai_bridge import CoreAIBridgePolicy
@@ -14,6 +14,10 @@ from .processor_coreai_bridge import (
     make_coreai_bridge_pre_post_processors,
     save_coreai_bridge_processors,
 )
+# side-effect import: registers the gymnasium env + the "coreai_cert_env" EnvConfig
+# choice so the official `lerobot-eval --env.type=coreai_cert_env` path resolves when
+# lerobot auto-imports this plugin (v1.3.27.1).
+from . import coreai_cert_env  # noqa: F401
 
 __all__ = [
     "POLICY_TYPE",
