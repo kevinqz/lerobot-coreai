@@ -67,7 +67,7 @@ def _manifest():
     }
 
 
-def _handler():
+def _handler(native=True):
     class Hd(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -84,13 +84,15 @@ def _handler():
             if self.path == "/v1/health":
                 return self._j(200, {"status": "ok"})
             if self.path == "/v1/capabilities":
+                ab = ({"supported": True, "max_batch_size": 4, "semantics": "native",
+                       "slot_isolation": "independent"} if native
+                      else {"supported": False, "semantics": "split_and_stack",
+                            "slot_isolation": "independent"})
                 return self._j(200, {
                     "runtime": "coreai-runner", "supports": {"action": True},
                     "protocol_version": "coreai-runner.v2",
                     "observation_encodings": ["nested_json_v1"],
-                    "action_batching": {"supported": True, "max_batch_size": 4,
-                                        "semantics": "native",
-                                        "slot_isolation": "independent"},
+                    "action_batching": ab,
                     "inference_state": {"scope": "stateless",
                                         "supports_session_ids": False,
                                         "reset_scope": "none"}})
@@ -107,6 +109,21 @@ def _handler():
                 action = [[0.0] * _A]                          # [HOR, A]
             return self._j(200, {"action": action})
     return Hd
+
+
+def _start_stub(native=True):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler(native))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, port
+
+
+# the certification matrix: (canonical case, policy batch_mode, batch size, native runner)
+_MATRIX = [("single-b1", "single_only", 1, True),
+           ("native-b2", "native_batch", 2, True),
+           ("native-b4", "native_batch", 4, True),
+           ("split-b2", "split_and_stack", 2, False),
+           ("split-b4", "split_and_stack", 4, False)]
 
 
 def _build_cert_artifact(tmp_path):
@@ -142,3 +159,51 @@ def test_official_cli_drives_bridge_policy_to_completed_rollout(tmp_path):
         assert "pc_success" in combined
     finally:
         srv.shutdown()
+
+
+@pytest.mark.skipif(not _HAS_DATASETS,
+                    reason="lerobot-eval needs the lerobot[dataset] extra (rollout jobs)")
+def test_executor_derives_receipt_from_full_matrix(tmp_path):
+    # the WS1 payoff (v1.3.27.3): the executor runs the FULL five-case matrix through
+    # the real official CLI and derives ONE receipt from the real runs — which mints
+    # certificate-grade (test_only: a real signed receipt under a pinned key is v1.3.28).
+    from lerobot_coreai.authority import verify_official_eval_execution_receipt
+    from lerobot_coreai.official_eval_executor import (
+        build_matrix_execution_receipt, output_tree_sha256,
+        resolve_official_eval_entrypoint, run_official_eval,
+    )
+    art = _build_cert_artifact(tmp_path)
+    out_root = tmp_path / "out"
+    challenge = str(tmp_path / "challenge.txt")
+    nonce = "nonce-matrix-4242"
+    case_runs = {}
+    for name, mode, b, native in _MATRIX:
+        srv, port = _start_stub(native)
+        try:
+            env = dict(os.environ)
+            env["COREAI_RUNNER_URL"] = f"http://127.0.0.1:{port}"
+            os.environ["COREAI_RUNNER_URL"] = env["COREAI_RUNNER_URL"]
+            case_out = str(out_root / name)
+            case_runs[name] = run_official_eval(
+                ["--env.type=coreai_cert_env", f"--policy.path={art}",
+                 f"--policy.batch_mode={mode}", f"--eval.n_episodes={b}",
+                 f"--eval.batch_size={b}", "--eval.use_async_envs=false",
+                 f"--output_dir={case_out}"],
+                challenge_nonce=nonce, timeout=600, challenge_out=challenge)
+        finally:
+            srv.shutdown()
+    # every case ran cleanly through the real CLI with the nonce round-tripping.
+    assert all(r["exit_code"] == 0 for r in case_runs.values()), \
+        {k: v["exit_code"] for k, v in case_runs.items()}
+    assert all(r["challenge_echoed"] for r in case_runs.values())
+
+    _H = "sha256:" + "a" * 64
+    receipt = build_matrix_execution_receipt(
+        resolved=resolve_official_eval_entrypoint(), case_runs=case_runs,
+        output_tree=output_tree_sha256(str(out_root)), resolved_config_sha256=_H,
+        outputs_schema_valid=True, output_manifest_sha256=_H,
+        evidence_replay_passed=True, replay_root_sha256=_H, verified_cases_root_sha256=_H)
+    assert sorted(receipt["cases"]) == ["native-b2", "native-b4", "single-b1",
+                                        "split-b2", "split-b4"]
+    verified = verify_official_eval_execution_receipt(receipt)   # mints (real matrix)
+    assert verified.payload["_namespace"] == "test_only"        # signed-key path = v1.3.28
