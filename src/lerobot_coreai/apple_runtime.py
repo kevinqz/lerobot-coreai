@@ -64,12 +64,15 @@ _CHECK_KEYS = ("real_runner_used", "real_aimodel_loaded", "all_required_cases_pa
 APPLE_RUNTIME_CERTIFICATE_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "evidence_grade", "identity_sha256",
-                 "artifact_root_sha256", "aimodel_sha256", "cases",
+    "required": ["schema_version", "evidence_grade", "evidence_namespace",
+                 "identity_sha256", "artifact_root_sha256", "aimodel_sha256", "cases",
                  "performance_summary", "checks", "claims"],
     "properties": {
         "schema_version": {"const": APPLE_RUNTIME_CERTIFICATE_SCHEMA_VERSION},
         "evidence_grade": {"enum": ["diagnostic", "certificate"]},
+        "evidence_namespace": {"enum": ["production", "test_only"]},
+        "trust_policy_sha256": _SHA256_OR_NULL,
+        "signing_key_id": {"type": ["string", "null"]},
         "identity_sha256": _SHA256,
         "signed_official_eval_certificate_sha256": _SHA256_OR_NULL,
         "artifact_root_sha256": _SHA256_OR_NULL,
@@ -230,7 +233,8 @@ def promote_apple_runtime_certificate(
 
     from .authority import (
         VerifiedCoreAIRuntimeReceipt, VerifiedModelConversionEvidence,
-        VerifiedSignedOfficialEvalCertificate, VerifiedTrustPolicy,
+        VerifiedOfficialTrustPolicy, VerifiedSignedOfficialEvalCertificate,
+        _combine_namespace,
     )
     if not isinstance(runtime_receipt, VerifiedCoreAIRuntimeReceipt):
         raise TypeError("runtime_receipt must be a VerifiedCoreAIRuntimeReceipt "
@@ -239,11 +243,16 @@ def promote_apple_runtime_certificate(
         raise TypeError("official_eval must be a VerifiedSignedOfficialEvalCertificate")
     if not isinstance(conversion, VerifiedModelConversionEvidence):
         raise TypeError("conversion must be a VerifiedModelConversionEvidence")
-    if not isinstance(trust_policy, VerifiedTrustPolicy):
-        raise TypeError("trust_policy must be a VerifiedTrustPolicy")
+    if not isinstance(trust_policy, VerifiedOfficialTrustPolicy):
+        raise TypeError("trust_policy must be a VerifiedOfficialTrustPolicy "
+                        "(mint via as_verified_official_trust_policy)")
     jsonschema.validate(identity, APPLE_RUNTIME_IDENTITY_SCHEMA)
 
     from .authority import AuthorityError
+    # the trust policy must be the SAME one that authorized the signed official-eval
+    # (v1.3.26.12 — the Apple promoter's policy is no longer ornamental).
+    if trust_policy.payload["policy_sha256"] != official_eval.payload["trust_policy_sha256"]:
+        raise AuthorityError("Apple trust policy != the policy that authorized official-eval")
     receipt = runtime_receipt.payload
     conv_aimodel = conversion.payload["artifact"]["aimodel_sha256"]
     identity_aimodel = identity["model"]["aimodel_sha256"]
@@ -275,6 +284,12 @@ def promote_apple_runtime_certificate(
         "official_eval_chain_bound": True,          # VerifiedSignedOfficialEvalCertificate
         "signed_evidence_verified": True,           # verified signature + policy at mint
     }
+    # namespace = weakest of every input; declarative receipts ⇒ test_only, so no
+    # production Apple claim is producible in CI.
+    namespace = _combine_namespace(
+        runtime_receipt.payload.get("_namespace", "test_only"),
+        official_eval.payload.get("namespace", "test_only"),
+        trust_policy.payload.get("namespace", "test_only"))
     return build_apple_runtime_certificate(
         identity=identity, checks=checks,
         artifact_root_sha256=receipt["artifact_aimodel_sha256"],
@@ -283,6 +298,9 @@ def promote_apple_runtime_certificate(
         processor_parity_sha256=processor_parity_sha256,
         signed_official_eval_certificate_sha256=signed_eval_root,
         cases=sorted(receipt["cases"]), performance_summary=performance_summary,
+        evidence_namespace=namespace,
+        trust_policy_sha256=trust_policy.payload["policy_sha256"],
+        signing_key_id=official_eval.payload["signing_key_id"],
         _authority=object.__new__(_PromotionAuthority),
     )
 
@@ -297,6 +315,8 @@ def build_apple_runtime_certificate(
     processor_parity_sha256: str | None = None,
     signed_official_eval_certificate_sha256: str | None = None,
     cases: list | None = None, performance_summary: dict | None = None,
+    evidence_namespace: str = "test_only",
+    trust_policy_sha256: str | None = None, signing_key_id: str | None = None,
     _authority=None,
 ) -> dict:
     """Internal certificate assembler. When called WITHOUT the promotion authority it
@@ -311,6 +331,8 @@ def build_apple_runtime_certificate(
     cert = {
         "schema_version": APPLE_RUNTIME_CERTIFICATE_SCHEMA_VERSION,
         "evidence_grade": "certificate" if promoted else "diagnostic",
+        "evidence_namespace": evidence_namespace if promoted else "test_only",
+        "trust_policy_sha256": trust_policy_sha256, "signing_key_id": signing_key_id,
         "identity_sha256": identity_sha256(identity),
         "signed_official_eval_certificate_sha256": signed_official_eval_certificate_sha256,
         "artifact_root_sha256": artifact_root_sha256,

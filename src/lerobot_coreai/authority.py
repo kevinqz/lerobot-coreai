@@ -37,7 +37,21 @@ class _Sealed:
 
 
 class VerifiedTrustPolicy(_Sealed):
-    """A schema-valid TrustPolicy."""
+    """A schema-valid TrustPolicy (generic; diagnostic use only)."""
+
+
+class VerifiedOfficialTrustPolicy(_Sealed):
+    """A TrustPolicy that granted PROMOTION authority. Its ``payload`` carries the
+    policy, its canonical hash, and a ``namespace``: ``production`` (every trusted key
+    id is in the pinned OFFICIAL_RELEASE_KEY_IDS — impossible until the release key
+    exists) or ``test_only`` (structurally valid but NOT a real release authority; any
+    certificate it promotes is stamped test_only and is never a production claim)."""
+
+
+# every promoted claim is stamped with the weakest namespace of its inputs; a single
+# test_only input makes the whole certificate test_only.
+def _combine_namespace(*namespaces) -> str:
+    return "production" if all(n == "production" for n in namespaces) else "test_only"
 
 
 class VerifiedSignedOfficialEvalCertificate(_Sealed):
@@ -163,7 +177,11 @@ def verify_official_eval_execution_receipt(receipt: dict) -> VerifiedOfficialEva
         fails.append("evidence replay did not pass")
     if fails:
         raise AuthorityError(f"official-eval receipt is not certificate-grade: {fails}")
-    return VerifiedOfficialEvalExecutionReceipt(dict(receipt), _AUTHORITY)
+    # a DECLARATIVE receipt (a dict, not produced by a real executor that observed the
+    # subprocess) is test_only. A production receipt requires an executor-signed receipt
+    # (WS1) that does not exist yet — so nothing here can be a production claim.
+    out = dict(receipt); out["_namespace"] = "test_only"
+    return VerifiedOfficialEvalExecutionReceipt(out, _AUTHORITY)
 
 
 # --- mint functions (the ONLY way to obtain a Verified*) ---
@@ -178,11 +196,7 @@ def as_verified_trust_policy(policy: dict) -> VerifiedTrustPolicy:
     return VerifiedTrustPolicy(dict(policy), _AUTHORITY)
 
 
-def as_verified_official_trust_policy(policy: dict) -> VerifiedTrustPolicy:
-    """The pinned OFFICIAL release anchor (v1.3.26.11, P0.6). Provenance authority no
-    longer comes from a caller-supplied self-signed policy: the policy must match the
-    pinned anchor identity (policy_id + allowed issuers ⊆ the official set) and carry NO
-    dev key. A producer that mints its own key + its own policy cannot pass this."""
+def _check_official_policy_shape(policy: dict) -> None:
     import jsonschema
     from .signed_evidence import (
         OFFICIAL_ALLOWED_ISSUERS, OFFICIAL_TRUST_POLICY_ID, TRUST_POLICY_SCHEMA,
@@ -197,7 +211,44 @@ def as_verified_official_trust_policy(policy: dict) -> VerifiedTrustPolicy:
         raise AuthorityError("official anchor must not trust a dev key")
     if policy["minimum_evidence_grade"] != "certificate":
         raise AuthorityError("official anchor must require certificate grade")
-    return VerifiedTrustPolicy(dict(policy), _AUTHORITY)
+
+
+def as_verified_official_trust_policy(policy: dict) -> VerifiedOfficialTrustPolicy:
+    """The PRODUCTION release anchor (v1.3.26.12, closes P0). Beyond the anchor identity
+    (policy_id / issuers / grade / no dev key), EVERY trusted key id must be in the
+    pinned ``OFFICIAL_RELEASE_KEY_IDS``. That set is empty until the protected release
+    key exists (v1.3.28), so this raises everywhere today — a self-minted `dev=False`
+    key is no longer accepted merely because it sits in a policy with the official id.
+    Use ``authorize_test_only_official_policy`` for tests; it yields test_only evidence
+    that can never be a production claim."""
+    import jsonschema
+    from .signed_evidence import (
+        OFFICIAL_RELEASE_KEY_IDS, TRUST_POLICY_SCHEMA, trust_policy_sha256,
+    )
+    jsonschema.validate(policy, TRUST_POLICY_SCHEMA)
+    _check_official_policy_shape(policy)
+    key_ids = {k["key_id"] for k in policy["trusted_keys"]}
+    if not key_ids or not key_ids <= set(OFFICIAL_RELEASE_KEY_IDS):
+        raise AuthorityError(
+            "trust policy contains a key that is not a pinned official release key "
+            "(no production release key is provisioned until v1.3.28 — production "
+            "promotion is unavailable, and self-minted keys are refused)")
+    return VerifiedOfficialTrustPolicy(
+        {"policy": dict(policy), "policy_sha256": trust_policy_sha256(policy),
+         "namespace": "production"}, _AUTHORITY)
+
+
+def authorize_test_only_official_policy(policy: dict) -> VerifiedOfficialTrustPolicy:
+    """TEST-ONLY authority (v1.3.26.12). Applies the same structural checks as the
+    production anchor but SKIPS the pinned-key requirement, and stamps the result
+    ``test_only`` so every certificate it promotes is marked test_only — never a
+    production claim. Named to be unmistakable in a diff; production code must use
+    ``as_verified_official_trust_policy``."""
+    from .signed_evidence import trust_policy_sha256
+    _check_official_policy_shape(policy)
+    return VerifiedOfficialTrustPolicy(
+        {"policy": dict(policy), "policy_sha256": trust_policy_sha256(policy),
+         "namespace": "test_only"}, _AUTHORITY)
 
 
 def as_verified_signed_official_eval(dsse_envelope: dict, *, certificate: dict,
@@ -216,10 +267,15 @@ def as_verified_signed_official_eval(dsse_envelope: dict, *, certificate: dict,
 
     from .signed_evidence import certificate_root_sha256, verify_signed_evidence
     from .official_eval_certificate import verify_official_eval_certificate
-    if not isinstance(trust_policy, VerifiedTrustPolicy):
-        raise TypeError("trust_policy must be a VerifiedTrustPolicy")
+    # the policy must be an OFFICIAL policy (production or test_only), never a generic
+    # self-signed one (v1.3.26.12 — closes the "generic policy reaches the official
+    # path" gap).
+    if not isinstance(trust_policy, VerifiedOfficialTrustPolicy):
+        raise TypeError("trust_policy must be a VerifiedOfficialTrustPolicy "
+                        "(mint via as_verified_official_trust_policy)")
     if not isinstance(certificate, dict):
         raise TypeError("certificate (the underlying OfficialEvalCertificate) is required")
+    policy = trust_policy.payload["policy"]
     # (1) re-verify the underlying certificate bytes.
     cert_ok, cert_reasons = verify_official_eval_certificate(certificate)
     if not cert_ok:
@@ -229,7 +285,7 @@ def as_verified_signed_official_eval(dsse_envelope: dict, *, certificate: dict,
     if not certificate["claims"]["official_eval_certified"]:
         raise AuthorityError("underlying certificate does not assert official_eval_certified")
     # (3) signature.
-    ok, reasons = verify_signed_evidence(dsse_envelope, trust_policy=trust_policy.payload,
+    ok, reasons = verify_signed_evidence(dsse_envelope, trust_policy=policy,
                                          now=now, evidence_grade="certificate")
     if not ok:
         raise AuthorityError(f"signed official-eval did not verify: {reasons}")
@@ -240,8 +296,16 @@ def as_verified_signed_official_eval(dsse_envelope: dict, *, certificate: dict,
     # (2) cross-bind the signed root to the ACTUAL certificate bytes.
     if pred["certificate_root_sha256"] != certificate_root_sha256(certificate):
         raise AuthorityError("signed certificate_root does not match the certificate bytes")
+    # (P1) the signed predicate.roots must equal the certificate's bound inputs exactly
+    # (no divergent duplicate root block readable by external tooling).
+    if pred["roots"] != certificate["inputs"]:
+        raise AuthorityError("signed predicate.roots != certificate.inputs")
+    keyid = dsse_envelope["signatures"][0]["keyid"]
     return VerifiedSignedOfficialEvalCertificate(
-        {"statement": statement, "certificate": dict(certificate)}, _AUTHORITY)
+        {"statement": statement, "certificate": dict(certificate),
+         "signing_key_id": keyid,
+         "trust_policy_sha256": trust_policy.payload["policy_sha256"],
+         "namespace": trust_policy.payload["namespace"]}, _AUTHORITY)
 
 
 def as_verified_model_conversion(evidence: dict, *, reference_outputs,
@@ -275,4 +339,7 @@ def verify_coreai_runtime_receipt(receipt: dict) -> VerifiedCoreAIRuntimeReceipt
         fails.append("numeric parity failed")
     if fails:
         raise AuthorityError(f"runtime receipt is not certificate-grade: {fails}")
-    return VerifiedCoreAIRuntimeReceipt(dict(receipt), _AUTHORITY)
+    # declarative receipt ⇒ test_only (a production runtime receipt needs a real Runner
+    # handshake transcript signed by the executor — WS2, not available in CI).
+    out = dict(receipt); out["_namespace"] = "test_only"
+    return VerifiedCoreAIRuntimeReceipt(out, _AUTHORITY)

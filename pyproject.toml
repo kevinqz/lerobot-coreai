@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-coreai"
-version = "1.3.26.11"
+version = "1.3.26.12"
 description = "Apple CoreAI runtime backend for LeRobot policies."
 readme = "README.md"
 license = "Apache-2.0"
@@ -77,4 +77,6 @@ packages = ["src/lerobot_coreai"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+# --strict-markers/--strict-config fail on an unknown marker or a config typo rather
+# than passing silently (v1.3.26.12 CI-honesty hardening).
+addopts = "-v --strict-markers --strict-config"

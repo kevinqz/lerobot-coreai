@@ -92,6 +92,39 @@ subprocess (WS1) and a real CoreAI Runner + `.aimodel` handshake (WS2) — stay 
 to v1.3.27 / v1.4.0; until an executor-owned, signed receipt exists, those receipts are
 built from declared fields and the high claims remain **false** in CI.
 
+## Actual trust root + production/test_only namespace (v1.3.26.12)
+
+A later review correctly showed the v1.3.26.11 "pinned anchor" was overstated: it pinned
+only the policy *identity* (id/issuer/grade/no-dev), so a **self-minted `dev=False` key**
+placed in a policy with the official id still passed. It also showed that "no high claim
+is true in CI" was **misleading** — the code can and the tests do promote
+`official_eval_certified` / `apple_runtime_certified` to `true` from synthetic receipts.
+Both are corrected here so the honest statement is *enforced*, not asserted:
+
+- **A real trust root.** `OFFICIAL_RELEASE_KEY_IDS` pins the actual release **key ids**.
+  `as_verified_official_trust_policy` requires every trusted key id to be in that set —
+  and the set is **empty** until the protected release key is provisioned (v1.3.28). So
+  a self-minted key is refused, and **no production official policy can be minted
+  anywhere today**. A distinct `VerifiedOfficialTrustPolicy` type replaces the reuse of
+  the generic one, and the signed-eval + Apple promoters require it (a generic
+  self-signed policy no longer reaches the official path). The Apple promoter now also
+  requires its policy to be the *same* one that authorized the official-eval (it was
+  previously accepted and ignored).
+- **production vs test_only namespace.** Every promoted certificate carries
+  `evidence_namespace`. A declarative receipt (a dict, not produced by a real executor)
+  and the test-only authorizer both stamp **`test_only`**, which propagates to the
+  certificate. A `production` claim requires an executor-signed receipt under a pinned
+  release key — neither of which exists in CI. So the accurate, enforced statement is:
+  **CI can only ever produce `test_only` evidence; no production high claim is
+  producible here.** The tests assert `evidence_namespace == "test_only"` alongside the
+  `certified is True` gate check.
+
+**Still deferred (unchanged, honest):** the executor-owned signed receipts (WS1/WS2),
+the composite `CertificationBundle` verifier that re-opens and re-verifies each of the
+eleven roots (today they are non-null + format-checked, not yet re-verified),
+`evidence_grade` inside the signed predicate, action-SHA pinning + hash-locked deps +
+protected signing, and the real `NormalizerProcessor` reference.
+
 ## Reproducible procedure (maintainer, on Apple Silicon)
 
 1. Start the **real** CoreAI Runner on loopback; note its binary sha256 + version.

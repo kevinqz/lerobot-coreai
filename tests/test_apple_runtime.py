@@ -16,8 +16,8 @@ from lerobot_coreai.apple_runtime import (
 )
 from lerobot_coreai.authority import (
     AuthorityError, as_verified_model_conversion, as_verified_official_trust_policy,
-    as_verified_signed_official_eval, verify_coreai_runtime_receipt,
-    verify_official_eval_execution_receipt,
+    as_verified_signed_official_eval, authorize_test_only_official_policy,
+    verify_coreai_runtime_receipt, verify_official_eval_execution_receipt,
 )
 
 _H = "sha256:" + "a" * 64
@@ -71,7 +71,9 @@ def _verified_trust_policy(key):
                                 "allowed_certificate_types": ["official_eval"]}],
               "require_unexpired": True, "minimum_evidence_grade": "certificate",
               "required_claims_false": ["proves_physical_safety"]}
-    return as_verified_official_trust_policy(policy)
+    # test_only authority: structurally valid but NOT a pinned release key, so every
+    # certificate it promotes is stamped test_only (never a production claim).
+    return authorize_test_only_official_policy(policy)
 
 
 def _official_eval_certificate():
@@ -101,10 +103,9 @@ def _verified_official_eval(key, vtp):
     )
     cert = _official_eval_certificate()
     root = certificate_root_sha256(cert)
-    roots = {"artifact_root_sha256": _H, "feature_contract_sha256": _H,
-             "dataset_metadata_sha256": _H, "processor_parity_sha256": _H}
+    # v1.3.26.12: predicate.roots must equal the certificate's bound inputs exactly.
     st = build_evidence_statement(certificate_type="official_eval",
-                                  certificate_root_sha256=root, roots=roots,
+                                  certificate_root_sha256=root, roots=cert["inputs"],
                                   issuer="lerobot-coreai-release-ci", issued_at=_NOW)
     env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
     return as_verified_signed_official_eval(env, certificate=cert, trust_policy=vtp,
@@ -200,6 +201,9 @@ def test_promote_on_apple_identity_certifies():
     idy = _apple_identity()
     cert = promote_apple_runtime_certificate(identity=idy, **_verified_receipts())
     assert cert["claims"]["apple_runtime_certified"] is True
+    # v1.3.26.12: synthetic receipts ⇒ test_only, never a production claim.
+    assert cert["evidence_namespace"] == "test_only"
+    assert cert["trust_policy_sha256"] and cert["signing_key_id"]
     ok, errs = verify_apple_runtime_certificate(cert, idy)
     assert ok, errs
 
@@ -335,6 +339,81 @@ def test_official_anchor_rejects_wrong_policy_id():
               "required_claims_false": ["proves_physical_safety"]}
     with pytest.raises(AuthorityError):
         as_verified_official_trust_policy(policy)
+
+
+def _official_shaped_policy(key):
+    from lerobot_coreai.signed_evidence import (
+        OFFICIAL_ALLOWED_ISSUERS, OFFICIAL_TRUST_POLICY_ID, TRUST_POLICY_SCHEMA_VERSION,
+    )
+    return {"schema_version": TRUST_POLICY_SCHEMA_VERSION,
+            "policy_id": OFFICIAL_TRUST_POLICY_ID,
+            "allowed_issuers": list(OFFICIAL_ALLOWED_ISSUERS),
+            "trusted_keys": [{"key_id": key["key_id"],
+                              "public_key_hex": key["public_key_hex"],
+                              "valid_from": None, "valid_until": None, "revoked": False,
+                              "dev": False,
+                              "allowed_certificate_types": ["official_eval"]}],
+            "require_unexpired": True, "minimum_evidence_grade": "certificate",
+            "required_claims_false": ["proves_physical_safety"]}
+
+
+def test_self_minted_nondev_key_is_rejected_by_production_anchor():
+    # THE vulnerability the 4th review found: a fresh dev=False key placed in a policy
+    # with the official id/issuer must NOT be accepted — its key id is not pinned.
+    from lerobot_coreai.signed_evidence import generate_keypair
+    key = generate_keypair(dev=False)
+    with pytest.raises(AuthorityError):
+        as_verified_official_trust_policy(_official_shaped_policy(key))
+
+
+def test_production_anchor_unavailable_until_release_key_pinned():
+    # OFFICIAL_RELEASE_KEY_IDS is empty until v1.3.28 → no production official policy
+    # can be minted anywhere today, so no production high claim is producible in CI.
+    from lerobot_coreai.signed_evidence import OFFICIAL_RELEASE_KEY_IDS, generate_keypair
+    assert OFFICIAL_RELEASE_KEY_IDS == frozenset()
+    key = generate_keypair(dev=False)
+    with pytest.raises(AuthorityError):
+        as_verified_official_trust_policy(_official_shaped_policy(key))
+
+
+def test_test_only_authorizer_yields_test_only_namespace():
+    from lerobot_coreai.signed_evidence import generate_keypair
+    key = generate_keypair(dev=False)
+    vtp = authorize_test_only_official_policy(_official_shaped_policy(key))
+    assert vtp.payload["namespace"] == "test_only"
+
+
+def test_signed_official_eval_rejects_generic_trust_policy():
+    # a generic (non-official) VerifiedTrustPolicy must not reach the official path.
+    from lerobot_coreai.authority import as_verified_trust_policy
+    from lerobot_coreai.signed_evidence import (
+        build_evidence_statement, certificate_root_sha256, generate_keypair,
+        sign_statement,
+    )
+    key = generate_keypair(dev=False)
+    generic = as_verified_trust_policy(_official_shaped_policy(key))   # generic type
+    cert = _official_eval_certificate()
+    st = build_evidence_statement(
+        certificate_type="official_eval",
+        certificate_root_sha256=certificate_root_sha256(cert), roots=cert["inputs"],
+        issuer="lerobot-coreai-release-ci", issued_at=_NOW)
+    env = sign_statement(st, private_key_hex=key["private_key_hex"], key_id=key["key_id"])
+    with pytest.raises(TypeError):
+        as_verified_signed_official_eval(env, certificate=cert, trust_policy=generic,
+                                         now=_NOW)
+
+
+def test_apple_trust_policy_must_match_official_eval_policy():
+    # the Apple promoter's trust policy is no longer ornamental: a DIFFERENT policy
+    # than the one that authorized official-eval is refused.
+    from lerobot_coreai.signed_evidence import generate_keypair
+    idy = _apple_identity()
+    receipts = _verified_receipts()
+    other_key = generate_keypair(dev=False)
+    receipts["trust_policy"] = authorize_test_only_official_policy(
+        _official_shaped_policy(other_key))          # different policy (different key)
+    with pytest.raises(AuthorityError):
+        promote_apple_runtime_certificate(identity=idy, **receipts)
 
 
 def test_signed_official_eval_requires_matching_certificate_bytes():

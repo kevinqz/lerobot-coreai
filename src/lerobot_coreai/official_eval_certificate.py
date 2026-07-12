@@ -33,11 +33,14 @@ _CHECK_KEYS = ("official_cli_entrypoint_used", "third_party_plugin_registration_
 OFFICIAL_EVAL_CERTIFICATE_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "evidence_grade", "scope", "inputs", "execution",
-                 "checks", "claims"],
+    "required": ["schema_version", "evidence_grade", "evidence_namespace", "scope",
+                 "inputs", "execution", "checks", "claims"],
     "properties": {
         "schema_version": {"const": OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION},
         "evidence_grade": {"enum": ["diagnostic", "certificate"]},
+        # production ⇒ derived from an executor-signed receipt under a pinned release
+        # key; test_only ⇒ synthetic/declarative (never a production claim).
+        "evidence_namespace": {"enum": ["production", "test_only"]},
         "scope": {
             "type": "object", "additionalProperties": False,
             "required": ["lerobot_version", "environment", "cases"],
@@ -128,12 +131,16 @@ def promote_official_eval_certificate(*, receipt, inputs: dict) -> dict:
               "all_required_cases_passed": set(r["cases"]) == set(REQUIRED_CASES),
               "outputs_schema_valid": bool(r["schema_report"]["outputs_schema_valid"]),
               "evidence_replay_passed": bool(r["replay_report"]["evidence_replay_passed"])}
+    # namespace propagates from the receipt: a declarative receipt is test_only, so the
+    # promoted certificate is test_only — a production claim needs an executor-signed
+    # receipt (WS1) that does not exist yet (v1.3.26.12).
+    namespace = r.get("_namespace", "test_only")
     return _assemble(scope=scope, inputs=inputs, execution=execution, checks=checks,
-                     authority=object.__new__(_PromotionAuthority))
+                     authority=object.__new__(_PromotionAuthority), namespace=namespace)
 
 
 def _assemble(*, scope: dict, inputs: dict, execution: dict, checks: dict,
-              authority) -> dict:
+              authority, namespace: str = "test_only") -> dict:
     """Internal assembler. Only the promotion authority lets the claim be the gate
     result; otherwise the report is diagnostic (claim forced false)."""
     import jsonschema
@@ -149,6 +156,7 @@ def _assemble(*, scope: dict, inputs: dict, execution: dict, checks: dict,
     cert = {
         "schema_version": OFFICIAL_EVAL_CERTIFICATE_SCHEMA_VERSION,
         "evidence_grade": "certificate" if promoted else "diagnostic",
+        "evidence_namespace": namespace if promoted else "test_only",
         "scope": scope, "inputs": inputs, "execution": execution,
         "checks": full_checks,
         "claims": {"official_eval_certified": certified,
