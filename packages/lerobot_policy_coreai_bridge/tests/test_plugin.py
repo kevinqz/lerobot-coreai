@@ -115,9 +115,13 @@ def test_build_processors_are_real_pipelines():
     # real PolicyProcessorPipeline (subscripted generic -> check by capability).
     assert type(pre).__name__ == "DataProcessorPipeline"
     assert hasattr(pre, "save_pretrained") and hasattr(pre, "from_pretrained")
-    assert list(pre.steps) == [] and list(post.steps) == []
+    # v1.3.27.2: pre carries env/device PLUMBING only (rename→device); post stays empty.
+    pre_names = [type(s).__name__ for s in pre.steps]
+    assert pre_names == ["RenameObservationsProcessorStep", "DeviceProcessorStep"]
+    assert list(post.steps) == []
     batch = {"observation.state": torch.zeros(1, 7), "task": ["pick"]}
     out = pre(batch)
+    # empty rename_map + cpu device is a semantic no-op on the observation values.
     assert torch.equal(out["observation.state"], batch["observation.state"])
     assert out["task"] == ["pick"]
     act = torch.ones(1, 7)

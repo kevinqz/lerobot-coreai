@@ -32,14 +32,22 @@ def _make_env(**kwargs):
     from gymnasium import spaces
 
     class CoreAICertEnv(gym.Env):
-        metadata = {"render_modes": []}
+        metadata = {"render_modes": ["rgb_array"], "render_fps": 10}
 
-        def __init__(self, max_episode_steps: int = 10, **_):
+        def __init__(self, max_episode_steps: int = 10, render_mode: str | None = None,
+                     **_):
             self._max = int(max_episode_steps)
             self._t = 0
+            self.render_mode = render_mode
             self.action_space = spaces.Box(-1.0, 1.0, (_ACTION_DIM,), dtype=np.float32)
             self.observation_space = spaces.Dict({
                 "agent_pos": spaces.Box(-1.0, 1.0, (_STATE_DIM,), dtype=np.float32)})
+
+        def render(self):
+            # a deterministic tiny RGB frame so the official eval's video/render path
+            # works (this env is a machinery exerciser, not a visual benchmark).
+            shade = int(255 * self._t / max(self._max, 1))
+            return np.full((16, 16, 3), shade, dtype=np.uint8)
 
         def _obs(self):
             # deterministic ramp so a run is reproducible (no RNG dependence).
@@ -98,7 +106,8 @@ def _register_env_config():
 
         @property
         def gym_kwargs(self) -> dict:
-            return {"max_episode_steps": self.episode_length}
+            return {"max_episode_steps": self.episode_length,
+                    "render_mode": "rgb_array"}
 
     return CoreAICertEnvConfig
 

@@ -420,15 +420,24 @@ def verify_artifact_semantics(out: Path) -> dict[str, str]:
     c("manifest_files_in_inventory", pm_files <= set(inv_roles.values()),
       f"plugin manifest files not all inventoried: {pm_files}")
 
-    # processor step structure vs identity contract (step-empty pipelines).
-    for fn, key in ((PREPROCESSOR_FILENAME, "preprocessor"),
-                    (POSTPROCESSOR_FILENAME, "postprocessor")):
+    # processor step structure vs ownership contract. The runner owns ALL semantic
+    # processing, so: the POST-processor stays step-empty, and the PRE-processor may
+    # contain ONLY env/device plumbing (rename/device) — a subset of the allowed set
+    # (v1.3.27.2). Any other (semantic) step is refused: it would pre-process data the
+    # runner is contracted to own.
+    from .processor_coreai_bridge import _ALLOWED_PREPROCESSOR_STEP_NAMES
+    _step_rules = ((PREPROCESSOR_FILENAME, "preprocessor",
+                    set(_ALLOWED_PREPROCESSOR_STEP_NAMES)),
+                   (POSTPROCESSOR_FILENAME, "postprocessor", set()))
+    for fn, key, allowed in _step_rules:
         try:
             steps = json.loads((out / fn).read_text()).get("steps", None)
-            c(f"processor_steps_empty:{key}", steps == [],
-              f"{key} is not step-empty (identity contract requires no steps)")
+            names = [s.get("registry_name") for s in steps] if isinstance(steps, list) else None
+            ok_steps = names is not None and set(names) <= allowed
+            c(f"processor_steps_plumbing_only:{key}", ok_steps,
+              f"{key} has non-plumbing/semantic steps {names} (allowed: {sorted(allowed)})")
         except Exception as exc:  # noqa: BLE001
-            c(f"processor_steps_empty:{key}", False, str(exc))
+            c(f"processor_steps_plumbing_only:{key}", False, str(exc))
 
     # v1.3.24a: recompute the canonical ProcessorStageContract + FeatureContract from
     # the CoreAI manifest and require the (root-bound) plugin manifest to match — so a
