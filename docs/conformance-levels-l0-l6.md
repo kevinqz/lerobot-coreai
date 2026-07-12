@@ -54,3 +54,18 @@ gap stops the climb — you cannot be L5 without L4.
   certification.
 
 No high claim is ever derived from `test_only` evidence.
+
+## Runtime providers (RFC-0700 §13)
+
+The certification contracts are backend-neutral, and the provider identities are
+declared now with honest status (implementation deferred where it doesn't exist):
+
+| Provider | Status | Role |
+|----------|--------|------|
+| `coreai` | **implemented** | Apple Core AI deployment (the only real path today) |
+| `pytorch_reference` | reference | Upstream LeRobot/PyTorch parity oracle |
+| `mlx` | deferred | Reserved identity only — no premature port |
+
+`require_available()` fails closed on a reserved provider, so `mlx`/`pytorch_reference`
+can never be routed as if they were real deployment targets. Every provider is compared
+against one LeRobot semantic contract.
