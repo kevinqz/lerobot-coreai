@@ -4,18 +4,31 @@
 # byte-stable digest so any drift in the observation encoding is caught immediately.
 # The Swift side must produce the same digest for the same canonical observation.
 
-import numpy as np
-
 from lerobot_coreai.coreai_observation_serialization import (
     serialize_and_hash, serialize_observation,
 )
 
+
+class _Arr:
+    """Minimal duck-typed tensor (``.tolist()``/``.dtype``/``.shape``) — the base package
+    is numpy/torch-free, so the fixture must not require numpy to run in the base CI
+    jobs. A real numpy float32/uint8 array serializes to the identical payload + digest.
+    """
+    def __init__(self, data, dtype, shape):
+        self._data, self.dtype, self.shape = data, dtype, tuple(shape)
+
+    def tolist(self):
+        return self._data
+
+
 # a canonical multimodal observation (state + front/wrist images + task), exact
-# float32 values so the serialization is byte-reproducible.
+# float32/uint8 values so the serialization is byte-reproducible.
 _CANONICAL = {
-    "observation.state": np.array([0.0, 0.5, 1.0, -0.5, 0.25, -1.0], dtype=np.float32),
-    "observation.images.front": np.zeros((2, 2, 3), dtype=np.uint8),
-    "observation.images.wrist": np.ones((2, 2, 3), dtype=np.uint8),
+    "observation.state": _Arr([0.0, 0.5, 1.0, -0.5, 0.25, -1.0], "float32", (6,)),
+    "observation.images.front": _Arr([[[0, 0, 0], [0, 0, 0]], [[0, 0, 0], [0, 0, 0]]],
+                                     "uint8", (2, 2, 3)),
+    "observation.images.wrist": _Arr([[[1, 1, 1], [1, 1, 1]], [[1, 1, 1], [1, 1, 1]]],
+                                     "uint8", (2, 2, 3)),
     "task": "pick the cube",
 }
 
