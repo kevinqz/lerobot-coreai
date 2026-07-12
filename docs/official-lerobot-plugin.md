@@ -883,8 +883,26 @@ Because lerobot auto-imports installed `lerobot_policy_*` plugins at startup, a 
 — a test asserts exactly this (the subprocess recognizes the env choice and fails only on
 the absent policy, no "invalid choice").
 
-**Remaining for a full production official-eval:** the **policy half** — drive the
-five-case matrix (`--policy.type=coreai_bridge` or a loadable policy) end-to-end so the
-executor produces a receipt with the complete matrix + instantiated env; then sign it
-under a pinned release key (v1.3.28). Until then the executor's receipts are `test_only`
-by construction and certify nothing.
+## v1.3.27.2 — official CLI drives the bridge policy (WS1 policy half)
+
+The official `lerobot-eval` CLI now drives the **coreai_bridge policy** against
+`coreai_cert_env` to a **completed rollout**, in a real subprocess, with the policy doing
+genuine inference against a stub `coreai-runner.v2` server (`pc_success=100`, exit 0).
+Two changes made the bridge drivable by the official tooling:
+
+- the bridge **preprocessor** now carries the two standard env/device **plumbing** steps
+  (`rename_observations_processor` → `device_processor`) that `lerobot-eval` overrides —
+  the CoreAI runner still owns ALL observation/action **semantics** (there is NO
+  normalization or other semantic step), and the artifact verifier enforces
+  "plumbing-only" (a semantic step is refused); the postprocessor stays step-empty;
+- `coreai_cert_env` implements `render()` (rgb_array) so the eval's video path works.
+
+A rollout-CI test (`test_official_cli_rollout.py`) builds an artifact matching the env,
+starts a stub runner, and asserts the real `lerobot-eval` subprocess completes the
+rollout.
+
+**Remaining for a full production official-eval:** generalize to the **five-case matrix**
+(`single-b1`/`native-b2`/`b4`/`split-b2`/`b4` via `batch_mode`/`max_batch_size`/
+`eval.batch_size`) and have the **executor derive a receipt from the real run's outputs**
+(output tree + nonce round-trip) — then sign it under a pinned release key (v1.3.28).
+Until then the executor's receipts are `test_only` by construction and certify nothing.

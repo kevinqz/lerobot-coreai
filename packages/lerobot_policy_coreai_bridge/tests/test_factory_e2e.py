@@ -198,7 +198,10 @@ def test_official_composition_processors_loaded_from_disk(tmp_path, monkeypatch)
         # real PolicyProcessorPipeline reconstructed from the artifact JSON files.
         assert type(pre).__name__ == "DataProcessorPipeline"
         assert type(post).__name__ == "DataProcessorPipeline"
-        assert list(pre.steps) == [] and list(post.steps) == []
+        # v1.3.27.2: pre has env/device plumbing only; post stays step-empty.
+        assert [type(s).__name__ for s in pre.steps] == [
+            "RenameObservationsProcessorStep", "DeviceProcessorStep"]
+        assert list(post.steps) == []
     finally:
         server.__exit__()
 

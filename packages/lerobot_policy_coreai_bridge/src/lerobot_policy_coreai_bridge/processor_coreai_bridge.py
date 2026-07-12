@@ -21,12 +21,24 @@ from lerobot.policies.factory import (
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 from lerobot.processor import (
+    DeviceProcessorStep,
     PolicyProcessorPipeline,
+    RenameObservationsProcessorStep,
     batch_to_transition,
     policy_action_to_transition,
     transition_to_batch,
     transition_to_policy_action,
 )
+
+# The ONLY steps the bridge preprocessor may contain (v1.3.27.2): env/device PLUMBING
+# — key renaming (env obs keys → canonical policy keys) and tensor device/dtype
+# placement. These do NOT normalize or otherwise transform observation semantics; the
+# CoreAI runner still owns the raw-observation → action inference. Their presence is
+# what makes the bridge drivable by the official `lerobot-eval` CLI (which injects
+# `device_processor` + `rename_observations_processor` overrides). Any SEMANTIC step
+# (normalize/latent/etc.) remains forbidden — that would silently pre-process data the
+# runner is contracted to own.
+_ALLOWED_PREPROCESSOR_STEP_NAMES = ("rename_observations_processor", "device_processor")
 
 PREPROCESSOR_FILENAME = f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
 POSTPROCESSOR_FILENAME = f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
@@ -87,9 +99,15 @@ def require_coreai_processor_ownership(manifest: Any) -> None:
 
 
 def build_coreai_bridge_processors() -> tuple[PolicyProcessorPipeline, PolicyProcessorPipeline]:
-    """Return (pre, post) as real, step-empty PolicyProcessorPipeline instances."""
+    """Return (pre, post). The pre-processor carries ONLY env/device plumbing steps
+    (rename → device); the CoreAI runner still owns all observation/action semantics, so
+    there is NO normalization or other semantic step. This shape is what the official
+    ``lerobot-eval`` CLI can drive (it overrides those two steps). The post-processor
+    stays step-empty (the runner returns the environment-ready action)."""
     pre = PolicyProcessorPipeline(
-        steps=[], name=POLICY_PREPROCESSOR_DEFAULT_NAME,
+        steps=[RenameObservationsProcessorStep(rename_map={}),
+               DeviceProcessorStep(device="cpu")],
+        name=POLICY_PREPROCESSOR_DEFAULT_NAME,
         to_transition=batch_to_transition, to_output=transition_to_batch)
     post = PolicyProcessorPipeline(
         steps=[], name=POLICY_POSTPROCESSOR_DEFAULT_NAME,
