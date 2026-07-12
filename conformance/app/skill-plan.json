@@ -1,0 +1,5 @@
+{ "schema": "org.lerobot.robot-brain.skill-plan.v1", "plan_id": "p1", "steps": [
+  {"skill": "pick_and_place", "arguments": {"object": "red_cube", "destination": "tray"},
+   "constraints": {"speed_profile": "slow", "max_retries": 1}},
+  {"skill": "home", "arguments": {}} ],
+  "requires_operator_confirmation": false }
