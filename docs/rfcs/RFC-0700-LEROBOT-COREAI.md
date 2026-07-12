@@ -361,6 +361,61 @@ Modern LeRobot execution.
 
 Authenticated remote provider.
 
+### LR10 — Robot Gateway
+
+Implement the authenticated reference gateway, watchdog, session receipts and mock/SO-101 adapters.
+
+### LR11 — Mobile recording bridge
+
+Validate and convert app episode-staging manifests to upstream LeRobotDataset.
+
+### LR12 — Apple app conformance
+
+Ship fixtures proving that the Swift app binds the exact FeatureContract, action queue and reset semantics.
+
+## 19.1 Apple app and Robot Gateway reference
+
+`lerobot-coreai` SHALL provide the Python-side reference implementation required by RFC-0900:
+
+```text
+lerobot-coreai gateway
+├── generated Robot Gateway Protocol server
+├── upstream LeRobot Robot factory
+├── observation-state publisher
+├── action validator
+├── sequence/deadline enforcement
+├── watchdog
+├── supervisor integration
+└── session receipt
+```
+
+The gateway is distinct from the Core AI Runner and Server.
+
+### Gateway responsibilities
+
+- load the selected upstream LeRobot robot implementation;
+- expose robot identity and feature contract;
+- publish joint state and hardware telemetry;
+- accept only authenticated, ordered, unexpired action chunks;
+- enforce software safety profile and bounded session policy;
+- stop on heartbeat loss;
+- record accepted, rejected and executed actions;
+- expose explicit stop/fault state.
+
+### Swift conformance package
+
+The repository SHOULD publish or generate policy manifests and fixtures consumed by `LeRobotCoreAIKit` in `lerobot-coreai-apple`.
+
+It MUST NOT contain the SwiftUI application itself.
+
+### Dataset export
+
+`lerobot-coreai` SHALL convert the app's `org.lerobot.episode-staging.v1` recording into the exact upstream LeRobotDataset format, validating synchronization, required features and artifact/session identities.
+
+### Gemma boundary
+
+The repository MAY define skill schemas and planner-policy handoff fixtures. It MUST NOT make Gemma a policy or allow planner output to bypass action-policy and gateway validation.
+
 ## 20. CI
 
 - base without LeRobot;
@@ -387,4 +442,7 @@ Authenticated remote provider.
 - Production certificate is signed under protected trust.
 - Claims are scoped to exact artifact/device/runtime.
 - No claim of total LeRobot parity or physical safety.
+- The reference gateway rejects replayed, stale, mismatched and unauthenticated action chunks.
+- Mobile recordings convert deterministically to a valid upstream LeRobotDataset.
+- The Swift app passes policy-contract fixtures without redefining LeRobot semantics.
 - Training remains upstream and documented.

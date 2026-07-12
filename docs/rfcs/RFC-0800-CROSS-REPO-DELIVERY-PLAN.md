@@ -31,7 +31,8 @@ The program optimizes for:
 | Runtime kernel/providers | Runner | Server, ComfyUI, LeRobot |
 | LAN transport | Server | remote consumers |
 | Creative consumer | ComfyUI | Runner, Catalog |
-| Robotics provider | LeRobot | Runner, Fabric, Catalog |
+| Robotics provider/gateway | LeRobot | Runner, Fabric, Catalog, App |
+| Apple robot-brain app | `lerobot-coreai-apple` | Runner, LeRobot, Interop, Catalog, Fabric |
 
 ## 3. Phase 0 — Truth repair
 
@@ -162,6 +163,38 @@ Exit criteria:
 - cancellation;
 - no sensitive pre-auth disclosure.
 
+## 8.1 Phase 6 — Apple robot-brain application
+
+Create `lerobot-coreai-apple` only after RuntimeCore and the Action profile have stable conformance fixtures.
+
+Sequence:
+
+1. App shell with mock planner/policy/gateway.
+2. SensorHub and episode staging.
+3. Generated Robot Gateway client and Python mock gateway.
+4. ACT iOS bundle through Fabric.
+5. RuntimeCore Action execution in-process.
+6. Simulation-only full loop.
+7. Guarded SO-101 gateway session.
+8. Gemma 4 E2B structured planner.
+9. Combined local planner+policy resource admission and thermal soak.
+10. Recording conversion to LeRobotDataset.
+11. Public device matrix and signed mobile receipts.
+
+Physical egress MUST NOT be enabled before disconnect, replay, expiry, background and stop-propagation tests pass.
+
+The app release depends on:
+
+```text
+interop mobile/gateway contracts
++ RuntimeCore iOS
++ Fabric ACT iOS artifact
++ Catalog mobile evidence
++ lerobot-coreai gateway
+```
+
+It does not depend on `coreai-server` unless a remote inference topology is selected.
+
 ## 9. Release BOM
 
 Maintain a machine-readable BOM in `coreai-interop/releases/`:
@@ -175,6 +208,7 @@ components:
   runner: 1.0.0
   comfyui_coreai: 1.0.0
   lerobot_coreai: 1.4.0
+  lerobot_coreai_apple: 0.1.0
   server: 0.1.0
 upstreams:
   apple_coreai_models: <sha>
@@ -222,12 +256,13 @@ Recommended CODEOWNERS domains:
 
 - Apple compatibility;
 - protocol/common kernel;
-- action/LeRobot;
+- action/LeRobot/gateway;
 - conversion/provenance;
 - Runner security;
 - Server networking;
 - ComfyUI UX;
-- Catalog data governance.
+- Catalog data governance;
+- Apple app sensors, planner/policy orchestration, robot UX and recording.
 
 A cross-repo contract PR requires review by producer and consumer owners.
 
@@ -322,6 +357,10 @@ Authenticated Server.
 
 ACT, Diffusion and one VLA run through the architecture without core special cases.
 
+### Gate H — Mobile Robot Brain
+
+One supported iPhone runs Gemma 4 E2B planning and ACT policy execution under an explicit resource topology; an authenticated gateway controls a bounded SO-101 task; disconnect/background/stop tests pass; recording exports to LeRobotDataset.
+
 ## 17. Risk register
 
 | Risk | Mitigation |
@@ -330,7 +369,7 @@ ACT, Diffusion and one VLA run through the architecture without core special cas
 | Apple API changes | Upstream pin and compatibility CI |
 | Community runtime divergence | Provider isolation |
 | Catalog schema churn | Generated clients and versioned exports |
-| Repository explosion | One mandatory new repo only |
+| Repository explosion | Only two justified new repos: shared interop and the dedicated robotics product; profiles stay inside existing repos |
 | False certification | Production/test namespaces and protected signing |
 | Robot safety overclaim | Explicit boundary and no safety promotion |
 | Shared process conflicts | Embedded unique Runner |
@@ -389,3 +428,5 @@ The first complete program release has:
 - documentation matching reality;
 - no competing Apple spec;
 - no extra robot-specific Runner/Fabric repositories.
+- the robotics-focused Apple app is separate from Ditto and has a signed device-scoped release BOM.
+- the reference iPhone→gateway→SO-101 flow passes Gate H without claiming physical certification.

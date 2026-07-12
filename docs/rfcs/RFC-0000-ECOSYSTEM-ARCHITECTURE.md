@@ -26,22 +26,26 @@ The authoritative layers are:
    - consumer integrations;
    - conformance, evidence and honest compatibility claims.
 
-The ecosystem SHALL contain six existing repositories and one mandatory new repository:
+The ecosystem SHALL contain six existing repositories and two mandatory new repositories:
 
 | Repository | Decision | Responsibility |
 |---|---|---|
 | `coreai-catalog` | Keep | Discovery, normalized metadata, provenance, compatibility and benchmark index |
 | `coreai-fabric` | Keep; modularize | Conversion orchestration, parity, publication and catalog registration |
-| `coreai-runner` | Keep; refactor into microkernel + profiles | Local Swift execution, lifecycle, sessions, cache, telemetry and service boundary |
-| `coreai-server` | Keep; defer product expansion | Authenticated LAN exposure and device-node coordination |
+| `coreai-runner` | Keep; refactor into RuntimeCore + service + profiles | Reusable Swift execution, lifecycle, sessions, cache, telemetry and local service boundary |
+| `coreai-server` | Keep; defer product expansion | Authenticated LAN inference exposure and device-node coordination |
 | `SAL2-Dev/ComfyUI-CoreAI` | Keep | Thin ComfyUI consumer and UX integration |
-| `lerobot-coreai` | Keep; narrow positioning | LeRobot Core AI provider, packager and conformance/certification suite |
+| `lerobot-coreai` | Keep; narrow positioning | LeRobot Core AI provider, packager, gateway reference and conformance/certification suite |
 | **`coreai-interop`** | **Create** | Cross-repository wire contracts, namespaced profiles, generated types and conformance fixtures |
+| **`lerobot-coreai-apple`** | **Create** | Robotics-focused Swift/iOS product: sensors, Gemma planner, policy runtime, safe gateway client and recording |
 
-No additional repository is mandatory at this stage. In particular:
+Ditto remains a general-purpose ecosystem consumer and MUST NOT absorb the robotics-specific app responsibilities.
+
+In particular:
 
 - MUST NOT create a competing `coreai-spec`.
 - MUST NOT create `coreai-runner-robot` or `coreai-fabric-robot`.
+- MUST NOT merge the robotics application into Ditto merely to avoid a repository boundary.
 - MUST NOT create a second LeRobot fork.
 - MUST NOT create an MLX bridge repository before a concrete provider implementation and ownership model exist.
 - Cross-repository RFCs SHOULD initially live under `coreai-interop/rfcs/`; a separate governance repository MAY be split later only after measurable maintenance pressure.
@@ -138,7 +142,9 @@ Unknown or unverifiable information MUST remain unknown or unavailable. It MUST 
 | Runtime execution fact | Runner receipt |
 | LeRobot feature/policy semantics | LeRobot + `lerobot-coreai` profile |
 | ComfyUI node behavior | ComfyUI-CoreAI |
-| LAN identity and authorization | Server |
+| LAN inference identity and authorization | Server |
+| Robot actuation session and gateway semantics | `coreai-interop` + `lerobot-coreai` gateway implementation |
+| Mobile robot-brain product behavior | `lerobot-coreai-apple` |
 | Shared HTTP/profile wire shape | `coreai-interop` |
 | Benchmark measurement | Signed measurement record, indexed by Catalog |
 
@@ -157,7 +163,9 @@ flowchart TB
     Runner["coreai-runner\nlocal execution microkernel + providers"]
     Server["coreai-server\nLAN/TLS/Bonjour/device nodes"]
     Comfy["ComfyUI-CoreAI\nvisual workflow consumer"]
-    LRC["lerobot-coreai\nprovider · packager · conformance"]
+    LRC["lerobot-coreai\nprovider · packager · gateway · conformance"]
+    App["lerobot-coreai-apple\niPhone sensors · Gemma planner · policy · robot UX"]
+    Ditto["Ditto\ngeneral-purpose ecosystem app"]
 
     LR --> Fabric
     Apple --> Fabric
@@ -174,10 +182,17 @@ flowchart TB
     Interop --> Server
     Interop --> Comfy
     Interop --> LRC
+    Interop --> App
+    Interop --> Ditto
     Apple --> Runner
     Runner --> Comfy
     Runner --> LRC
     Runner --> Server
+    Runner --> App
+    Runner --> Ditto
+    Catalog --> App
+    Catalog --> Ditto
+    LRC --> App
     LR --> LRC
 ```
 
@@ -201,6 +216,9 @@ Additional rules:
 - `lerobot-coreai` MAY depend on LeRobot, the generated Python interop client and optionally Fabric.
 - ComfyUI-CoreAI MAY depend on the generated Python interop client, but MUST NOT duplicate the Runner protocol.
 - Server MUST import the Runner library in-process; it SHOULD NOT proxy to a local Runner HTTP service.
+- `lerobot-coreai-apple` MUST import the iOS-compatible Runner RuntimeCore in-process; it MUST NOT spawn a local daemon.
+- Ditto MAY import the same RuntimeCore but remains a separate general-purpose consumer.
+- Robot motor transport MUST terminate at a dedicated gateway implemented through `lerobot-coreai`, not at `coreai-server`.
 - Runner MUST be able to execute an artifact by local path and digest without requiring Catalog network availability.
 - Catalog use in Runner is a discovery/download convenience, not a runtime prerequisite.
 
@@ -425,11 +443,37 @@ runner: 1.0.0
 server: 0.1.0
 comfyui_coreai: 1.0.0
 lerobot_coreai: 1.4.0
+lerobot_coreai_apple: 0.1.0
 apple_coreai_models_revision: "..."
 lerobot_range: ">=0.6,<0.7"
 ```
 
 Cross-repo CI MUST test the BOM rather than unpinned `main` branches.
+
+## 14.1 Apple mobile robot-brain product
+
+The ecosystem SHALL include the specialized `lerobot-coreai-apple` application defined by RFC-0900.
+
+The application composes, but does not collapse, four independent authorities:
+
+```text
+Apple sensor/runtime APIs
++ Gemma or another planner provider
++ LeRobot action-policy semantics
++ an independent robot gateway
+```
+
+Normative boundaries:
+
+- Gemma or any language model produces only a validated skill plan.
+- A LeRobot policy produces action tensors/chunks.
+- The app manages UX, sensor synchronization, model admission and session state.
+- The gateway owns watchdog, sequencing, action bounds, robot drivers and final software egress.
+- Hardware safety remains independent.
+- Physical sessions are foreground-bound in the first release.
+- The phone MAY be the local planner and policy executor, but MUST NOT be the only stop authority.
+
+Ditto remains outside this product boundary. Shared packages are allowed; shared undocumented state is not.
 
 ## 15. Bloat prevention rules
 
@@ -456,8 +500,11 @@ Otherwise it belongs in a profile or consumer.
 6. Add Catalog profile references and A0–A5 compatibility.
 7. Migrate ComfyUI and LeRobot clients.
 8. Complete real Action Runtime with ACT.
-9. Build Server security and remote execution.
-10. Add protected production signing and full-chain certification.
+9. Build Server security and remote inference.
+10. Extract iOS-compatible RuntimeCore and create `lerobot-coreai-apple` with mock planner/policy/gateway.
+11. Add ACT iOS, authenticated robot gateway and guarded SO-101 reference task.
+12. Add Gemma 4 planner, synchronized recording and mobile release gates.
+13. Add protected production signing and full-chain certification.
 
 ## 17. Ecosystem Definition of Done
 
@@ -473,6 +520,8 @@ The first ecosystem-wide milestone is complete only when:
 - all components use one released interop contract;
 - capabilities are generated from passing conformance tests;
 - a release BOM pins every component;
+- `lerobot-coreai-apple` runs an ACT bundle in-process on one supported iPhone against a mock gateway;
+- the mobile app proves stop propagation on disconnect/background before physical egress is enabled;
 - no physical-safety claim is made.
 
 ## 18. Rejected alternatives
