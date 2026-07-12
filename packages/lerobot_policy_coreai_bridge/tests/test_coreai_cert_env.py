@@ -2,6 +2,7 @@
 # path (v1.3.27.1, WS1 env half). These run wherever lerobot is installed (the rollout
 # CI jobs run `pytest packages/lerobot_policy_coreai_bridge/tests`).
 
+import importlib.util
 import os
 
 import numpy as np
@@ -70,10 +71,15 @@ def test_challenge_nonce_round_trips_through_env():
             os.environ[_CHALLENGE_ENV] = prev
 
 
+@pytest.mark.skipif(importlib.util.find_spec("datasets") is None,
+                    reason="lerobot-eval needs the lerobot[dataset] extra to load "
+                           "(present only in the rollout CI jobs)")
 def test_real_lerobot_eval_subprocess_accepts_env_choice():
     # the decisive integration: a REAL `lerobot-eval` subprocess auto-imports the plugin
     # and accepts --env.type=coreai_cert_env (it then fails only on the absent policy,
-    # which is the v1.3.27.2 half). No "invalid choice" for the env.
+    # which is the v1.3.27.2 half). No "invalid choice" for the env. `lerobot-eval`
+    # imports lerobot.datasets at module load, so this can only run where the dataset
+    # extra is installed (the rollout jobs).
     from lerobot_coreai.official_eval_executor import run_official_eval
     run = run_official_eval(
         ["--env.type=coreai_cert_env", "--eval.n_episodes=1", "--eval.batch_size=1"],
