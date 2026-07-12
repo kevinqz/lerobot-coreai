@@ -70,6 +70,14 @@ The verifier no longer trusts the decoded payload. It now:
   claims);
 - enforces strict base64 and rejects empty/duplicate signatures.
 
+## v1.3.26.14 — evidence grade is signed
+
+`evidence_grade` now lives **inside the signed predicate**, not in an out-of-band verify
+argument. The verifier reads the grade from the signed payload and compares it to the
+trust policy's `minimum_evidence_grade`; a caller-supplied `evidence_grade` (still
+accepted) is treated as a cross-check that must *match* the signed grade. So a diagnostic
+statement can no longer be presented as certificate-grade by telling the verifier so.
+
 ## Not yet
 
 - **Wiring the signing onto the official-eval certificate** (v1.3.27 → v1.3.28) — this

@@ -1008,8 +1008,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_vse.add_argument("--envelope", required=True)
     p_vse.add_argument("--trust-policy", required=True)
     p_vse.add_argument("--now", required=True, help="ISO-8601 UTC time for validity")
-    p_vse.add_argument("--evidence-grade", default="certificate",
-                       choices=["diagnostic", "certificate"])
+    p_vse.add_argument("--evidence-grade", default=None,
+                       choices=["diagnostic", "certificate"],
+                       help="optional cross-check; the grade is read from the SIGNED "
+                            "predicate and this must match it if supplied")
     p_vse.add_argument("--json", action="store_true")
     p_vse.set_defaults(func=cmd_verify_signed_evidence)
 
